@@ -2,6 +2,10 @@ Bir boşluk var olamaz.
 
 Bir doğruluk ya doğru ya yanlış olabilir.
 
+(bu doğruluğun) tersi,
+  bu doğruysa, yanlış,
+  bu yanlışsa, doğrudur.
+
 Bir doğal-sayı
 ya sıfır
 ya (öncül doğal-sayının) ardılı

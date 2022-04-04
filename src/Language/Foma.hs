@@ -23,10 +23,19 @@ fsmReadBinaryFile = newCString >=> fsmReadBinaryFile'
 
 foreign import ccall "morphology.h ups"
   ups' :: FSM -> CString -> IO (Ptr CString)
+foreign import ccall "morphology.h downs"
+  downs' :: FSM -> CString -> IO (Ptr CString)
 
 ups :: FSM -> String -> IO [String]
 ups fsm s = do
   cs <- newCString s
   res <- ups' fsm cs
+  arr <- peekArray0 nullPtr res
+  mapM peekCString arr <* (mapM_ free arr >> free res)
+
+downs :: FSM -> String -> IO [String]
+downs fsm s = do
+  cs <- newCString s
+  res <- downs' fsm cs
   arr <- peekArray0 nullPtr res
   mapM peekCString arr <* (mapM_ free arr >> free res)

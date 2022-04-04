@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE ViewPatterns #-}
 module Kip.Parser where
 
 import Data.List
@@ -11,6 +13,8 @@ import Control.Monad.IO.Class
 import Text.Parsec
 import Text.Parsec.String
 import qualified Text.Parsec.Expr as P
+
+import Debug.Trace
 
 import Language.Foma
 import Kip.AST
@@ -25,11 +29,14 @@ data ParserState =
 type Outer = IO
 type KipParser = ParsecT String ParserState Outer
 
+ws :: KipParser ()
+ws = spaces <?> "boşluk"
+
 period :: KipParser ()
-period = spaces >> string "." >> spaces
+period = ws >> string "." >> ws
 
 lexeme :: KipParser a -> KipParser a
-lexeme p = spaces *> p <* spaces
+lexeme p = ws *> p <* ws
 
 parens :: KipParser a -> KipParser a
 parens p = char '(' *> p <* char ')'
@@ -68,7 +75,7 @@ parseQuotedString = do
 identifier :: KipParser Identifier
 identifier = do
   ws <- sepBy1 word (char '-') <?>
-        "Tek kelimeli veya tire ile ayrılmış çok kelimeli bir isim kullanmanız gerek."
+        "Tek kelimeli veya tire ile ayrılmış çok kelimeli bir isim kullanmanız"
   return (init ws, last ws)
 
 -- inCtx :: String -> KipParser Bool
@@ -98,7 +105,10 @@ estimateCase (ss, s) = do
                                , y <- morphAnalyses
                                , let Just (root, cas) = getPossibleCase y
                                , w `isPrefixOf` y
+                               , not ("<0><V>" `isInfixOf` y)
+                               , not ("<p2s>" `isInfixOf` y)
                                , ss == ws ]
+  traceM (show xs)
   case xs of
     [] -> fail "Buraya uyan yalın halde bir isim bulunamadı."
     _:_:_ -> fail $ "Belirsizlik: " ++ intercalate ", " (map show xs)
@@ -109,15 +119,22 @@ casedIdentifier = identifier >>= estimateCase
 
 parseExp :: KipParser (Exp Case)
 parseExp = 
-    try var <|> parens parseExp
-    -- <|> str 
+   app <|> p -- <|> str 
   where
     -- var = Var Nom <$> identifier 
     var = casedIdentifier >>= \(s,c) -> return (Var c s)
     -- str = StrLit <$> parseQuotedString
+    p = try var <|> parens parseExp
+    app = do
+      a <- many1 (lexeme p) 
+      traceM "app:"
+      traceM (show a)
+      case a of
+        [x] -> return x
+        (reverse -> x:xs) -> return (App (annExp x) x xs)
 
-parseStmt :: KipParser Stmt
-parseStmt = ty <|> try def <|> expFirst
+parseStmt :: KipParser (Stmt Case)
+parseStmt = ty <|> try expFirst <|> def
   where
     ctor = try ((, []) <$> identifier) 
       -- <|> parens (do 
@@ -150,10 +167,12 @@ removeComments s = go 0 s
     go _ []             = []
     go n ('(':'*':rest) = go (n + 1) rest
     go n ('*':')':rest) = go (n - 1) rest
-    go n (c:cs) | n < 0 = error "Closing comment without opening"
+    go n (c:cs) | n < 0 = error "Açılışı olmayan yorum kapanışı."
                 | n == 0 = c : go n cs
                 | otherwise = go n cs
 
-parseFromRepl :: ParserState -> String -> Outer (Either ParseError (Stmt, ParserState))
+parseFromRepl :: ParserState 
+              -> String 
+              -> Outer (Either ParseError (Stmt Case, ParserState))
 parseFromRepl st input = runParserT p st "Kip" (removeComments input)
   where p = (,) <$> parseStmt <*> getState

@@ -24,7 +24,7 @@ type EvalM = StateT EvalState (ExceptT EvalError IO)
 evalExp :: Exp Case -> EvalM (Exp Case)
 evalExp e = return e
 
-evalStmt :: Stmt -> EvalM ()
+evalStmt :: Stmt Case -> EvalM ()
 evalStmt stmt = 
   case stmt of
     Defn name ty e -> 
@@ -40,12 +40,13 @@ evalStmt stmt =
       e' <- evalExp e
       liftIO (putStrLn (prettyExp e'))
 
-replStmt :: Stmt -> EvalM ()
+replStmt :: Stmt Case -> EvalM ()
 replStmt stmt = 
   case stmt of
     ExpStmt e -> do
       e' <- evalExp e
-      liftIO (putStrLn (prettyExp e'))
+      liftIO (putStrLn "")
+      -- liftIO (putStrLn (prettyExp e'))
     _ -> evalStmt stmt
 
 runEvalM :: EvalM a -> EvalState -> IO (Either EvalError (a, EvalState))

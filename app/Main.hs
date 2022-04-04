@@ -10,6 +10,7 @@ import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
 
 import System.Console.Haskeline
+import Text.Parsec.Error
 
 import Language.Foma
 import Kip.Parser
@@ -24,6 +25,12 @@ data ReplState =
     { replCtx :: [Identifier]
     }
   deriving (Show)
+
+instance Show Message where
+  show (SysUnExpect s) = "Beklenmedik " ++ s ++ " ile karşılaşıldı."
+  show (UnExpect    s) = "Beklenmedik " ++ s ++ " ile karşılaşıldı."
+  show (Expect      s) = s ++ " bekleniyordu."
+  show (Message     s) = s
 
 main :: IO ()
 main = 
@@ -52,12 +59,15 @@ main =
             | Just word <- stripPrefix ":up " input -> do 
                 liftIO (ups fsm word) >>= \xs -> mapM_ outputStrLn xs
                 loop fsm rs
+            | Just word <- stripPrefix ":down " input -> do 
+                liftIO (downs fsm word) >>= \xs -> mapM_ outputStrLn xs
+                loop fsm rs
             | otherwise -> do 
                 liftIO (print rs)
                 let pst = MkParserState fsm (replCtx rs)
                 liftIO (parseFromRepl pst input) >>= \case
                   Left err -> do
-                    outputStrLn $ "Err: " ++ show err
+                    outputStrLn $ "Sözdizim hatası: " ++ show (last (errorMessages err))
                     loop fsm rs
                   Right (stmt, MkParserState _ pctx) -> do
                     outputStrLn $ show stmt
