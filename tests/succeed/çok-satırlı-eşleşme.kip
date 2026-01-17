@@ -1,4 +1,3 @@
-
 (* Bu fonksiyon gövdesinde parantez olmadan çok satırlı eşleşme kullanır. *)
 (bu tam-sayıyı) denemek,
   (bunla 0'ın eşitliği) doğruysa,

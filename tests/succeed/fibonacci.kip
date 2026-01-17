@@ -1,4 +1,3 @@
-
 (* İlk n Fibonacci sayısını yazdırır. *)
 (bu tam-sayıyı) (şu tam-sayıyı) (o tam-sayıyı) işlemek,
   (onla 0'ın eşitliği) doğruysa,

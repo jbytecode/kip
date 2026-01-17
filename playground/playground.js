@@ -20,39 +20,16 @@ const langEl = document.getElementById("lang");
 const exampleEl = document.getElementById("example");
 
 const examples = [
-  { id: "argüman-tipleri", file: "argüman-tipleri.kip" },
-  { id: "asal-sayılar", file: "asal-sayılar.kip", stdin: "asal-sayılar.in" },
-  { id: "aynı-hal-ardışık-fark", file: "aynı-hal-ardışık-fark.kip" },
-  { id: "bir-fazlası", file: "bir-fazlası.kip", stdin: "bir-fazlası.in" },
-  { id: "deneme-yazma", file: "deneme-yazma.kip" },
-  { id: "değilse-örüntü", file: "değilse-örüntü.kip" },
-  { id: "dizge-escape", file: "dizge-escape.kip" },
-  { id: "dizge-işlemleri", file: "dizge-işlemleri.kip" },
-  { id: "dosya-io", file: "dosya-io.kip" },
-  { id: "doğruluk-tersi", file: "doğruluk-tersi.kip" },
-  { id: "ek-öbek", file: "ek-öbek.kip" },
-  { id: "fibonacci", file: "fibonacci.kip", stdin: "fibonacci.in" },
-  { id: "geri-dönüş-tipi", file: "geri-dönüş-tipi.kip" },
-  { id: "gün-örneği", file: "gün-örneği.kip" },
-  { id: "iki-tür-bindirme", file: "iki-tür-bindirme.kip" },
-  { id: "ikili-ağaç-araması", file: "ikili-ağaç-araması.kip" },
-  { id: "iç-örnek-eşleşme", file: "iç-örnek-eşleşme.kip" },
-  { id: "iç-örnek-şu", file: "iç-örnek-şu.kip" },
-  { id: "karmaşık-eşleşme", file: "karmaşık-eşleşme.kip" },
-  { id: "kesişim-çıktı", file: "kesişim-çıktı.kip" },
-  { id: "liste-toplamı", file: "liste-toplamı.kip" },
   { id: "selamlamak", file: "selamlamak.kip", stdin: "selamlamak.in" },
-  { id: "tam-sayı-aritmetiği", file: "tam-sayı-aritmetiği.kip" },
-  { id: "tam-sayı-fark-sırası", file: "tam-sayı-fark-sırası.kip" },
-  { id: "tam-sayı-hali", file: "tam-sayı-hali.kip" },
-  { id: "tam-sayı-toplamı", file: "tam-sayı-toplamı.kip" },
-  { id: "tam-sayı-yazmak", file: "tam-sayı-yazmak.kip" },
-  { id: "tireli-örüntü", file: "tireli-örüntü.kip" },
-  { id: "ya-da-yapı", file: "ya-da-yapı.kip" },
-  { id: "çok-satırlı-eşleşme", file: "çok-satırlı-eşleşme.kip" },
+  { id: "gün-örneği", file: "gün-örneği.kip" },
+  { id: "fibonacci", file: "fibonacci.kip", stdin: "fibonacci.in" },
+  { id: "asal-sayılar", file: "asal-sayılar.kip", stdin: "asal-sayılar.in" },
+  { id: "bir-fazlası", file: "bir-fazlası.kip", stdin: "bir-fazlası.in" },
+  { id: "ikili-ağaç-araması", file: "ikili-ağaç-araması.kip" },
+  { id: "dosya-io", file: "dosya-io.kip" }
 ];
 
-sourceEl.value = `(* Example program *)
+sourceEl.value = `(* İlk n Fibonacci sayısını yazdır. / Print the first n Fibonacci numbers.*)
 (bu tam-sayıyı) (şu tam-sayıyı) (o tam-sayıyı) işlemek,
   (onla 0'ın eşitliği) doğruysa,
     durmaktır,
