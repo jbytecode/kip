@@ -3,48 +3,143 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kip Playground</title>
+    <link rel="icon" type="image/png" href="./logo.png" />
+    <title>Kip</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <main class="container">
-      <header>
-        <h1>Kip Playground</h1>
-      </header>
-      <section class="panel">
-        <label for="source">Source</label>
-        <textarea id="source" spellcheck="false"></textarea>
-      </section>
-      <section class="panel">
-        <label for="stdin">Stdin</label>
-        <textarea id="stdin" spellcheck="false" class="small"></textarea>
-      </section>
-      <section class="controls">
-        <label>
-          Example:
-          <select id="example"></select>
-        </label>
-        <label>
-          Diagnostics language:
-          <select id="lang">
-            <option value="tr">tr</option>
-            <option value="en">en</option>
-          </select>
-        </label>
-        <div class="button-row">
-          <button id="run">Run</button>
-          <button id="transpile">Transpile</button>
+    <!-- Top navigation / brand -->
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="#top">
+          <img class="brand-logo" src="./logo.png" alt="Kip logo" />
+          <span class="brand-name">Kip</span>
+        </a>
+
+        <div class="topbar-cta">
+          <a class="chip" href="https://github.com/kip-dili/kip">Source Code</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- Hero -->
+      <section class="hero">
+        <div class="hero-inner">
+          <div class="hero-copy">
+            <h1 class="hero-title">
+              A programming language in Turkish where <span class="accent">grammatical case</span> and <span class="accent">mood</span> are part of the type system.
+            </h1>
+            <p class="hero-subtitle">Kip is an experimental language that integrates Turkish morphology into typing, exploring the overlap between linguistics and type theory.</p>
+            <p class="hero-subtitle">In Kip, pure function signatures are noun phrases; effectful ones are infinitives invoked in the imperative. Every argument bears a grammatical case—nominative, accusative, dative, and so on—and case is part of the function’s type. When cases are distinct, arguments can be supplied in any order.</p>
+            <p class="hero-subtitle">Kip also resolves natural-language ambiguity with type-directed disambiguation: it preserves multiple parses through parsing and lets elaboration and type checking select the intended one.</p>
+
+            <div class="hero-actions">
+              <a class="btn primary" href="#playground">Open the playground</a>
+            </div>
+
+            <div class="hero-badges">
+              <a class="badge" href="https://github.com/kip-dili/kip/wiki/K%C4%B1lavuz">
+                <span class="badge-dot"></span>
+                Kılavuz (Türkçe)
+              </a>
+              <a class="badge" href="https://github.com/kip-dili/kip/wiki/Tutorial">
+                <span class="badge-dot"></span>
+                Tutorial (English)
+              </a>
+            </div>
+          </div>
+
+          <div class="hero-card" aria-label="Kip example">
+            <div class="hero-card-header">
+              <div class="pill">Example</div>
+              <div class="muted">defining and using a linked list type</div>
+            </div>
+            <pre class="code-sample"><code>Bir (öğe listesi)
+  ya boş
+  ya da bir öğenin bir öğe listesine eki
+olabilir.
+
+(bu öğe listesiyle) (şu öğe listesinin) birleşimi,
+  bu boşsa,
+    şu,
+  ilkin devama ekiyse,
+    ilkin (devamla şunun birleşimine) ekidir.
+
+(bu öğe listesinin) tersi,
+  bu boşsa,
+    boş,
+  ilkin devama ekiyse,
+    (devamın tersiyle) 
+      (ilkin boşa ekinin) birleşimidir.
+
+(1'in (2'nin boşa ekine) ekinin) tersini yaz.
+            </code></pre>
+          </div>
         </div>
       </section>
-      <section class="panel">
-        <label for="output">Output</label>
-        <pre id="output"></pre>
+
+      <!-- Playground -->
+      <section id="playground" class="section">
+        <div class="section-inner">
+          <h2 class="section-title">Playground</h2>
+          <p class="section-subtitle">
+            Write Kip code, pick an example, and run it.
+          </p>
+
+          <div class="playground-shell">
+            <div class="playground-controls">
+              <label>
+                Example:
+                <select id="example"></select>
+              </label>
+
+              <label>
+                Diagnostics:
+                <select id="lang">
+                  <option value="tr">Türkçe</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
+
+              <label>
+                Stdin:
+                <input type="text" id="stdin" placeholder="(optional)" />
+              </label>
+
+              <button id="run">Run</button>
+            </div>
+
+            <div class="playground-panels">
+              <div class="panel">
+                <label for="source">Source</label>
+                <div class="editor-wrap">
+                  <textarea id="source" spellcheck="false"></textarea>
+                </div>
+              </div>
+
+              <div class="panel">
+                <label for="output">Output</label>
+                <pre id="output"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
-      <section class="panel">
-        <label for="transpiled">Transpiled JavaScript</label>
-        <pre id="transpiled"></pre>
-      </section>
+
+      <footer class="footer">
+        <div class="footer-inner">
+          <div class="footer-left">
+            <img class="footer-logo" src="./logo.png" alt="Kip logo" />
+            <div>
+              <div class="footer-title">Kip</div>
+              <div class="footer-subtitle">A programming language in Turkish where grammatical case and mood are part of the type system.</div>
+            </div>
+          </div>
+        </div>
+      </footer>
     </main>
+
     <script type="module" src="./playground.js"></script>
   </body>
 </html>

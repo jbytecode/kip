@@ -29,24 +29,7 @@ const examples = [
   { id: "dosya-io", file: "dosya-io.kip" }
 ];
 
-sourceEl.value = `(* İlk n Fibonacci sayısını yazdır. / Print the first n Fibonacci numbers.*)
-(bu tam-sayıyı) (şu tam-sayıyı) (o tam-sayıyı) işlemek,
-  (onla 0'ın eşitliği) doğruysa,
-    durmaktır,
-  yanlışsa,
-    bunu yazıp,
-    şunu (bunla şunun toplamını) (onla 1'in farkını) işlemektir.
-
-çalıştırmak,
-  "Bir sayı girin:" yazıp,
-  isim olarak okuyup,
-  ((ismin tam-sayı-hali)
-    yokluksa,
-      "Geçersiz sayı." yazmaktır,
-    n'nin varlığıysa,
-      0'ı 1'i n'yi işlemektir).
-
-çalıştır.`;
+sourceEl.value = `(1'in (2'nin boşa ekine) ekinin) tersini yaz.`;
 
 async function loadText(path) {
   const res = await fetch(path);
