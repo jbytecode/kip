@@ -929,49 +929,79 @@ main = do
           fsm <- runApp requireFsm
           (uCache, dCache) <- runApp requireParserCaches
           let pst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) uCache dCache
-          liftIO (parseFromRepl pst (T.pack input)) >>= \case
-            Left err -> do
-              emitMsgTCtx (MsgParseError err)
-              loop rs
-            Right (stmt, MkParserState _ pctx pty ptycons ptymods pprim _ _) -> do
-              case stmt of
-                Load name -> do
-                  let loadPst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) uCache dCache
-                  path <- runApp (resolveModulePath (replModuleDirs rs) name)
-                  absPath <- liftIO (canonicalizePath path)
-                  if Set.member absPath (replLoaded rs)
-                    then loop rs
-                    else do
-                      (pst', tcSt', evalSt', loaded') <- runApp (runFile False False False (replModuleDirs rs) (loadPst, replTCState rs, replEvalState rs, replLoaded rs) path)
-                      emitMsgTCtx (MsgLoaded name)
-                      loop (rs { replCtx = parserCtx pst'
-                                           , replTyParams = parserTyParams pst'
-                                           , replTyCons = parserTyCons pst'
-                                           , replTyMods = parserTyMods pst'
-                                           , replPrimTypes = parserPrimTypes pst'
-                                           , replTCState = tcSt'
-                                           , replEvalState = evalSt'
-                                           , replLoaded = loaded'
-                                           })
-                _ -> do
-                  let paramTyCons = [name | (name, arity) <- ptycons, arity > 0]
-                  liftIO (runTCM (tcStmt stmt) (replTCState rs)) >>= \case
-                    Left tcErr -> do
-                      emitMsgTCtx (MsgTCError tcErr (Just (T.pack input)) paramTyCons ptymods)
-                      loop rs
-                    Right (stmt', tcSt) -> do
-                      evalReplStmt paramTyCons ptymods (replEvalState rs) stmt' >>= \case
-                        Nothing -> loop rs
-                        Just evalSt ->
-                          loop (rs { replCtx = pctx
-                                               , replTyParams = pty
-                                               , replTyCons = ptycons
-                                               , replTyMods = ptymods
-                                               , replPrimTypes = pprim
-                                               , replTCState = tcSt
-                                               , replEvalState = evalSt
+          -- If input ends with a period, parse as statement; otherwise parse as expression
+          if not (null input) && last input == '.'
+            then do
+              liftIO (parseFromRepl pst (T.pack input)) >>= \case
+                Left err -> do
+                  emitMsgTCtx (MsgParseError err)
+                  loop rs
+                Right (stmt, MkParserState _ pctx pty ptycons ptymods pprim _ _) -> do
+                  case stmt of
+                    Load name -> do
+                      let loadPst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) uCache dCache
+                      path <- runApp (resolveModulePath (replModuleDirs rs) name)
+                      absPath <- liftIO (canonicalizePath path)
+                      if Set.member absPath (replLoaded rs)
+                        then loop rs
+                        else do
+                          (pst', tcSt', evalSt', loaded') <- runApp (runFile False False False (replModuleDirs rs) (loadPst, replTCState rs, replEvalState rs, replLoaded rs) path)
+                          emitMsgTCtx (MsgLoaded name)
+                          loop (rs { replCtx = parserCtx pst'
+                                               , replTyParams = parserTyParams pst'
+                                               , replTyCons = parserTyCons pst'
+                                               , replTyMods = parserTyMods pst'
+                                               , replPrimTypes = parserPrimTypes pst'
+                                               , replTCState = tcSt'
+                                               , replEvalState = evalSt'
+                                               , replLoaded = loaded'
                                                })
-                      return ()
+                    _ -> do
+                      let paramTyCons = [name | (name, arity) <- ptycons, arity > 0]
+                      liftIO (runTCM (tcStmt stmt) (replTCState rs)) >>= \case
+                        Left tcErr -> do
+                          emitMsgTCtx (MsgTCError tcErr (Just (T.pack input)) paramTyCons ptymods)
+                          loop rs
+                        Right (stmt', tcSt) -> do
+                          evalReplStmt paramTyCons ptymods (replEvalState rs) stmt' >>= \case
+                            Nothing -> loop rs
+                            Just evalSt ->
+                              loop (rs { replCtx = pctx
+                                                   , replTyParams = pty
+                                                   , replTyCons = ptycons
+                                                   , replTyMods = ptymods
+                                                   , replPrimTypes = pprim
+                                                   , replTCState = tcSt
+                                                   , replEvalState = evalSt
+                                                   })
+                          return ()
+            else do
+              -- Parse as expression and evaluate
+              liftIO (parseExpFromRepl pst (T.pack input)) >>= \case
+                Left err -> do
+                  emitMsgTCtx (MsgParseError err)
+                  loop rs
+                Right parsed -> do
+                  let paramTyCons = [name | (name, arity) <- replTyCons rs, arity > 0]
+                  liftIO (runTCM (tcExp1 parsed) (replTCState rs)) >>= \case
+                    Left tcErr -> do
+                      emitMsgTCtx (MsgTCError tcErr (Just (T.pack input)) paramTyCons (replTyMods rs))
+                      loop rs
+                    Right (parsed', _) -> do
+                      res <- liftIO $ catch
+                        (Right <$> runEvalM (evalExp parsed') (replEvalState rs))
+                        (\UserInterrupt -> return (Left ()))
+                      case res of
+                        Left () -> do
+                          emitMsgTCtx MsgCtrlC
+                          loop rs
+                        Right (Left evalErr) -> do
+                          emitMsgTCtx (MsgEvalError evalErr)
+                          loop rs
+                        Right (Right (result, _)) -> do
+                          rendered <- liftIO (evalRender (replEvalState rs) (replEvalState rs) result)
+                          lift (outputStrLn rendered)
+                          loop rs
       where
         -- | Infer and print a type for a REPL expression.
         inferExprType :: RenderCtx -- ^ Render context.
