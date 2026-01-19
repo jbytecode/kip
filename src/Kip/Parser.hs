@@ -349,26 +349,32 @@ estimateCandidates useCtx (ss, s) = do
   where
     -- | Find a matching identifier in context without building full candidate lists.
     -- Short-circuits on the first context hit to avoid extra downs calls.
+    -- Returns Nothing when multiple matches exist (ambiguity) to allow full enumeration.
     findCtxCandidate :: [Text] -- ^ Identifier modifiers.
                      -> Text -- ^ Surface root.
                      -> [Identifier] -- ^ Context identifiers.
-                     -> KipParser (Maybe (Identifier, Case)) -- ^ First context match, if any.
+                     -> KipParser (Maybe (Identifier, Case)) -- ^ Unique context match, if any.
     findCtxCandidate mods surfaceRoot ctx = do
       analyses <- upsCached surfaceRoot
       let nounAnalyses =
             filter (\a -> "<N>" `T.isInfixOf` a && not ("<V>" `T.isInfixOf` a)) analyses
           baseAnalyses =
             if null nounAnalyses then analyses else nounAnalyses
-      go baseAnalyses
+      -- Collect all matches first to detect ambiguity
+      allMatches <- collectAllMatches baseAnalyses
+      case allMatches of
+        [single] -> return (Just single)  -- Unique match: use fast path
+        _ -> return Nothing  -- Zero or multiple matches: fall through to full enumeration
       where
-        go [] = return Nothing
-        go (analysis:rest) =
+        collectAllMatches :: [Text] -> KipParser [(Identifier, Case)]
+        collectAllMatches [] = return []
+        collectAllMatches (analysis:rest) =
           case getPossibleCase analysis of
-            Nothing -> go rest
+            Nothing -> collectAllMatches rest
             Just (baseRoot, cas) -> do
               let direct = (mods, baseRoot)
-              if direct `elem` ctx
-                then return (Just (direct, cas))
+              directMatches <- if direct `elem` ctx
+                then return [(direct, cas)]
                 else do
                   let stem = stripCaseTags analysis
                   forms <- downsCached stem
@@ -378,9 +384,9 @@ estimateCandidates useCtx (ss, s) = do
                       else return []
                   let roots = nub (forms ++ p3sForms ++ [baseRoot])
                       matches = filter (`elem` ctx) [(mods, root) | root <- roots]
-                  case matches of
-                    (match:_) -> return (Just (match, cas))
-                    [] -> go rest
+                  return [(match, cas) | match <- matches]
+              restMatches <- collectAllMatches rest
+              return (nub (directMatches ++ restMatches))
     allCases = [Nom, Acc, Dat, Gen, Loc, Abl, Ins, Cond, P3s]
     candidatesFor :: Text -- ^ Surface form.
                   -> [Identifier] -- ^ Context identifiers.
@@ -631,15 +637,31 @@ gerundRoot (xs, x)
 -- | Pick the case from candidate variants.
 -- INLINE trims repeated selector overhead.
 {-# INLINE pickCase #-}
-pickCase :: [(Identifier, Case)] -- ^ Candidate identifiers.
+pickCase :: Bool -- ^ Whether P3s (possessive) case is allowed.
+         -> [(Identifier, Case)] -- ^ Candidate identifiers.
          -> Case -- ^ Selected case.
-pickCase candidates =
-  case preferInflected candidates of
-    [] ->
-      case candidates of
-        [] -> Nom
-        (_, cas):_ -> cas
-    (_, cas):_ -> cas
+pickCase allowP3s candidates =
+  -- Prefer a case that has multiple distinct identifiers (ambiguity)
+  -- so the type checker can detect it
+  let filtered = if allowP3s then candidates else filter (\(_, cas) -> cas /= P3s) candidates
+  in case findAmbiguousCase filtered of
+       Just cas -> cas
+       Nothing ->
+         case preferInflected filtered of
+           [] ->
+             case filtered of
+               [] -> Nom
+               (_, cas):_ -> cas
+           (_, cas):_ -> cas
+
+-- | Find a case that has multiple distinct identifiers (potential ambiguity).
+findAmbiguousCase :: [(Identifier, Case)] -> Maybe Case
+findAmbiguousCase candidates =
+  let groupedByCases = [(cas, nub [ident | (ident, c) <- candidates, c == cas]) | cas <- nub (map snd candidates)]
+      ambiguousCases = [cas | (cas, idents) <- groupedByCases, length idents > 1]
+  in case ambiguousCases of
+       (cas:_) -> Just cas
+       [] -> Nothing
 
 -- | Render an identifier as dash-separated text.
 -- INLINE reduces allocations in hot call sites.
@@ -809,7 +831,7 @@ parseExpWithCtx useCtx =
     var = do
       (name, sp) <- withSpan identifierNotKeyword
       candidates <- estimateCandidates useCtx name
-      return (Var (mkAnn (pickCase candidates) sp) name candidates)
+      return (Var (mkAnn (pickCase True candidates) sp) name candidates)
     -- | Parse an atomic expression.
     atom :: KipParser (Exp Ann) -- ^ Parsed atomic expression.
     atom = try matchExpr <|> try stringLiteral <|> try numberLiteral <|> try var <|> parens (parseExpWithCtx useCtx)
@@ -1181,7 +1203,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
     parseTypeLoose = do
       (rawIdent, sp) <- withSpan identifier
       candidates <- estimateCandidates False rawIdent
-      let ann = mkAnn (pickCase candidates) sp
+      let ann = mkAnn (pickCase False candidates) sp  -- Types are never P3s
           nameForTy =
             case candidates of
               (ident, _):_ -> ident
@@ -1217,14 +1239,26 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
       return (Defn name (TyString (mkAnn Nom NoSpan)) e)
     -- | Parse a definition item (argument or name).
     defItem :: KipParser (Exp Ann) -- ^ Parsed definition item.
-    defItem = try (parens parseExp) <|> defItemVar
+    defItem = try (parens parseExp) <|> try defItemStringLit <|> try defItemNumberLit <|> defItemVar
+    -- | Parse a definition item as a string literal.
+    defItemStringLit :: KipParser (Exp Ann) -- ^ Parsed string literal definition item.
+    defItemStringLit = do
+      ((txt, cas), sp) <- withSpan parseStringToken
+      return (StrLit (mkAnn cas sp) txt)
+    -- | Parse a definition item as a number literal.
+    defItemNumberLit :: KipParser (Exp Ann) -- ^ Parsed number literal definition item.
+    defItemNumberLit = do
+      (token, sp) <- withSpan parseNumberToken
+      cas <- numberCase token
+      let val = parseNumberValue token
+      return (IntLit (mkAnn cas sp) val)
     -- | Parse a definition item as a variable.
     defItemVar :: KipParser (Exp Ann) -- ^ Parsed definition item variable.
     defItemVar = do
       notFollowedBy (string "diyelim")
       (name, sp) <- withSpan identifier
       candidates <- estimateCandidates False name
-      return (Var (mkAnn (pickCase candidates) sp) name candidates)
+      return (Var (mkAnn (pickCase False candidates) sp) name candidates)  -- Definitions are never P3s
     -- | Build an application expression from items.
     buildApp :: [Exp Ann] -- ^ Expression items.
              -> KipParser (Exp Ann) -- ^ Built application.
@@ -1248,7 +1282,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> try def <|> expF
         Var annExp name candidates ->
           case filter (\(ident, _) -> ident `elem` ctx) candidates of
             [] -> customFailure ErrNoMatchingNominative
-            filtered -> return (Var (setAnnCase annExp (pickCase filtered)) name filtered)
+            filtered -> return (Var (setAnnCase annExp (pickCase False filtered)) name filtered)  -- Definition values are never P3s
         _ -> return expItem
     -- | Parse a statement starting with an expression.
     expFirst :: KipParser (Stmt Ann) -- ^ Parsed expression statement.
