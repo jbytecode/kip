@@ -16,10 +16,160 @@ import qualified Data.Text as T
 import Kip.AST
 
 -- | Transpile a list of statements into a JS-like program.
+-- Order: primitives, then overload wrappers (which capture hoisted functions),
+-- then all statements.
 transpileProgram :: [Stmt Ann] -> Text
 transpileProgram stmts =
   T.intercalate "\n\n"
-    (jsPrelude : map transpileStmt stmts)
+    (jsPrimitives : jsOverloadWrappers : map transpileStmt stmts)
+
+-- | JavaScript implementations of Kip primitives.
+-- Uses 'var' so user code can override with 'const'.
+-- Note: Boolean constructors are defined by the library's doğruluk type,
+-- so we use a helper to get the correct constructor format at runtime.
+-- Primitives that have library overloads (ters, birleşim, uzunluk, toplam)
+-- are stored with __kip_ prefix and wrapped at the end.
+jsPrimitives :: Text
+jsPrimitives = T.unlines
+  [ "// Kip → JavaScript (readability-focused output)"
+  , ""
+  , "// Node.js modules for I/O (lazy loaded)"
+  , "var __kip_fs = null;"
+  , "var __kip_readline = null;"
+  , "var __kip_stdin_lines = null;"
+  , "var __kip_stdin_index = 0;"
+  , ""
+  , "// Initialize stdin buffer for line-by-line reading"
+  , "var __kip_init_stdin = () => {"
+  , "  if (__kip_stdin_lines === null) {"
+  , "    __kip_fs = __kip_fs || require('fs');"
+  , "    try {"
+  , "      __kip_stdin_lines = __kip_fs.readFileSync(0, 'utf8').split('\\n');"
+  , "    } catch (e) {"
+  , "      __kip_stdin_lines = [];"
+  , "    }"
+  , "  }"
+  , "};"
+  , ""
+  , "// Helper to create a tagged value (works whether constructor is function or object)"
+  , "var __kip_bool = (tag) => typeof window !== 'undefined' && typeof window[tag] === 'function' ? window[tag]() : { tag, args: [] };"
+  , "var __kip_true = () => typeof doğru === 'function' ? doğru() : doğru;"
+  , "var __kip_false = () => typeof yanlış === 'function' ? yanlış() : yanlış;"
+  , "var __kip_some = (x) => typeof varlık === 'function' ? varlık(x) : { tag: 'varlık', args: [x] };"
+  , "var __kip_none = () => typeof yokluk === 'function' ? yokluk() : { tag: 'yokluk', args: [] };"
+  , ""
+  , "// Primitive boolean constructors (will be overridden by library)"
+  , "var doğru = { tag: \"doğru\", args: [] };"
+  , "var yanlış = { tag: \"yanlış\", args: [] };"
+  , ""
+  , "// Option type constructors (will be overridden by library if defined)"
+  , "var varlık = (...args) => ({ tag: \"varlık\", args });"
+  , "var yokluk = (...args) => ({ tag: \"yokluk\", args });"
+  , ""
+  , "// Unit type (will be overridden by library if defined)"
+  , "var bitimlik = (...args) => ({ tag: \"bitimlik\", args });"
+  , ""
+  , "// Primitive functions for strings/numbers (may be overloaded by library for other types)"
+  , "var __kip_prim_ters = (s) => s.split('').reverse().join('');"
+  , "var __kip_prim_birleşim = (a, b) => a + b;"
+  , "var __kip_prim_uzunluk = (s) => s.length;"
+  , "var __kip_prim_toplam = (a, b) => a + b;"
+  , ""
+  , "// I/O primitives (Node.js)"
+  , "var __kip_prim_oku_stdin = () => {"
+  , "  __kip_init_stdin();"
+  , "  if (__kip_stdin_index < __kip_stdin_lines.length) {"
+  , "    return __kip_stdin_lines[__kip_stdin_index++];"
+  , "  }"
+  , "  return '';"
+  , "};"
+  , "var __kip_prim_oku_dosya = (path) => {"
+  , "  __kip_fs = __kip_fs || require('fs');"
+  , "  try {"
+  , "    return __kip_some(__kip_fs.readFileSync(path, 'utf8'));"
+  , "  } catch (e) {"
+  , "    return __kip_none();"
+  , "  }"
+  , "};"
+  , "var __kip_prim_yaz_dosya = (path, content) => {"
+  , "  __kip_fs = __kip_fs || require('fs');"
+  , "  try {"
+  , "    __kip_fs.writeFileSync(path, content);"
+  , "    return __kip_true();"
+  , "  } catch (e) {"
+  , "    return __kip_false();"
+  , "  }"
+  , "};"
+  , ""
+  , "// Primitive functions (can be overridden)"
+  , "var yaz = (x) => { console.log(x); return typeof bitimlik === 'function' ? bitimlik() : bitimlik; };"
+  , "var çarpım = (a, b) => a * b;"
+  , "var fark = (a, b) => a - b;"
+  , "var eşitlik = (a, b) => a === b ? __kip_true() : __kip_false();"
+  , "var küçüklük = (a, b) => a < b ? __kip_true() : __kip_false();"
+  , "var küçük_eşitlik = (a, b) => a <= b ? __kip_true() : __kip_false();"
+  , "var büyüklük = (a, b) => a > b ? __kip_true() : __kip_false();"
+  , "var büyük_eşitlik = (a, b) => a >= b ? __kip_true() : __kip_false();"
+  , "var dizge_hal = (n) => String(n);"
+  , "var tam_sayı_hal = (s) => { const n = parseInt(s, 10); return isNaN(n) ? __kip_none() : __kip_some(n); };"
+  ]
+
+-- | Wrappers for overloaded functions that dispatch based on argument type.
+-- These are emitted at the END of the output, after all library code.
+-- They capture the library implementations (if any) and create unified functions.
+jsOverloadWrappers :: Text
+jsOverloadWrappers = T.unlines
+  [ "// Overload wrappers - dispatch to library or primitive based on type"
+  , "var __kip_lib_ters = typeof ters === 'function' ? ters : null;"
+  , "var __kip_lib_birleşim = typeof birleşim === 'function' ? birleşim : null;"
+  , "var __kip_lib_uzunluk = typeof uzunluk === 'function' ? uzunluk : null;"
+  , "var __kip_lib_toplam = typeof toplam === 'function' ? toplam : null;"
+  , "var __kip_lib_yaz = typeof yaz === 'function' ? yaz : null;"
+  , ""
+  , "var ters = (x) => {"
+  , "  if (typeof x === 'string') return __kip_prim_ters(x);"
+  , "  if (__kip_lib_ters) return __kip_lib_ters(x);"
+  , "  throw new Error('ters: unsupported type');"
+  , "};"
+  , ""
+  , "var birleşim = (a, b) => {"
+  , "  if (typeof a === 'string' || typeof a === 'number') return __kip_prim_birleşim(a, b);"
+  , "  if (__kip_lib_birleşim) return __kip_lib_birleşim(a, b);"
+  , "  throw new Error('birleşim: unsupported type');"
+  , "};"
+  , ""
+  , "var uzunluk = (x) => {"
+  , "  if (typeof x === 'string') return __kip_prim_uzunluk(x);"
+  , "  if (__kip_lib_uzunluk) return __kip_lib_uzunluk(x);"
+  , "  throw new Error('uzunluk: unsupported type');"
+  , "};"
+  , ""
+  , "var toplam = (...args) => {"
+  , "  if (args.length === 2 && typeof args[0] === 'number') return __kip_prim_toplam(args[0], args[1]);"
+  , "  if (args.length === 1 && __kip_lib_toplam) return __kip_lib_toplam(args[0]);"
+  , "  if (__kip_lib_toplam) return __kip_lib_toplam(...args);"
+  , "  return __kip_prim_toplam(...args);"
+  , "};"
+  , ""
+  , "// I/O wrappers"
+  , "var oku = (...args) => {"
+  , "  if (args.length === 0) return __kip_prim_oku_stdin();"
+  , "  if (args.length === 1 && typeof args[0] === 'string') return __kip_prim_oku_dosya(args[0]);"
+  , "  throw new Error('oku: unsupported arguments');"
+  , "};"
+  , ""
+  , "var yaz = (...args) => {"
+  , "  if (args.length === 1) {"
+  , "    console.log(args[0]);"
+  , "    return typeof bitimlik === 'function' ? bitimlik() : bitimlik;"
+  , "  }"
+  , "  if (args.length === 2 && typeof args[0] === 'string') {"
+  , "    return __kip_prim_yaz_dosya(args[0], args[1]);"
+  , "  }"
+  , "  if (__kip_lib_yaz) return __kip_lib_yaz(...args);"
+  , "  throw new Error('yaz: unsupported arguments');"
+  , "};"
+  ]
 
 -- | Transpile a list of statements (no prelude).
 transpileStmts :: [Stmt Ann] -> Text
@@ -48,8 +198,10 @@ transpileStmt stmt =
 transpileExp :: Exp Ann -> Text
 transpileExp exp' =
   case exp' of
-    Var {varName} ->
-      toJsIdent varName
+    Var {varName, varCandidates} ->
+      case varCandidates of
+        ((ident, _):_) -> toJsIdent ident
+        [] -> toJsIdent varName
     StrLit {lit} ->
       renderString lit
     IntLit {intVal} ->
@@ -91,30 +243,50 @@ renderFunction name args clauses =
 
 renderClauseChain :: Text -> [Clause Ann] -> [Text]
 renderClauseChain scrutinee clauses =
-  case clauses of
-    [] -> ["throw new Error(\"No matching clause\");"]
-    [Clause PWildcard body] ->
-      ["return " <> transpileExp body <> ";"]
-    (Clause pat body) : rest ->
-      let (cond, binds) = renderPatMatch scrutinee pat
-          header =
-            if T.null cond
-              then "if (true) {"
-              else "if (" <> cond <> ") {"
-          bodyLines =
-            binds ++ ["return " <> transpileExp body <> ";"]
+  ["switch (" <> scrutinee <> ".tag) {"]
+  ++ concatMap (renderSwitchCase scrutinee) clauses
+  ++ ["}"]
+
+renderSwitchCase :: Text -> Clause Ann -> [Text]
+renderSwitchCase scrutinee (Clause pat body) =
+  case pat of
+    PWildcard ->
+      [ "  default: {"
+      , indent 4 (T.unlines ["return " <> transpileExp body <> ";"])
+      , "  }"
+      ]
+    PCtor ctor vars ->
+      let -- Generate unique names for pattern variables, handling duplicates
+          uniqueVars = makeUniqueVars (map (toJsIdent . fst) vars)
+          binds =
+            case vars of
+              [] -> []
+              _ ->
+                [ "const [" <> T.intercalate ", " uniqueVars <> "] = "
+                    <> scrutinee <> ".args || [];"]
+          bodyLines = binds ++ ["return " <> transpileExp body <> ";"]
       in
-        [ header
-        , indent 2 (T.unlines bodyLines)
-        , "}"
-        ] ++
-        case rest of
-          [] -> []
-          _ ->
-            [ "else {"
-            , indent 2 (T.unlines (renderClauseChain scrutinee rest))
-            , "}"
-            ]
+        [ "  case " <> renderString (normalizeCtorName ctor) <> ": {"
+        , indent 4 (T.unlines bodyLines)
+        , "  }"
+        ]
+
+-- | Generate unique variable names by adding suffixes to duplicates.
+makeUniqueVars :: [Text] -> [Text]
+makeUniqueVars = go [] []
+  where
+    go _ acc [] = reverse acc
+    go seen acc (v:vs)
+      | v `elem` seen =
+          let newV = findUnique seen v 1
+          in go (newV : seen) (newV : acc) vs
+      | otherwise = go (v : seen) (v : acc) vs
+
+    findUnique seen base n =
+      let candidate = base <> "_" <> T.pack (show n)
+      in if candidate `elem` seen
+           then findUnique seen base (n + 1)
+           else candidate
 
 renderMatch :: Exp Ann -> [Clause Ann] -> Text
 renderMatch scrutinee clauses =
@@ -124,60 +296,98 @@ renderMatch scrutinee clauses =
 
 renderMatchClauses :: Text -> [Clause Ann] -> [Text]
 renderMatchClauses scrutinee clauses =
-  case clauses of
-    [] -> ["throw new Error(\"No match\");"]
-    [Clause PWildcard body] ->
-      ["return " <> transpileExp body <> ";"]
-    (Clause pat body) : rest ->
-      let (cond, binds) = renderPatMatch scrutinee pat
-          header =
-            if T.null cond
-              then "if (true) {"
-              else "if (" <> cond <> ") {"
-          bodyLines =
-            binds ++ ["return " <> transpileExp body <> ";"]
-      in
-        [ header
-        , indent 2 (T.unlines bodyLines)
-        , "}"
-        ] ++
-        case rest of
-          [] ->
-            ["throw new Error(\"No match\");"]
-          _ ->
-            [ "else {"
-            , indent 2 (T.unlines (renderMatchClauses scrutinee rest))
-            , "}"
-            ]
+  ["switch (" <> scrutinee <> ".tag) {"]
+  ++ concatMap (renderSwitchCase scrutinee) clauses
+  ++ ["  default: throw new Error(\"No match\");" | not hasDefault]
+  ++ ["}"]
+  where
+    hasDefault = any isWildcard clauses
+    isWildcard (Clause PWildcard _) = True
+    isWildcard _ = False
 
 renderPatMatch :: Text -> Pat Ann -> (Text, [Text])
 renderPatMatch _ PWildcard = ("", [])
 renderPatMatch scrutinee (PCtor ctor vars) =
-  let cond = "__kipMatch(" <> scrutinee <> ", " <> renderString (identText ctor) <> ")"
+  let cond = scrutinee <> ".tag === " <> renderString (normalizeCtorName ctor)
+      uniqueVars = makeUniqueVars (map (toJsIdent . fst) vars)
       binds =
         case vars of
           [] -> []
           _ ->
-            [ "const [" <> T.intercalate ", " (map (toJsIdent . fst) vars) <> "] = "
+            [ "const [" <> T.intercalate ", " uniqueVars <> "] = "
                 <> scrutinee <> ".args || [];"]
   in (cond, binds)
+
+-- | Normalize a constructor name by stripping Turkish suffixes.
+-- Handles conditional (-sa/-se with apostrophe) and possessive (-ı/-i/-u/-ü) forms.
+normalizeCtorName :: Identifier -> Text
+normalizeCtorName (ns, name) =
+  let base = stripTurkishSuffixes name
+  in case ns of
+       [] -> base
+       _  -> T.intercalate "_" (map (T.filter (/= ' ')) ns ++ [base])
+
+-- | Strip common Turkish suffixes from a word.
+-- This is a conservative heuristic that handles:
+-- 1. Conditional suffix with apostrophe ('sa, 'se, etc.)
+-- 2. Possessive suffix after soft-g (ğı, ği, ğu, ğü → k)
+stripTurkishSuffixes :: Text -> Text
+stripTurkishSuffixes txt =
+  let -- Strip conditional suffix with apostrophe ('sa, 'se, etc.)
+      withoutCond = case T.breakOn "'" txt of
+                      (pref, suf) | T.length suf > 1 -> pref
+                      _ -> txt
+      -- Strip possessive suffix only after soft-g (ğ + vowel → k)
+      withoutPoss = stripSoftGPossessive withoutCond
+  in withoutPoss
+
+-- | Strip Turkish possessive suffix only when preceded by soft-g.
+-- Converts ğı, ği, ğu, ğü back to k.
+stripSoftGPossessive :: Text -> Text
+stripSoftGPossessive txt =
+  case T.unsnoc txt of
+    Just (pref, c)
+      | c `elem` ("ıiuü" :: String) ->
+          -- Only strip if preceded by soft-g
+          case T.unsnoc pref of
+            Just (pref', 'ğ') -> pref' <> "k"  -- Convert ğ back to k
+            _ -> txt  -- Keep original if not after soft-g
+    _ -> txt
 
 renderNewType :: Identifier -> [Ctor Ann] -> Text
 renderNewType name ctors =
   let ctorLines =
-        [ "const " <> toJsIdent ctorName <> " = (...args) => ({ tag: "
-            <> renderString (identText ctorName) <> ", args });"
-        | (ctorName, _) <- ctors
+        [ renderCtor ctorName args
+        | (ctorName, args) <- ctors
         ]
       ctorSig =
         T.intercalate " | "
           [ identText ctorName <> "(" <> T.replicate (length args) "_" <> ")"
           | (ctorName, args) <- ctors
           ]
+      -- For single-constructor types with no args, also alias the type name
+      -- to the constructor (e.g., bitim = bitimlik for unit types)
+      typeAlias = case ctors of
+        [(ctorName, [])] | identText name /= identText ctorName ->
+          ["var " <> toJsIdent name <> " = " <> toJsIdent ctorName <> ";"]
+        _ -> []
   in
     T.unlines $
       ("/* type " <> identText name <> " = " <> ctorSig <> " */")
-        : ctorLines
+        : ctorLines ++ typeAlias
+
+-- | Render a single constructor.
+-- Zero-argument constructors are defined as objects (values).
+-- Constructors with arguments are defined as functions.
+-- Uses toJsIdent for both JS variable name and tag to ensure consistency.
+renderCtor :: Identifier -> [a] -> Text
+renderCtor ctorName args =
+  let jsName = toJsIdent ctorName
+  in case args of
+    [] -> "var " <> jsName <> " = { tag: "
+            <> renderString jsName <> ", args: [] };"
+    _ -> "var " <> jsName <> " = (...args) => ({ tag: "
+            <> renderString jsName <> ", args });"
 
 renderCall :: Exp Ann -> [Exp Ann] -> Text
 renderCall fn args =
@@ -225,7 +435,11 @@ toJsIdent ident =
           else prefixed
   in safe
   where
-    baseIdent (_, name) = T.filter (/= ' ') name
+    baseIdent (ns, name) =
+      let cleanName = T.filter (/= ' ') name
+      in case ns of
+           [] -> cleanName
+           _  -> T.intercalate "_" (map (T.filter (/= ' ')) ns ++ [cleanName])
     replaceDash c = if c == '-' then '_' else c
     isIdentStart c = isLetter c || c == '_' || c == '$'
 
@@ -257,10 +471,3 @@ escapeChar c =
 indent :: Int -> Text -> Text
 indent n =
   T.unlines . map (T.replicate n " " <>) . filter (not . T.null) . T.lines
-
-jsPrelude :: Text
-jsPrelude =
-  T.unlines
-    [ "// Kip → JavaScript (readability-focused output)"
-    , "const __kipMatch = (value, tag) => value && value.tag === tag;"
-    ]
