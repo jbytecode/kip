@@ -37,11 +37,11 @@
     devamı bastırmaktır.
 
 çalıştırmak,
-  "Bir sayı girin:" yazıp,
+  "Bir sayı girin:"i yazıp,
   isim olarak okuyup,
   ((ismin tam-sayı-hali)
     yokluksa,
-      "Geçersiz sayı." yazmaktır,
+      "Geçersiz sayı."yı yazmaktır,
     n'nin varlığıysa,
       (n'nin asal-listesini) bastırmaktır).
 

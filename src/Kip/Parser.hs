@@ -1690,18 +1690,22 @@ parseNumberToken = do
 numberCase :: Text -- ^ Numeric token.
            -> KipParser Case -- ^ Inferred case.
 numberCase token = do
-  let surface =
-        if T.isPrefixOf "-" token then T.drop 1 token else token
-  analyses <- upsCached surface
-  let cases = mapMaybe (fmap snd . getPossibleCase) analyses
-      inflected = filter (/= Nom) cases
-  return $
-    case inflected of
-      c:_ -> c
-      [] ->
-        case cases of
+  let (surface, suffix) = T.breakOn "'" token
+      base =
+        if T.isPrefixOf "-" surface then T.drop 1 surface else surface
+  if T.null suffix
+    then do
+      analyses <- upsCached base
+      let cases = mapMaybe (fmap snd . getPossibleCase) analyses
+          inflected = filter (/= Nom) cases
+      return $
+        case inflected of
           c:_ -> c
-          [] -> Nom
+          [] ->
+            case cases of
+              c:_ -> c
+              [] -> Nom
+    else return (stringCaseFromSuffix (T.drop 1 suffix))
 
 -- | Parse a numeric token into an integer value.
 parseNumberValue :: Text -- ^ Numeric token.

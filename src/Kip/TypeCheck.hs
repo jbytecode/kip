@@ -169,8 +169,6 @@ tcExp1With allowEffect e =
                         Var {varCandidates} ->
                           -- Allow flexible case only for pattern-bound vars
                           isJust (lookupByCandidates tcVarTys varCandidates)
-                        IntLit {} -> True  -- Literals get flexible case
-                        StrLit {} -> True
                         App {fn} -> case fn of
                           -- If calling a constructor, enforce strict case
                           Var {varCandidates} ->
