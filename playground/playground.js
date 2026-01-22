@@ -8,8 +8,11 @@ const terminalInputField = document.getElementById("terminal-input-field");
 const codeSampleEl = document.getElementById("code-sample");
 const sourceHighlightEl = document.getElementById("source-highlight");
 const runBtn = document.getElementById("run");
+const codegenBtn = document.getElementById("codegen");
 const langEl = document.getElementById("lang");
 const exampleEl = document.getElementById("example");
+const codegenPanelEl = document.getElementById("codegen-panel");
+const codegenOutputEl = document.getElementById("codegen-output");
 
 const keywordList = [
   "Bir",
@@ -383,6 +386,8 @@ let inputSignalView = null;
 let inputBufferView = null;
 let pendingInput = false;
 let interactiveSupported = true;
+let activeMode = null;
+let codegenLines = [];
 
 function terminateWorker() {
   if (activeWorker) {
@@ -410,12 +415,29 @@ function handleWorkerMessage(event) {
   const { type, line, error } = event.data || {};
   switch (type) {
     case "stdout":
-      appendTerminalLine(line ?? "");
+      if (activeMode === "codegen") {
+        codegenLines.push(line ?? "");
+        if (codegenOutputEl) {
+          codegenOutputEl.textContent = codegenLines.join("\n");
+        }
+      } else {
+        appendTerminalLine(line ?? "");
+      }
       break;
     case "stderr":
-      appendTerminalLine(line ?? "");
+      if (activeMode === "codegen") {
+        codegenLines.push(line ?? "");
+        if (codegenOutputEl) {
+          codegenOutputEl.textContent = codegenLines.join("\n");
+        }
+      } else {
+        appendTerminalLine(line ?? "");
+      }
       break;
     case "stdin-request":
+      if (activeMode === "codegen") {
+        break;
+      }
       if (!interactiveSupported) {
         appendTerminalLine("(stdin unavailable)");
         break;
@@ -427,12 +449,25 @@ function handleWorkerMessage(event) {
       pendingInput = false;
       hideTerminalInput();
       runBtn.disabled = false;
+      if (codegenBtn) {
+        codegenBtn.disabled = false;
+      }
       break;
     case "error":
-      appendTerminalLine(error ?? "Unknown error");
+      if (activeMode === "codegen") {
+        codegenLines.push(error ?? "Unknown error");
+        if (codegenOutputEl) {
+          codegenOutputEl.textContent = codegenLines.join("\n");
+        }
+      } else {
+        appendTerminalLine(error ?? "Unknown error");
+      }
       pendingInput = false;
       hideTerminalInput();
       runBtn.disabled = false;
+      if (codegenBtn) {
+        codegenBtn.disabled = false;
+      }
       break;
     default:
       break;
@@ -456,8 +491,12 @@ function sendInput(value) {
 
 async function runKip() {
   runBtn.disabled = true;
+  if (codegenBtn) {
+    codegenBtn.disabled = true;
+  }
   clearTerminal();
   terminateWorker();
+  activeMode = "run";
   interactiveSupported = true;
 
   const { signal, buffer } = createInputBuffers();
@@ -480,6 +519,36 @@ async function runKip() {
     args,
     signal,
     buffer,
+  });
+}
+
+function runCodegen() {
+  if (!codegenOutputEl || !codegenPanelEl) {
+    return;
+  }
+  runBtn.disabled = true;
+  codegenBtn.disabled = true;
+  terminateWorker();
+  activeMode = "codegen";
+  codegenLines = [];
+  codegenOutputEl.textContent = "";
+  codegenPanelEl.classList.remove("hidden");
+
+  const worker = new Worker(workerUrl, { type: "module" });
+  activeWorker = worker;
+  worker.addEventListener("message", handleWorkerMessage);
+  worker.addEventListener("error", (event) => {
+    codegenLines.push(String(event.message || event.error || event));
+    codegenOutputEl.textContent = codegenLines.join("\n");
+    runBtn.disabled = false;
+    codegenBtn.disabled = false;
+  });
+
+  const args = ["kip-playground", "--codegen", "js", "/main.kip", "--lang", langEl.value];
+  worker.postMessage({
+    type: "run",
+    source: sourceEl.value,
+    args,
   });
 }
 
@@ -548,3 +617,6 @@ if (terminalInputField) {
 }
 
 runBtn.addEventListener("click", runKip);
+if (codegenBtn) {
+  codegenBtn.addEventListener("click", runCodegen);
+}
