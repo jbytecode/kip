@@ -61,6 +61,7 @@ isFunctionDef stmt =
 -- Primitives that have library overloads (ters, birleşim, uzunluk, toplam)
 -- are stored with __kip_ prefix and wrapped at the end.
 -- The code is async-capable to support interactive browser I/O.
+-- When KIP_RANDOM_SEED is set, the RNG mirrors the runtime LCG.
 jsPrimitives :: Text
 jsPrimitives = T.unlines
   [ "// Kip → JavaScript (async/await for interactive browser support)"
@@ -74,6 +75,7 @@ jsPrimitives = T.unlines
   , "var __kip_stdin_mode = null;"
   , "var __kip_is_browser = (typeof window !== 'undefined');"
   , "var __kip_require = null;"
+  , "var __kip_random_seed = null;"
   , "if (!__kip_is_browser && typeof process !== 'undefined' && process.versions && process.versions.node) {"
   , "  const { createRequire } = await import('module');"
   , "  __kip_require = createRequire(import.meta.url);"
@@ -89,6 +91,20 @@ jsPrimitives = T.unlines
   , "    };"
   , "  }"
   , "}"
+  , "if (!__kip_is_browser && typeof process !== 'undefined' && process.env && process.env.KIP_RANDOM_SEED) {"
+  , "  const seed = Number(process.env.KIP_RANDOM_SEED);"
+  , "  if (!Number.isNaN(seed)) {"
+  , "    __kip_random_seed = seed >>> 0;"
+  , "  }"
+  , "}"
+  , "if (__kip_is_browser && typeof window.__kip_random_seed === 'number') {"
+  , "  __kip_random_seed = window.__kip_random_seed >>> 0;"
+  , "}"
+  , "var __kip_rand = () => {"
+  , "  if (__kip_random_seed === null) return Math.floor(Math.random() * 4294967296);"
+  , "  __kip_random_seed = (Math.imul(__kip_random_seed, 1664525) + 1013904223) >>> 0;"
+  , "  return __kip_random_seed;"
+  , "};"
   , ""
   , "// Initialize stdin buffer for line-by-line reading (Node.js only)"
   , "var __kip_init_stdin = () => {"
@@ -205,6 +221,14 @@ jsPrimitives = T.unlines
   , "};"
   , "var çarpım = (a, b) => a * b;"
   , "var fark = (a, b) => a - b;"
+  , "var bölüm = (a, b) => (b === 0 ? 0 : Math.trunc(a / b));"
+  , "var kalan = (a, b) => (b === 0 ? 0 : (a % b));"
+  , "var sayı_çek = (a, b) => {"
+  , "  var lo = Math.min(a, b);"
+  , "  var hi = Math.max(a, b);"
+  , "  var range = hi - lo + 1;"
+  , "  return lo + (__kip_rand() % range);"
+  , "};"
   , "var eşitlik = (a, b) => a === b ? __kip_true() : __kip_false();"
   , "var küçüklük = (a, b) => a < b ? __kip_true() : __kip_false();"
   , "var küçük_eşitlik = (a, b) => a <= b ? __kip_true() : __kip_false();"

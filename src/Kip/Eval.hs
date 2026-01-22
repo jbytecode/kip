@@ -17,7 +17,10 @@ import Control.Monad.Trans.Except
 import Control.Monad.IO.Class
 import Control.Exception (SomeException, try)
 import System.IO (hFlush, stdout)
+import System.Environment (lookupEnv)
 import System.FilePath (takeFileName, takeDirectory, (</>), isRelative)
+import System.Random (randomRIO)
+import Data.Word (Word32)
 import Control.Monad (guard)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -37,11 +40,12 @@ data EvalState =
     , evalTyCons :: [(Identifier, Int)] -- ^ Type constructor arities.
     , evalCurrentFile :: Maybe FilePath -- ^ Current file path for relative I/O.
     , evalRender :: EvalState -> Exp Ann -> IO String -- ^ Render function for values.
+    , evalRandState :: Maybe Word32 -- ^ Optional deterministic random state.
     }
 
 -- | Empty evaluator state with a simple pretty-printer.
 emptyEvalState :: EvalState -- ^ Default evaluator state.
-emptyEvalState = MkEvalState [] [] [] [] [] [] Nothing (\_ e -> return (prettyExp e))
+emptyEvalState = MkEvalState [] [] [] [] [] [] Nothing (\_ e -> return (prettyExp e)) Nothing
 
 -- | Evaluation errors (currently minimal).
 data EvalError =
@@ -64,11 +68,14 @@ evalExpWith localEnv e =
     Var {annExp, varName, varCandidates} ->
       case lookupByCandidates localEnv varCandidates of
         Just v -> return v
-        Nothing -> do
-          MkEvalState{evalVals} <- get
-          case lookupByCandidates evalVals varCandidates of
-            Nothing -> return (Var annExp varName varCandidates)
-            Just v -> evalExpWith localEnv v
+        Nothing ->
+          case lookupBySuffix localEnv varName of
+            Just v -> return v
+            Nothing -> do
+              MkEvalState{evalVals} <- get
+              case lookupByCandidates evalVals varCandidates of
+                Nothing -> return (Var annExp varName varCandidates)
+                Just v -> evalExpWith localEnv v
     App {annExp = annApp, fn, args} -> do
       fn' <- evalExpWith localEnv fn
       args' <- mapM (evalExpWith localEnv) args
@@ -90,7 +97,10 @@ evalExpWith localEnv e =
                     Nothing ->
                       case (lookupByCandidates evalSelectors varCandidates, args') of
                         (Just idx, [arg]) -> applySelector idx arg (App annApp fn' args')
-                        _ -> return (App annApp fn' args')
+                        _ ->
+                          if isRandomCandidate varCandidates
+                            then primIntRandom args'
+                            else return (App annApp fn' args')
         _ -> return (App annApp fn' args')
     StrLit {annExp, lit} ->
       return (StrLit annExp lit)
@@ -266,6 +276,11 @@ matchCtor ctor vars v =
                   then Just (T.take (T.length txt - len) txt)
                   else Nothing
 
+-- | Try resolving an ip-converb function to its base name when prim lookup fails.
+-- | Recognize the random primitive in either split or dashed identifier form.
+isRandomCandidate :: [(Identifier, Case)] -> Bool
+isRandomCandidate candidates =
+  any (\(ident, _) -> ident == (["sayı"], "çek") || ident == ([], "sayı-çek")) candidates
 -- | Apply a record selector or fall back when out of range.
 applySelector :: Int -- ^ Selector index.
               -> Exp Ann -- ^ Argument expression.
@@ -356,6 +371,34 @@ lookupByCandidates env candidates =
       case lookup n env of
         Just v -> Just v
         Nothing -> go ns
+
+-- | Heuristic fallback for matching inflected variables in local bindings.
+lookupBySuffix :: [(Identifier, a)] -- ^ Local environment bindings.
+               -> Identifier -- ^ Surface identifier.
+               -> Maybe a -- ^ Matching binding when found.
+lookupBySuffix env (mods, word) =
+  let suffixes =
+        [ "yı", "yi", "yu", "yü"
+        , "ı", "i", "u", "ü"
+        , "ya", "ye", "a", "e"
+        , "dan", "den", "tan", "ten"
+        , "da", "de", "ta", "te"
+        , "nın", "nin", "nun", "nün"
+        , "ın", "in", "un", "ün"
+        , "la", "le"
+        ]
+      stripped =
+        [ (mods, root)
+        | suf <- suffixes
+        , Just root <- [T.stripSuffix suf word]
+        ]
+  in findMatch stripped
+  where
+    findMatch [] = Nothing
+    findMatch (ident:rest) =
+      case lookup ident env of
+        Just v -> Just v
+        Nothing -> findMatch rest
 
 -- | Lookup a constructor binding by candidates.
 lookupCtorByCandidates :: [(Identifier, a)] -- ^ Candidate constructors.
@@ -627,12 +670,16 @@ primImpl mPath ident args = do
     ([], "toplam") -> Just (primIntBin "toplam" (+))
     ([], "çarpım") -> Just (primIntBin "çarpım" (*))
     ([], "fark") -> Just (primIntBin "fark" (-))
+    ([], "bölüm") -> Just primIntDiv
+    ([], "kalan") -> Just primIntMod
     (["dizge"], "hal") -> Just primIntToString
     ([], "eşitlik") -> Just (primIntCmp "eşitlik" (==))
     ([], "küçüklük") -> Just (primIntCmp "küçüklük" (<))
     (["küçük"], "eşitlik") -> Just (primIntCmp "küçük-eşitlik" (<=))
     ([], "büyüklük") -> Just (primIntCmp "büyüklük" (>))
     (["büyük"], "eşitlik") -> Just (primIntCmp "büyük-eşitlik" (>=))
+    (["sayı"], "çek") -> Just primIntRandom
+    ([], "sayı-çek") -> Just primIntRandom
     _ -> Nothing
 
 -- | Check whether a primitive belongs to a given file context.
@@ -658,12 +705,16 @@ primFile ident =
     ([], "toplam") -> Just "temel-tam-sayı.kip"
     ([], "çarpım") -> Just "temel-tam-sayı.kip"
     ([], "fark") -> Just "temel-tam-sayı.kip"
+    ([], "bölüm") -> Just "temel-tam-sayı.kip"
+    ([], "kalan") -> Just "temel-tam-sayı.kip"
     (["dizge"], "hal") -> Just "temel-tam-sayı.kip"
     ([], "eşitlik") -> Just "temel-tam-sayı.kip"
     ([], "küçüklük") -> Just "temel-tam-sayı.kip"
     (["küçük"], "eşitlik") -> Just "temel-tam-sayı.kip"
     ([], "büyüklük") -> Just "temel-tam-sayı.kip"
     (["büyük"], "eşitlik") -> Just "temel-tam-sayı.kip"
+    (["sayı"], "çek") -> Just "temel-etki.kip"
+    ([], "sayı-çek") -> Just "temel-etki.kip"
     _ -> Nothing
 
 -- | Primitive print for integers and strings.
@@ -816,6 +867,58 @@ primIntBin fname op args =
     [IntLit ann a, IntLit _ b] ->
       return (IntLit ann (op a b))
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], fname) []) args)
+
+-- | Primitive integer division (division by zero yields 0).
+primIntDiv :: [Exp Ann] -- ^ Arguments.
+           -> EvalM (Exp Ann) -- ^ Result expression.
+primIntDiv args =
+  case args of
+    [IntLit ann a, IntLit _ b] ->
+      return (IntLit ann (if b == 0 then 0 else a `div` b))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "bölüm") []) args)
+
+-- | Primitive integer modulo (division by zero yields 0).
+primIntMod :: [Exp Ann] -- ^ Arguments.
+           -> EvalM (Exp Ann) -- ^ Result expression.
+primIntMod args =
+  case args of
+    [IntLit ann a, IntLit _ b] ->
+      return (IntLit ann (if b == 0 then 0 else a `mod` b))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "kalan") []) args)
+
+-- | Primitive integer random in inclusive bounds.
+primIntRandom :: [Exp Ann] -- ^ Arguments.
+              -> EvalM (Exp Ann) -- ^ Result expression.
+primIntRandom args =
+  case args of
+    [IntLit ann a, IntLit _ b] -> do
+      let lo = min a b
+          hi = max a b
+      st <- get
+      case evalRandState st of
+        Just seed -> do
+          let (nextSeed, n) = randRange seed lo hi
+          put st { evalRandState = Just nextSeed }
+          return (IntLit ann n)
+        Nothing -> do
+          mSeed <- liftIO (lookupEnv "KIP_RANDOM_SEED")
+          case mSeed >>= readMaybe of
+            Just (seedVal :: Integer) -> do
+              let seed = fromIntegral seedVal :: Word32
+                  (nextSeed, n) = randRange seed lo hi
+              put st { evalRandState = Just nextSeed }
+              return (IntLit ann n)
+            Nothing -> do
+              n <- liftIO (randomRIO (lo, hi))
+              return (IntLit ann n)
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) (["sayı"], "çek") []) args)
+  where
+    randRange :: Word32 -> Integer -> Integer -> (Word32, Integer)
+    randRange seed lo hi =
+      let nextSeed = seed * 1664525 + 1013904223
+          range = hi - lo + 1
+          val = lo + (toInteger nextSeed `mod` range)
+      in (nextSeed, val)
 
 -- | Primitive integer comparison operator.
 primIntCmp :: Text -- ^ Operator name.

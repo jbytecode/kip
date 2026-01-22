@@ -5,7 +5,7 @@ import Control.Exception (bracket)
 import Data.List (isInfixOf, sort, stripPrefix)
 import Data.Maybe (fromMaybe)
 import System.Directory (doesFileExist, doesDirectoryExist, findExecutable, getTemporaryDirectory, listDirectory, removeFile)
-import System.Environment (lookupEnv)
+import System.Environment (lookupEnv, setEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), replaceExtension, takeExtension)
 import System.IO (hClose, openTempFile)
@@ -16,6 +16,7 @@ import Test.Tasty.HUnit
 -- | Discover tests and run them through tasty.
 main :: IO () -- ^ Test entry point.
 main = do
+  setEnv "KIP_RANDOM_SEED" "12345"
   kipPath <- locateKip
   nodePath <- locateNode
   succeedFiles <- listKipFiles ("tests" </> "succeed")

@@ -125,6 +125,9 @@ tcExp1With allowEffect e =
       args' <- mapM (tcExp1With False) args
       case fn' of
         Var {annExp = annFn, varName, varCandidates} -> do
+          case varCandidates of
+            (ident, _) : _ -> unless allowEffect (rejectReadEffect annFn ident)
+            _ -> return ()
           MkTCState{tcFuncSigs, tcTyCons, tcCtors} <- get
           let tyNames = map fst tcTyCons
               funcNames = map fst tcFuncSigs

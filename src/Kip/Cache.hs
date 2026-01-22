@@ -157,6 +157,7 @@ fromCachedEvalState cache fsm CachedEvalState{..} =
     , evalTyCons = etyCons
     , evalCurrentFile = Nothing
     , evalRender = renderExpValue cache fsm
+    , evalRandState = Nothing
     }
 
 -- | Map a source file to its cache file path.

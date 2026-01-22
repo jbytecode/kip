@@ -305,47 +305,57 @@ estimateCandidates useCtx (ss, s) = do
           if useCtx && not (null filtered)
             then return filtered
             else do
-              case stripCopulaSuffix s of
-                Just stripped -> do
-                  baseIdent <- normalizePossessive (ss, stripped)
-                  if useCtx && baseIdent `elem` parserCtx
-                    then return [(baseIdent, Nom)]
-                    else do
-                      (candidates1, filtered1) <- candidatesFor stripped parserCtx
-                      let hasCond1 = any (\(_, cas) -> cas == Cond) candidates1
-                          candidates' =
-                            if hasCond1
-                              then candidates1
-                              else nub (candidates1 ++ condCandidates stripped)
-                          filtered' = filter (\(ident, _) -> ident `elem` parserCtx) candidates'
-                      let candidatesForMatch =
-                            if null candidates'
-                              then [((ss, stripped), cas) | cas <- allCases]
-                              else candidates'
-                      if useCtx && not (null filtered')
-                        then return filtered'
+              -- Fast path for ip-converb roots already in scope.
+              let ipMatch = do
+                    stripped <- stripIpSuffix s
+                    let ipIdent = (ss, stripped)
+                    if useCtx && ipIdent `elem` parserCtx
+                      then Just [(ipIdent, Nom)]
+                      else Nothing
+              case ipMatch of
+                Just match -> return match
+                Nothing ->
+                  case stripCopulaSuffix s of
+                    Just stripped -> do
+                      baseIdent <- normalizePossessive (ss, stripped)
+                      if useCtx && baseIdent `elem` parserCtx
+                        then return [(baseIdent, Nom)]
                         else do
-                          mMatch <- if useCtx then matchCtxByInflection parserCtx (ss, stripped) candidatesForMatch else return Nothing
-                          case mMatch of
-                            Just matched -> return [matched]
-                            Nothing ->
-                              if not (null candidates')
-                                then return candidates'
-                                else if null candidates
-                                  then customFailure ErrNoMatchingNominative
-                                  else return candidates
-                Nothing -> do
-                  let candidatesForMatch =
-                        if null candidates
-                          then [((ss, s), cas) | cas <- allCases]
-                          else candidates
-                  mMatch <- if useCtx then matchCtxByInflection parserCtx (ss, s) candidatesForMatch else return Nothing
-                  case mMatch of
-                    Just matched -> return [matched]
-                    Nothing ->
-                      if null candidates
-                        then customFailure ErrNoMatchingNominative
-                        else return candidates
+                          (candidates1, filtered1) <- candidatesFor stripped parserCtx
+                          let hasCond1 = any (\(_, cas) -> cas == Cond) candidates1
+                              candidates' =
+                                if hasCond1
+                                  then candidates1
+                                  else nub (candidates1 ++ condCandidates stripped)
+                              filtered' = filter (\(ident, _) -> ident `elem` parserCtx) candidates'
+                          let candidatesForMatch =
+                                if null candidates'
+                                  then [((ss, stripped), cas) | cas <- allCases]
+                                  else candidates'
+                          if useCtx && not (null filtered')
+                            then return filtered'
+                            else do
+                              mMatch <- if useCtx then matchCtxByInflection parserCtx (ss, stripped) candidatesForMatch else return Nothing
+                              case mMatch of
+                                Just matched -> return [matched]
+                                Nothing ->
+                                  if not (null candidates')
+                                    then return candidates'
+                                    else if null candidates
+                                      then customFailure ErrNoMatchingNominative
+                                      else return candidates
+                    Nothing -> do
+                      let candidatesForMatch =
+                            if null candidates
+                              then [((ss, s), cas) | cas <- allCases]
+                              else candidates
+                      mMatch <- if useCtx then matchCtxByInflection parserCtx (ss, s) candidatesForMatch else return Nothing
+                      case mMatch of
+                        Just matched -> return [matched]
+                        Nothing ->
+                          if null candidates
+                            then customFailure ErrNoMatchingNominative
+                            else return candidates
   where
     -- | Find a matching identifier in context without building full candidate lists.
     -- Short-circuits on the first context hit to avoid extra downs calls.
@@ -438,6 +448,19 @@ estimateCandidates useCtx (ss, s) = do
                     -> Maybe Text -- ^ Stripped stem.
     stripCondSuffix txt =
       let suffixes = ["ysa", "yse"]
+          match = find (`T.isSuffixOf` txt) suffixes
+      in case match of
+           Nothing -> Nothing
+           Just suff ->
+             let len = T.length suff
+             in if T.length txt > len
+                  then Just (T.take (T.length txt - len) txt)
+                  else Nothing
+    -- | Strip ip-converb suffixes like \"-ip\" from surface forms.
+    stripIpSuffix :: Text -- ^ Surface form.
+                  -> Maybe Text -- ^ Stripped stem.
+    stripIpSuffix txt =
+      let suffixes = ["ip", "ıp", "up", "üp"]
           match = find (`T.isSuffixOf` txt) suffixes
       in case match of
            Nothing -> Nothing
@@ -867,7 +890,14 @@ parseExpWithCtx useCtx =
           if ok
             then do
               lexeme (char ',')
-              e2 <- parseExpWithCtx useCtx
+              e2 <- case e1 of
+                Bind {bindName} -> do
+                  st <- getP
+                  putP st { parserCtx = bindName : parserCtx st }
+                  res <- parseExpWithCtx useCtx
+                  putP st
+                  return res
+                _ -> parseExpWithCtx useCtx
               let ann = mkAnn (annCase (annExp e2)) (mergeSpan (annSpan (annExp e1)) (annSpan (annExp e2)))
               return (Seq ann e1 e2)
             else
@@ -1054,7 +1084,9 @@ parseExpWithCtx useCtx =
                     -> KipParser Bool -- ^ True when morphology has ip-converb tag.
     isIpConverbName ident = do
       analyses <- upsCached (identText ident)
-      return (any ("<cv:ip>" `T.isInfixOf`) analyses)
+      let surface = identText ident
+          hasSuffix = any (`T.isSuffixOf` surface) ["ip", "ıp", "up", "üp"]
+      return (any ("<cv:ip>" `T.isInfixOf`) analyses || hasSuffix)
     -- | Detect if candidates correspond to the write primitive.
     isWriteCandidates :: [(Identifier, Case)] -- ^ Candidate identifiers.
                       -> Bool -- ^ True when candidates match the write primitive.
