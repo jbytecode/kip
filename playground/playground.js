@@ -3,12 +3,32 @@ const workerUrl = new URL("./kip-worker.js", import.meta.url);
 const sourceEl = document.getElementById("source");
 const outputEl = document.getElementById("output");
 const terminalBodyEl = document.getElementById("terminal-body");
-const terminalEl = document.querySelector(".terminal");
 const terminalInputEl = document.getElementById("terminal-input");
 const terminalInputField = document.getElementById("terminal-input-field");
+const codeSampleEl = document.getElementById("code-sample");
+const sourceHighlightEl = document.getElementById("source-highlight");
 const runBtn = document.getElementById("run");
 const langEl = document.getElementById("lang");
 const exampleEl = document.getElementById("example");
+
+const keywordList = [
+  "Bir",
+  "bir",
+  "ya",
+  "da",
+  "olabilir",
+  "var",
+  "olamaz",
+  "değilse",
+  "yazdır",
+  "diyelim",
+  "olsun",
+  "olarak",
+  "yerleşik",
+];
+
+const keywordSet = new Set(keywordList);
+const letterPattern = /\p{L}/u;
 
 const examples = [
   { id: "selamlamak", file: "selamlamak.kip" },
@@ -20,14 +40,7 @@ const examples = [
   { id: "dosya-io", file: "dosya-io.kip" },
 ];
 
-sourceEl.value = `(bu tam-sayı listesini) bastırmak,
-  bu boşsa,
-    durmaktır,
-  ilkin devama ekiyse,
-    ilki yazıp,
-    devamı bastırmaktır.
-
-((1'in (2'nin boşa ekine) ekinin) tersini) bastır.`;
+sourceEl.value = `(bu tam-sayı listesini) bastırmak,\n  bu boşsa,\n    durmaktır,\n  ilkin devama ekiyse,\n    ilki yazıp,\n    devamı bastırmaktır.\n\n((1'in (2'nin boşa ekine) ekinin) tersini) bastır.`;
 
 async function loadText(path) {
   const res = await fetch(path);
@@ -35,6 +48,136 @@ async function loadText(path) {
     throw new Error(`Failed to load ${path}`);
   }
   return res.text();
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function highlightNonString(text) {
+  const tokenPattern = /\p{L}[\p{L}\p{N}]*|\d+|[()]/gu;
+  let result = "";
+  let lastIndex = 0;
+  let match;
+
+  while ((match = tokenPattern.exec(text)) !== null) {
+    const token = match[0];
+    const start = match.index;
+    const end = start + token.length;
+    result += escapeHtml(text.slice(lastIndex, start));
+
+    if (token === "(" || token === ")") {
+      result += `<span class="kip-paren">${token}</span>`;
+    } else if (/^\d+$/.test(token)) {
+      const prev = start > 0 ? text[start - 1] : "";
+      const next = end < text.length ? text[end] : "";
+      if ((prev && letterPattern.test(prev)) || (next && letterPattern.test(next))) {
+        result += escapeHtml(token);
+      } else {
+        result += `<span class="kip-literal">${token}</span>`;
+      }
+    } else if (keywordSet.has(token)) {
+      result += `<span class="kip-keyword">${escapeHtml(token)}</span>`;
+    } else {
+      result += escapeHtml(token);
+    }
+
+    lastIndex = end;
+  }
+
+  result += escapeHtml(text.slice(lastIndex));
+  return result;
+}
+
+function highlightKeywords(text) {
+  let result = "";
+  let lastIndex = 0;
+  let i = 0;
+  let commentDepth = 0;
+  let commentStart = 0;
+  let mode = "normal";
+
+  while (i < text.length) {
+    if (mode === "comment") {
+      if (text[i] === "(" && text[i + 1] === "*") {
+        commentDepth += 1;
+        i += 2;
+        continue;
+      }
+      if (text[i] === "*" && text[i + 1] === ")") {
+        commentDepth -= 1;
+        i += 2;
+        if (commentDepth === 0) {
+          const comment = text.slice(commentStart, i);
+          result += `<span class="kip-comment">${escapeHtml(comment)}</span>`;
+          lastIndex = i;
+          mode = "normal";
+        }
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (text[i] === "(" && text[i + 1] === "*") {
+      result += highlightNonString(text.slice(lastIndex, i));
+      commentDepth = 1;
+      commentStart = i;
+      mode = "comment";
+      i += 2;
+      continue;
+    }
+
+    if (text[i] === "\"") {
+      result += highlightNonString(text.slice(lastIndex, i));
+      let j = i + 1;
+      while (j < text.length) {
+        if (text[j] === "\\\\") {
+          j += 2;
+          continue;
+        }
+        if (text[j] === "\"") {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      const literal = text.slice(i, j);
+      result += `<span class="kip-literal">${escapeHtml(literal)}</span>`;
+      i = j;
+      lastIndex = i;
+      continue;
+    }
+
+    i += 1;
+  }
+
+  if (mode === "comment") {
+    const comment = text.slice(commentStart);
+    result += `<span class="kip-comment">${escapeHtml(comment)}</span>`;
+    return result;
+  }
+
+  result += highlightNonString(text.slice(lastIndex));
+  return result;
+}
+
+function syncHighlight() {
+  if (sourceHighlightEl) {
+    sourceHighlightEl.innerHTML = `${highlightKeywords(sourceEl.value)}\n`;
+  }
+}
+
+function highlightCodeSample() {
+  if (!codeSampleEl) {
+    return;
+  }
+  codeSampleEl.innerHTML = highlightKeywords(codeSampleEl.textContent || "");
 }
 
 function clearTerminal() {
@@ -47,21 +190,6 @@ function appendTerminalLine(line) {
   if (terminalBodyEl) {
     terminalBodyEl.scrollTop = terminalBodyEl.scrollHeight;
   }
-}
-
-function syncTerminalHeight() {
-  if (!sourceEl || !terminalEl || !terminalBodyEl) {
-    return;
-  }
-  const rect = sourceEl.getBoundingClientRect();
-  if (!rect.height) {
-    return;
-  }
-  const styles = getComputedStyle(terminalEl);
-  const paddingTop = parseFloat(styles.paddingTop) || 0;
-  const paddingBottom = parseFloat(styles.paddingBottom) || 0;
-  terminalEl.style.height = `${rect.height}px`;
-  terminalBodyEl.style.maxHeight = `${Math.max(0, rect.height - paddingTop - paddingBottom)}px`;
 }
 
 function showTerminalInput() {
@@ -212,7 +340,18 @@ async function loadExample(exampleId) {
   }
   const source = await loadText(`./assets/examples/${example.file}`);
   sourceEl.value = source;
+  syncHighlight();
 }
+
+syncHighlight();
+highlightCodeSample();
+sourceEl.addEventListener("input", syncHighlight);
+sourceEl.addEventListener("scroll", () => {
+  if (sourceHighlightEl) {
+    sourceHighlightEl.scrollTop = sourceEl.scrollTop;
+    sourceHighlightEl.scrollLeft = sourceEl.scrollLeft;
+  }
+});
 
 if (exampleEl) {
   buildExampleOptions();
@@ -227,14 +366,6 @@ if (exampleEl) {
       appendTerminalLine(String(err));
     }
   });
-}
-
-syncTerminalHeight();
-if (typeof ResizeObserver !== "undefined" && sourceEl) {
-  const observer = new ResizeObserver(() => syncTerminalHeight());
-  observer.observe(sourceEl);
-} else {
-  window.addEventListener("resize", syncTerminalHeight);
 }
 
 if (terminalInputField) {
