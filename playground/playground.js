@@ -13,6 +13,8 @@ const langEl = document.getElementById("lang");
 const exampleEl = document.getElementById("example");
 const codegenPanelEl = document.getElementById("codegen-panel");
 const codegenOutputEl = document.getElementById("codegen-output");
+const panelsEl = document.querySelector(".playground-panels");
+const panelDividerEl = document.getElementById("panel-divider");
 
 const keywordList = [
   "Bir",
@@ -720,6 +722,58 @@ sourceEl.addEventListener("scroll", () => {
     sourceHighlightEl.scrollLeft = sourceEl.scrollLeft;
   }
 });
+
+function setPanelSplit(ratio) {
+  if (!panelsEl) {
+    return;
+  }
+  const clamped = Math.min(0.8, Math.max(0.2, ratio));
+  panelsEl.style.setProperty("--panel-left", `${clamped}fr`);
+  panelsEl.style.setProperty("--panel-right", `${1 - clamped}fr`);
+}
+
+function initPanelResize() {
+  if (!panelsEl || !panelDividerEl) {
+    return;
+  }
+
+  let dragging = false;
+
+  const updateFromEvent = (event) => {
+    const rect = panelsEl.getBoundingClientRect();
+    const offset = event.clientX - rect.left;
+    const ratio = offset / rect.width;
+    setPanelSplit(ratio);
+  };
+
+  const onPointerMove = (event) => {
+    if (!dragging) {
+      return;
+    }
+    updateFromEvent(event);
+  };
+
+  const stopDragging = () => {
+    if (!dragging) {
+      return;
+    }
+    dragging = false;
+    panelsEl.classList.remove("resizing");
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", stopDragging);
+  };
+
+  panelDividerEl.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    panelDividerEl.setPointerCapture(event.pointerId);
+    panelsEl.classList.add("resizing");
+    updateFromEvent(event);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopDragging);
+  });
+}
+
+initPanelResize();
 
 if (exampleEl) {
   buildExampleOptions();

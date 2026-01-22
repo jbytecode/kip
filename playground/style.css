@@ -409,11 +409,43 @@ a.badge:hover {
 }
 
 .playground-panels {
+  --divider-width: 14px;
+  --panel-left: 1fr;
+  --panel-right: 1fr;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
+  grid-template-columns: minmax(260px, var(--panel-left)) var(--divider-width) minmax(260px, var(--panel-right));
+  gap: 0;
   padding: 1rem;
   align-items: stretch;
+}
+
+.playground-panels.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.panel-divider {
+  position: relative;
+  cursor: col-resize;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  touch-action: none;
+}
+
+.panel-divider::before {
+  content: "";
+  align-self: stretch;
+  width: 2px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.35);
+  margin: 0.35rem 0;
+  transition: background 0.2s ease;
+}
+
+.panel-divider:hover::before,
+.panel-divider:focus-visible::before {
+  background: var(--accent1);
 }
 
 /* Panels */
@@ -699,6 +731,10 @@ pre {
 
   .playground-panels {
     grid-template-columns: 1fr;
+  }
+
+  .panel-divider {
+    display: none;
   }
 
   .playground-controls {
