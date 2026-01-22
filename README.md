@@ -200,6 +200,9 @@ stack exec kip
 # Execute a file
 stack exec kip -- --exec path/to/file.kip
 
+# Generate JavaScript
+stack exec kip -- --codegen js path/to/file.kip
+
 # Install to PATH
 stack install
 ```

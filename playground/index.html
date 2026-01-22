@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/png" href="./logo.png" />
     <title>Kip</title>
+    <meta name="description" content="Kip is an experimental programming language in Turkish where grammatical case and mood are part of the type system." />
+    <meta property="og:title" content="Kip" />
+    <meta property="og:description" content="An experimental programming language in Turkish where grammatical case and mood are part of the type system." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="./logo.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Kip" />
+    <meta name="twitter:description" content="An experimental programming language in Turkish where grammatical case and mood are part of the type system." />
+    <meta name="twitter:image" content="./logo.png" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
@@ -17,7 +26,16 @@
         </a>
 
         <div class="topbar-cta">
-          <a class="chip" href="https://github.com/kip-dili/kip">Source Code</a>
+          <a class="icon-link" href="https://github.com/kip-dili/kip" aria-label="Kip on GitHub">
+            <svg class="icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
+              <path d="M12 2a10 10 0 0 0-3.16 19.48c.5.1.68-.22.68-.48v-1.7c-2.77.6-3.35-1.19-3.35-1.19-.45-1.14-1.1-1.45-1.1-1.45-.9-.62.07-.6.07-.6 1 .07 1.52 1.03 1.52 1.03.9 1.52 2.36 1.08 2.94.83.1-.65.35-1.08.64-1.33-2.21-.25-4.54-1.1-4.54-4.9 0-1.08.38-1.96 1.02-2.65-.1-.25-.44-1.27.1-2.65 0 0 .83-.27 2.7 1.01a9.4 9.4 0 0 1 4.92 0c1.87-1.28 2.7-1.01 2.7-1.01.54 1.38.2 2.4.1 2.65.64.7 1.02 1.57 1.02 2.65 0 3.81-2.33 4.65-4.55 4.9.36.32.68.93.68 1.87v2.77c0 .26.18.59.69.48A10 10 0 0 0 12 2z"></path>
+              </svg>
+          </a>
+          <a class="icon-link" href="https://twitter.com/KipDili" aria-label="Kip on Twitter">
+            <svg class="icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
+              <path d="M19.633 7.997c.013.177.013.355.013.534 0 5.43-4.135 11.69-11.69 11.69-2.322 0-4.482-.68-6.3-1.844.324.038.636.051.973.051 1.92 0 3.687-.648 5.096-1.74a4.124 4.124 0 0 1-3.85-2.86c.25.038.5.063.763.063.363 0 .726-.05 1.064-.138A4.118 4.118 0 0 1 2.3 9.21v-.05c.55.303 1.188.49 1.862.51a4.117 4.117 0 0 1-1.835-3.43c0-.763.2-1.464.55-2.075a11.7 11.7 0 0 0 8.5 4.31 4.63 4.63 0 0 1-.1-.942 4.117 4.117 0 0 1 7.12-2.81 8.09 8.09 0 0 0 2.61-.986 4.1 4.1 0 0 1-1.81 2.27 8.24 8.24 0 0 0 2.36-.636 8.86 8.86 0 0 1-2.06 2.125z"></path>
+            </svg>
+          </a>
         </div>
       </div>
     </header>
@@ -86,11 +104,38 @@ olabilir.
       </section>
 
       <!-- Playground -->
+      <section id="features" class="section">
+        <div class="section-inner">
+          <h2 class="section-title">Features</h2>
+          <p class="section-subtitle">
+            A small set of ideas that make Kip different.
+          </p>
+          <div class="feature-grid">
+            <div class="feature-card">
+              <h3>Grammar-aware types</h3>
+              <p>Grammatical case and mood are part of the type system, so argument order can vary when cases differ.</p>
+            </div>
+            <div class="feature-card">
+              <h3>Type-directed disambiguation</h3>
+              <p>Parsing preserves alternatives; type checking selects the intended meaning.</p>
+            </div>
+            <div class="feature-card">
+              <h3>Bytecode caches</h3>
+              <p>Type-checked modules are cached as <code>.iz</code> files to speed up repeated runs.</p>
+            </div>
+            <div class="feature-card">
+              <h3>JavaScript codegen</h3>
+              <p>Generate JS with <code>kip --codegen js</code> for experimenting outside the REPL.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="playground" class="section">
         <div class="section-inner">
           <h2 class="section-title">Playground</h2>
           <p class="section-subtitle">
-            Write Kip code, pick an example, and run it.
+            Write custom Kip code, or pick an existing example, and run it.
           </p>
 
           <div class="playground-shell">
@@ -108,11 +153,6 @@ olabilir.
                 </select>
               </label>
 
-              <label>
-                Stdin:
-                <input type="text" id="stdin" placeholder="(optional)" />
-              </label>
-
               <button id="run">Run</button>
             </div>
 
@@ -126,7 +166,15 @@ olabilir.
 
               <div class="panel">
                 <label for="output">Output</label>
-                <pre id="output"></pre>
+                <div class="terminal">
+                  <div class="terminal-body" id="terminal-body">
+                    <pre id="output" class="terminal-output"></pre>
+                    <div class="terminal-input hidden" id="terminal-input">
+                      <span class="terminal-prompt">›</span>
+                      <input type="text" id="terminal-input-field" autocomplete="off" />
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -141,6 +189,18 @@ olabilir.
               <div class="footer-title">Kip</div>
               <div class="footer-subtitle">A programming language in Turkish where grammatical case and mood are part of the type system.</div>
             </div>
+          </div>
+          <div class="footer-links">
+            <a class="icon-link" href="https://github.com/kip-dili/kip" aria-label="Kip on GitHub">
+              <svg class="icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
+                <path d="M12 2a10 10 0 0 0-3.16 19.48c.5.1.68-.22.68-.48v-1.7c-2.77.6-3.35-1.19-3.35-1.19-.45-1.14-1.1-1.45-1.1-1.45-.9-.62.07-.6.07-.6 1 .07 1.52 1.03 1.52 1.03.9 1.52 2.36 1.08 2.94.83.1-.65.35-1.08.64-1.33-2.21-.25-4.54-1.1-4.54-4.9 0-1.08.38-1.96 1.02-2.65-.1-.25-.44-1.27.1-2.65 0 0 .83-.27 2.7 1.01a9.4 9.4 0 0 1 4.92 0c1.87-1.28 2.7-1.01 2.7-1.01.54 1.38.2 2.4.1 2.65.64.7 1.02 1.57 1.02 2.65 0 3.81-2.33 4.65-4.55 4.9.36.32.68.93.68 1.87v2.77c0 .26.18.59.69.48A10 10 0 0 0 12 2z"></path>
+              </svg>
+            </a>
+            <a class="icon-link" href="https://twitter.com/KipDili" aria-label="Kip on Twitter">
+              <svg class="icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
+                <path d="M19.633 7.997c.013.177.013.355.013.534 0 5.43-4.135 11.69-11.69 11.69-2.322 0-4.482-.68-6.3-1.844.324.038.636.051.973.051 1.92 0 3.687-.648 5.096-1.74a4.124 4.124 0 0 1-3.85-2.86c.25.038.5.063.763.063.363 0 .726-.05 1.064-.138A4.118 4.118 0 0 1 2.3 9.21v-.05c.55.303 1.188.49 1.862.51a4.117 4.117 0 0 1-1.835-3.43c0-.763.2-1.464.55-2.075a11.7 11.7 0 0 0 8.5 4.31 4.63 4.63 0 0 1-.1-.942 4.117 4.117 0 0 1 7.12-2.81 8.09 8.09 0 0 0 2.61-.986 4.1 4.1 0 0 1-1.81 2.27 8.24 8.24 0 0 0 2.36-.636 8.86 8.86 0 0 1-2.06 2.125z"></path>
+              </svg>
+            </a>
           </div>
         </div>
       </footer>

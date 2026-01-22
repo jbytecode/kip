@@ -95,6 +95,7 @@ code {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+  align-items: center;
 }
 
 .chip {
@@ -112,6 +113,31 @@ code {
 
 .chip:hover {
   border-color: rgba(148, 163, 184, 0.35);
+}
+
+.icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(226, 232, 240, 0.92);
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+
+.icon-link:hover {
+  border-color: rgba(148, 163, 184, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.icon {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
 }
 
 /* Hero */
@@ -280,6 +306,33 @@ a.badge:hover {
   line-height: 1.6;
 }
 
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.feature-card {
+  border-radius: 14px;
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(12, 16, 22, 0.55);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
+}
+
+.feature-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.feature-card p {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
 /* Playground */
 .playground-shell {
   border-radius: var(--radius);
@@ -315,12 +368,77 @@ a.badge:hover {
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
   padding: 1rem;
+  align-items: stretch;
 }
 
 /* Panels */
 .panel {
   display: grid;
   gap: 0.5rem;
+  grid-template-rows: auto 1fr;
+}
+
+.terminal {
+  min-height: 320px;
+  height: 100%;
+  padding: 0.85rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.terminal-body {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.terminal-output {
+  margin: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: rgba(226, 232, 240, 0.92);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow: visible;
+}
+
+.terminal-input {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(10, 12, 18, 0.7);
+}
+
+.terminal-input.hidden {
+  display: none;
+}
+
+.terminal-prompt {
+  color: var(--accent1);
+  font-weight: 700;
+}
+
+.terminal-input input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.92);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92rem;
+  caret-color: var(--accent1);
+  outline: none;
 }
 
 label {
@@ -332,12 +450,14 @@ label {
 .editor-wrap {
   position: relative;
   min-height: 320px;
+  height: 100%;
 }
 
 .editor-wrap textarea,
 .editor-wrap .editor-highlight {
   width: 100%;
   min-height: 320px;
+  height: 100%;
   padding: 0.85rem;
   border-radius: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -414,18 +534,7 @@ button:disabled {
 
 /* Output blocks */
 pre {
-  min-height: 320px;
-  padding: 0.85rem;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.22);
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  color: rgba(226, 232, 240, 0.92);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 0.92rem;
-  white-space: pre-wrap;
   margin: 0;
-  line-height: 1.5;
-  overflow: auto;
 }
 
 /* Footer */
@@ -443,6 +552,12 @@ pre {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
+}
+
+.footer-links {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .footer-left {
@@ -495,6 +610,10 @@ pre {
 
   .playground-controls button {
     margin-left: 0;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
   }
 
   .topbar-inner {
