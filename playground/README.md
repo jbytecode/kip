@@ -92,7 +92,16 @@ playground/dist/assets/...
 
 ## Run locally
 
-Serve the `playground/dist` folder with any static server (for example):
+Serve the `playground/dist` folder with any static server. If you want interactive
+stdin (e.g. `oku`), you must enable cross-origin isolation (COOP/COEP).
+
+Recommended (adds the required headers):
+
+```
+node playground/serve.js
+```
+
+Or for a basic static server (no interactive stdin):
 
 ```
 python3 -m http.server --directory playground/dist 8001
@@ -104,4 +113,14 @@ Open `http://localhost:8001` and use the Run button.
 
 - The playground uses an in-memory WASI filesystem; `lib/` and `vendor/` are copied into
   `playground/dist/assets/` and mounted at runtime.
+- Cross-origin isolation requires these response headers on the top-level document:
+  `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`.
 - Set `KIP_DATADIR=/` in the WASI environment so `lib/` and `vendor/` resolve correctly.
+
+## GitHub Pages
+
+GitHub Pages cannot set COOP/COEP headers. To enable interactive stdin there,
+the playground bundles `coi-serviceworker.js`, which injects COOP/COEP headers
+via a service worker. This requires a secure context (https) and same-origin
+assets. After deploying to Pages, load the site once, let it reload, then try
+`selamlamak` again.
