@@ -514,7 +514,10 @@ renderArg :: RenderCache -- ^ Render cache.
           -> IO String -- ^ Rendered argument.
 renderArg cache fsm paramTyCons tyMods (argName, ty) = do
   argStr <- renderIdentWithCase cache fsm argName Nom
-  tyStr <- renderTy cache fsm paramTyCons tyMods ty
+  tyStr <-
+    if shouldPossessiveArg argName
+      then renderTyPossessive cache fsm paramTyCons tyMods ty
+      else renderTy cache fsm paramTyCons tyMods ty
   return ("(" ++ argStr ++ " " ++ tyStr ++ ")")
 
 -- | Render a typed argument into name and type parts.
@@ -526,8 +529,93 @@ renderArgParts :: RenderCache -- ^ Render cache.
                -> IO (String, [(String, Bool)]) -- ^ Rendered name and type parts.
 renderArgParts cache fsm paramTyCons tyMods (argName, ty) = do
   argStr <- renderIdentWithCase cache fsm argName Nom
-  tyParts <- renderTyParts cache fsm paramTyCons tyMods ty
+  tyParts <-
+    if shouldPossessiveArg argName
+      then renderTyPartsPossessive cache fsm paramTyCons tyMods ty
+      else renderTyParts cache fsm paramTyCons tyMods ty
   return (argStr, tyParts)
+
+-- | Decide whether a typed argument should render its type with possessive case.
+shouldPossessiveArg :: Identifier -- ^ Argument name.
+                    -> Bool -- ^ True when possessive rendering is needed.
+shouldPossessiveArg ident = not (isDemonstrative ident)
+
+-- | Check for Turkish demonstrative pronouns used as bare argument names.
+isDemonstrative :: Identifier -- ^ Identifier to inspect.
+                -> Bool -- ^ True when the identifier is a demonstrative pronoun.
+isDemonstrative (mods, name) =
+  null mods && name `elem` [T.pack "bu", T.pack "şu", T.pack "o"]
+
+-- | Render a type with a possessive suffix before its grammatical case.
+renderTyPossessive :: RenderCache -- ^ Render cache.
+                   -> FSM -- ^ Morphology FSM.
+                   -> [Identifier] -- ^ Type parameters to render with P3s.
+                   -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
+                   -> Ty Ann -- ^ Type to render.
+                   -> IO String -- ^ Rendered type.
+renderTyPossessive cache fsm paramTyCons tyMods ty =
+  case ty of
+    TyInd ann name ->
+      renderIdentWithCases cache fsm (applyTyMods tyMods name) (possessiveCases (annCase ann))
+    TyVar ann name ->
+      renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
+    TySkolem ann name ->
+      renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
+    TyApp ann (TyInd _ name) [argTy] -> do
+      argStr <- renderTy cache fsm paramTyCons tyMods argTy
+      nameStr <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
+      return (argStr ++ " " ++ nameStr)
+    TyApp ann ctor _ -> do
+      ctorStr <- renderTy cache fsm paramTyCons tyMods ctor
+      return (ctorStr ++ caseTag (annCase ann))
+    TyInt ann ->
+      renderIdentWithCases cache fsm ([T.pack "tam"], T.pack "sayı") (possessiveCases (annCase ann))
+    TyString ann ->
+      renderIdentWithCases cache fsm ([], T.pack "dizge") (possessiveCases (annCase ann))
+    Arr ann _ _ ->
+      return ("işlev" ++ caseTag (annCase ann))
+
+-- | Render type parts with possessive suffixes before grammatical case.
+renderTyPartsPossessive :: RenderCache -- ^ Render cache.
+                        -> FSM -- ^ Morphology FSM.
+                        -> [Identifier] -- ^ Type parameters to render with P3s.
+                        -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
+                        -> Ty Ann -- ^ Type to render.
+                        -> IO [(String, Bool)] -- ^ Rendered parts and type-var flags.
+renderTyPartsPossessive cache fsm paramTyCons tyMods ty =
+  case ty of
+    TyInd ann name -> do
+      s <- renderIdentWithCases cache fsm (applyTyMods tyMods name) (possessiveCases (annCase ann))
+      return [(s, False)]
+    TyVar ann name -> do
+      s <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
+      return [(s, True)]
+    TySkolem ann name -> do
+      s <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
+      return [(s, True)]
+    TyApp ann (TyInd _ name) [argTy] -> do
+      argParts <- renderTyParts cache fsm paramTyCons tyMods argTy
+      nameStr <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
+      return (argParts ++ [(" ", False), (nameStr, False)])
+    TyApp ann ctor _ -> do
+      ctorStr <- renderTy cache fsm paramTyCons tyMods ctor
+      return [(ctorStr ++ caseTag (annCase ann), False)]
+    TyInt ann -> do
+      s <- renderIdentWithCases cache fsm ([T.pack "tam"], T.pack "sayı") (possessiveCases (annCase ann))
+      return [(s, False)]
+    TyString ann -> do
+      s <- renderIdentWithCases cache fsm ([], T.pack "dizge") (possessiveCases (annCase ann))
+      return [(s, False)]
+    Arr ann _ _ ->
+      return [("işlev" ++ caseTag (annCase ann), False)]
+
+-- | Build a possessive-then-case sequence.
+possessiveCases :: Case -- ^ Target case.
+                -> [Case] -- ^ P3s plus the target case when needed.
+possessiveCases cas =
+  case cas of
+    Nom -> [P3s]
+    _ -> [P3s, cas]
 
 -- | Render a function signature into argument strings and name.
 renderFunctionSignature :: RenderCache -- ^ Render cache.
