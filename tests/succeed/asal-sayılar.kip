@@ -2,7 +2,7 @@
   (bunla şunun eşitliği) doğruysa,
     doğru,
   değilse,
-    (((bunla şunun kalanı) 0'ın eşitliği) doğruysa,
+    (((bunun şunla kalanı) 0'ın eşitliği) doğruysa,
       yanlış,
     yanlışsa,
       (bunla (şunla 1'in toplamının) asal-denemesidir)).

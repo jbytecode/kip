@@ -28,11 +28,11 @@ temeli yükle.
 (bu tam-sayıyla) (şu tam-sayının) (büyük-eşitlik doğruluğu),
   yerleşiktir.
 
-(bu tam-sayıyla) (şu tam-sayının) (kalan tam-sayısı),
+(bu tam-sayının) (şu tam-sayıyla) (kalan tam-sayısı),
   yerleşiktir.
 
 (bu tam-sayıyla) (şu tam-sayıya) (bölünürlük doğruluğu),
-  (bunla şunun kalanıyla) 0'ın eşitliğidir.
+  (bunun şunla kalanıyla) 0'ın eşitliğidir.
 
 (bu tam-sayının) (dizge-hal dizgesi),
   yerleşiktir.
