@@ -33,6 +33,15 @@
 -- | overload resolution deterministic: there is either a unique applicable
 -- | overload or a precise error describing why none match.
 -- |
+-- | Type name syntax:
+-- |
+-- |   * Hyphens are part of a type name (e.g., @tam-sayı@). A space between
+-- |     identifiers denotes type application, not a composite name, so
+-- |     @tam sayı@ is parsed as applying @sayı@ to the argument @tam@.
+-- |   * The checker does not normalize between hyphenated and space-separated
+-- |     forms; it relies on the parser's structure to distinguish names from
+-- |     applications.
+-- |
 -- | Skolemization and rigid type variables:
 -- |
 -- |   * Unknown type identifiers in type annotations are parsed as 'TyVar'.
@@ -443,17 +452,6 @@ normalizePrimTy ty =
     TySkolem ann name ->
       TySkolem ann name
     _ -> ty
-  where
-    -- | Check for the integer type identifier.
-    isIntIdent :: Identifier -- ^ Identifier to inspect.
-               -> Bool -- ^ True when identifier matches integer type.
-    isIntIdent (mods, name) =
-      (mods == [T.pack "tam"] && name == T.pack "sayı") ||
-      (null mods && name == T.pack "tam-sayı")
-    -- | Check for the string type identifier.
-    isStringIdent :: Identifier -- ^ Identifier to inspect.
-                  -> Bool -- ^ True when identifier matches string type.
-    isStringIdent (mods, name) = null mods && name == T.pack "dizge"
 
 -- | Type-check a statement and update the checker state.
 tcStmt :: Stmt Ann -- ^ Statement to type-check.
@@ -908,11 +906,6 @@ normalizeTy tyCons ty =
     Arr ann d i ->
       Arr ann (normalizeTy tyCons d) (normalizeTy tyCons i)
     _ -> ty
-  where
-    isIntIdent (mods, name) =
-      (mods == [T.pack "tam"] && name == T.pack "sayı") ||
-      (null mods && name == T.pack "tam-sayı")
-    isStringIdent (mods, name) = null mods && name == T.pack "dizge"
 
 -- | Compare identifiers, allowing missing namespaces.
 identMatches :: Identifier -- ^ Left identifier.
@@ -920,6 +913,16 @@ identMatches :: Identifier -- ^ Left identifier.
              -> Bool -- ^ True when identifiers match loosely.
 identMatches (xs1, x1) (xs2, x2) =
   x1 == x2 && (xs1 == xs2 || null xs1 || null xs2)
+
+-- | Check for the integer type identifier.
+isIntIdent :: Identifier -- ^ Identifier to inspect.
+           -> Bool -- ^ True when identifier matches integer type.
+isIntIdent (mods, name) = mods == [T.pack "tam"] && name == T.pack "sayı"
+
+-- | Check for the string type identifier.
+isStringIdent :: Identifier -- ^ Identifier to inspect.
+              -> Bool -- ^ True when identifier matches string type.
+isStringIdent (mods, name) = null mods && name == T.pack "dizge"
 
 -- | Unify expected and actual types to produce substitutions.
 unifyTypes :: [(Identifier, Int)] -- ^ Type constructor arities.
