@@ -75,9 +75,10 @@ const jsLiteralSet = new Set(jsLiteralList);
 const examples = [
   { id: "selamlamak", file: "selamlamak.kip" },
   { id: "gün-örneği", file: "gün-örneği.kip" },
+  { id: "bir-fazlası", file: "bir-fazlası.kip" },
   { id: "fibonacci", file: "fibonacci.kip" },
   { id: "asal-sayılar", file: "asal-sayılar.kip" },
-  { id: "bir-fazlası", file: "bir-fazlası.kip" },
+  { id: "sayı-tahmin-oyunu", file: "sayı-tahmin-oyunu.kip" },
   { id: "ikili-ağaç-araması", file: "ikili-ağaç-araması.kip" },
   { id: "dosya-io", file: "dosya-io.kip" },
 ];

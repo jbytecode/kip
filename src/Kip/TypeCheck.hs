@@ -289,20 +289,11 @@ tcExp1With allowEffect e =
           return (Seq annSeq first' second')
     Match {annExp, scrutinee, clauses} -> do
       scrutinee' <- expectOne (tcExp scrutinee)
-      -- Only check pattern type for simple variable scrutinees whose type is
-      -- known from function arguments or local bindings. This avoids false
-      -- positives for complex scrutinees like function applications where
-      -- we can't reliably infer the return type.
-      MkTCState{tcVarTys} <- get
-      let scrutArg = case scrutinee' of
-            Var {varCandidates} ->
-              case lookupByCandidates tcVarTys varCandidates of
-                Just ty -> [(([], T.pack "_scrutinee"), ty)]
-                Nothing -> []
-            IntLit {} -> [(([], T.pack "_scrutinee"), TyInt (mkAnn Nom NoSpan))]
-            FloatLit {} -> [(([], T.pack "_scrutinee"), TyFloat (mkAnn Nom NoSpan))]
-            StrLit {} -> [(([], T.pack "_scrutinee"), TyString (mkAnn Nom NoSpan))]
-            _ -> []  -- Skip check for complex expressions
+      mScrutTy <- inferType scrutinee'
+      let scrutArg =
+            case mScrutTy of
+              Just ty -> [(([], T.pack "_scrutinee"), ty)]
+              Nothing -> []
       clauses' <- mapM (tcClause scrutArg allowEffect) clauses
       return (Match annExp scrutinee' clauses')
     Let {annExp, varName, body} ->
