@@ -1,14 +1,18 @@
 import { WASI, File, Directory, PreopenDirectory, ConsoleStdout, Fd } from "https://esm.sh/@bjorn3/browser_wasi_shim@0.4.2";
 
+const libSources = [
+  "giriş",
+  "temel",
+  "temel-doğruluk",
+  "temel-dizge",
+  "temel-etki",
+  "temel-liste",
+  "temel-tam-sayı",
+  "temel-ondalık-sayı",
+];
 const libFiles = [
-  "giriş.kip",
-  "temel.kip",
-  "temel-doğruluk.kip",
-  "temel-dizge.kip",
-  "temel-etki.kip",
-  "temel-liste.kip",
-  "temel-tam-sayı.kip",
-  "temel-ondalık-sayı.kip",
+  ...libSources.map((name) => `${name}.kip`),
+  ...libSources.map((name) => `${name}.iz`),
 ];
 
 async function loadText(path) {
@@ -124,8 +128,17 @@ async function runWasm({ args, source, signal, buffer }) {
   const vendorContents = new Map();
 
   for (const file of libFiles) {
-    const text = await loadText(`./assets/lib/${file}`);
-    libContents.set(file, new File(encoder.encode(text), { readonly: true }));
+    if (file.endsWith(".iz")) {
+      try {
+        const data = await loadBinary(`./assets/lib/${file}`);
+        libContents.set(file, new File(data, { readonly: true }));
+      } catch (err) {
+        continue;
+      }
+    } else {
+      const text = await loadText(`./assets/lib/${file}`);
+      libContents.set(file, new File(encoder.encode(text), { readonly: true }));
+    }
   }
 
   const fst = await loadBinary("./assets/vendor/trmorph.fst");

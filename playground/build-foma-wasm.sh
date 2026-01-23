@@ -18,6 +18,8 @@ WASI_CC="${WASI_CC:-${WASI_SDK_PATH}/bin/clang}"
 WASI_AR="${WASI_AR:-${WASI_SDK_PATH}/bin/llvm-ar}"
 WASI_RANLIB="${WASI_RANLIB:-${WASI_SDK_PATH}/bin/llvm-ranlib}"
 
+C_OPT_FLAGS="-O3"
+
 SRC_DIR="${BUILD_ROOT}/src"
 FOMA_SRC_DIR="${SRC_DIR}/foma"
 BUILD_DIR="${BUILD_ROOT}/build"
@@ -57,7 +59,8 @@ for idx, line in enumerate(lines):
         break
 
 if not patched:
-    raise SystemExit("Expected foma-shared SHARED target not found for patching.")
+    print("Note: foma-shared SHARED target not found; skipping CMake patch.")
+    raise SystemExit(0)
 
 cmake_path.write_text("\n".join(lines) + "\n")
 PY
@@ -71,7 +74,7 @@ cmake -S "${ZLIB_SRC_DIR}" -B "${ZLIB_BUILD_DIR}" \
   -DCMAKE_C_COMPILER="${WASI_CC}" \
   -DCMAKE_AR="${WASI_AR}" \
   -DCMAKE_RANLIB="${WASI_RANLIB}" \
-  -DCMAKE_C_FLAGS="--target=wasm32-wasi -O2 -fPIC" \
+  -DCMAKE_C_FLAGS="--target=wasm32-wasi ${C_OPT_FLAGS} -fPIC" \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DZLIB_BUILD_SHARED=OFF \
   -DZLIB_BUILD_TESTING=OFF \
@@ -95,7 +98,7 @@ cmake -S "${FOMA_SRC_DIR}" -B "${BUILD_DIR}" \
   -DCMAKE_C_COMPILER="${WASI_CC}" \
   -DCMAKE_AR="${WASI_AR}" \
   -DCMAKE_RANLIB="${WASI_RANLIB}" \
-  -DCMAKE_C_FLAGS="--target=wasm32-wasi -O2" \
+  -DCMAKE_C_FLAGS="--target=wasm32-wasi ${C_OPT_FLAGS}" \
   -DGETOPT_INCLUDE="${WASI_SDK_PATH}/share/wasi-sysroot/include" \
   -DREADLINE_INCLUDE_DIRS="${WASI_SDK_PATH}/share/wasi-sysroot/include" \
   -DREADLINE_LIBRARY_DIRS="" \
