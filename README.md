@@ -9,27 +9,14 @@ There is also [a tutorial in Turkish](https://github.com/joom/kip/wiki/K%C4%B1la
 > [!NOTE]
 > Kip is experimental. Expect changes in syntax and behavior over time.
 
-For you to get a taste of what Kip looks like, here is an example program that prompts the user to enter a number and then prints that many of the Fibonacci numbers:
+For you to get a taste of what Kip looks like, here is an example program that reads a name and prints a greeting:
 
 ```
-(* İlk n Fibonacci sayısını yazdırır. *)
-(bu tam-sayıyı) (şu tam-sayıyı) (o tam-sayıyı) işlemek,
-  (onla 0'ın eşitliği) doğruysa,
-    durmaktır,
-  yanlışsa,
-    bunu yazıp,
-    şunu (bunla şunun toplamını) (onla 1'in farkını) işlemektir.
-
-çalıştırmak,
-  "Bir sayı girin:" yazıp,
+selamlamak,
   isim olarak okuyup,
-  ((ismin tam-sayı-hali)
-    yokluksa,
-      "Geçersiz sayı." yazmaktır,
-    n'nin varlığıysa,
-      0'ı 1'i n'yi işlemektir).
+  ("Merhaba "yla ismin birleşimini) yazmaktır.
 
-çalıştır.
+selamlamak.
 ```
 
 ## Table of Contents
@@ -51,7 +38,7 @@ Kip uses Turkish noun cases (ismin halleri) to determine argument relationships 
 
 | Case | Turkish Name | Suffix | Example |
 |------|-------------|--------|---------|
-| Nominative | Yalın hal | (none) | `sıfır` |
+| Nominative | Yalın hal | (none) | `defter` |
 | Accusative | -i hali | -i, -ı, -u, -ü | `sayıyı` |
 | Dative | -e hali | -e, -a | `sayıya` |
 | Locative | -de hali | -de, -da, -te, -ta | `listede` |
@@ -78,9 +65,10 @@ Define algebraic data types with Turkish syntax:
 ```
 Bir doğruluk ya doğru ya da yanlış olabilir.
 
-Bir doğal-sayı
-ya sıfır
-ya da bir doğal-sayının ardılı
+Bir trafik-ışığı
+ya kırmızı
+ya sarı
+ya da yeşil
 olabilir.
 ```
 
@@ -91,7 +79,7 @@ Type variables are supported for generic data structures:
 ```
 Bir (öğe listesi)
 ya boş
-ya da bir öğenin bir öğe listesine eki
+ya da öğenin öğe listesine eki
 olabilir.
 ```
 
@@ -108,9 +96,10 @@ Pattern match using the conditional suffix `-sa/-se`:
 Supports nested pattern matching, binders, and wildcard patterns (`değilse`):
 
 ```
-(bu doğal-sayının) kopyası,
-  bu sıfırsa, sıfır,
-  öncülün ardılıysa, öncülün ardılıdır.
+(bu trafik-ışığının) eylemi,
+  bu kırmızıysa, "Dur",
+  sarıysa, "Hazırlan",
+  yeşilse, "Geç"tir.
 ```
 
 ### Constants
@@ -118,8 +107,8 @@ Supports nested pattern matching, binders, and wildcard patterns (`değilse`):
 Define named constants with `diyelim`:
 
 ```
-sıfırın ardılına bir diyelim.
-birin ardılına iki diyelim.
+merhabaya "Merhaba" diyelim.
+dünyaya "Dünya" diyelim.
 ```
 
 ### Effects and I/O
@@ -137,7 +126,7 @@ selamlamak,
 **Integers (`tam-sayı`):**
 - Arithmetic: `toplamı`, `farkı`, `çarpımı`
 - Comparison: `eşitliği`, `küçüklüğü`, `büyüklüğü`
-- Other: `öncülü`, `sıfırlığı`, `faktöriyeli`
+- Other: `faktöriyeli`
 
 **Strings (`dizge`):**
 - `uzunluğu` - length
@@ -159,6 +148,7 @@ selamlamak,
 ```
 5'i yaz.              (* Integer literal with case suffix *)
 "merhaba"'yı yaz.     (* String literal with case suffix *)
+3.14'ü yaz.           (* Floating-point literal with case suffix *)
 ```
 
 ## Installation
@@ -187,24 +177,26 @@ chmod +x install.sh
 
 # Or manual build
 stack build
+
+# Install to PATH
+stack install
 ```
 
 The TRmorph transducer is bundled at `vendor/trmorph.fst`.
 
 ### Running
 
+If you have installed to PATH, you can do:
+
 ```bash
 # Start REPL
-stack exec kip
+kip
 
 # Execute a file
-stack exec kip -- --exec path/to/file.kip
+kip --exec path/to/file.kip
 
 # Generate JavaScript
-stack exec kip -- --codegen js path/to/file.kip
-
-# Install to PATH
-stack install
+kip --codegen js path/to/file.kip
 ```
 
 ## WASM Playground
@@ -231,32 +223,45 @@ If you want to force a fresh parse and type-check, delete the `.iz` file next to
 
 ```
 app/
-└── Main.hs            - CLI entry point
+├── Main.hs            - CLI entry point
+└── Playground.hs      - WASM playground runner
 
 src/
 ├── Kip/
 │   ├── AST.hs         - Abstract syntax tree
 │   ├── Cache.hs       - .iz cache handling
+│   ├── Codegen/
+│   │   └── JS.hs       - JavaScript codegen
 │   ├── Eval.hs        - Interpreter
 │   ├── Parser.hs      - Parser
 │   ├── Render.hs      - Pretty-printing with morphological inflection
+│   ├── Runner.hs      - CLI runner utilities
 │   └── TypeCheck.hs   - Type checker validating grammatical case usage
 └── Language/
     └── Foma.hs        - Haskell bindings to Foma via FFI
 
 lib/
-├── giriş.kip          - Prelude module loaded by default
-├── temel.kip           - Core types
-├── temel-doğruluk.kip  - Boolean functions
-├── temel-dizge.kip     - String functions
-├── temel-etki.kip      - I/O primitives
-├── temel-liste.kip     - List functions
-└── temel-tam-sayı.kip  - Integer functions
+├── giriş.kip             - Prelude module loaded by default
+├── temel.kip             - Core types
+├── temel-doğruluk.kip    - Boolean functions
+├── temel-dizge.kip       - String functions
+├── temel-etki.kip        - I/O primitives
+├── temel-liste.kip       - List functions
+├── temel-ondalık-sayı.kip - Floating-point functions
+├── temel-tam-sayı.kip    - Integer functions
+└── *.iz                  - Generated bytecode caches (if built)
+
+playground/
+└── README.md          - WASM playground build notes
 
 tests/
 ├── succeed/            - Passing golden tests (.kip + .out + optional .in)
 ├── fail/               - Failing golden tests (.kip + .err)
-└── repl/               - REPL interaction tests
+└── repl/               - REPL interaction tests (.repl)
+
+c/
+├── morphology.c        - Foma glue (C)
+└── morphology.h        - Foma glue headers
 
 vendor/
 └── trmorph.fst        - TRmorph transducer
