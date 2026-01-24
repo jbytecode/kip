@@ -9,12 +9,25 @@ const codeSampleEl = document.getElementById("code-sample");
 const sourceHighlightEl = document.getElementById("source-highlight");
 const runBtn = document.getElementById("run");
 const codegenBtn = document.getElementById("codegen");
+const stopBtn = document.getElementById("stop");
 const langEl = document.getElementById("lang");
 const exampleEl = document.getElementById("example");
 const codegenPanelEl = document.getElementById("codegen-panel");
 const codegenOutputEl = document.getElementById("codegen-output");
 const panelsEl = document.querySelector(".playground-panels");
 const panelDividerEl = document.getElementById("panel-divider");
+
+let busyCursor = false;
+
+function setBusyCursor(isBusy) {
+  if (busyCursor === isBusy) {
+    return;
+  }
+  busyCursor = isBusy;
+  if (document.body) {
+    document.body.classList.toggle("busy-cursor", isBusy);
+  }
+}
 
 const keywordList = [
   "Bir",
@@ -525,6 +538,16 @@ let interactiveSupported = true;
 let activeMode = null;
 let codegenLines = [];
 
+function setRunState(isRunning) {
+  runBtn.disabled = isRunning;
+  if (codegenBtn) {
+    codegenBtn.disabled = isRunning;
+  }
+  if (stopBtn) {
+    stopBtn.disabled = !isRunning;
+  }
+}
+
 function terminateWorker() {
   if (activeWorker) {
     activeWorker.terminate();
@@ -551,6 +574,7 @@ function handleWorkerMessage(event) {
   const { type, line, error } = event.data || {};
   switch (type) {
     case "stdout":
+      setBusyCursor(false);
       if (activeMode === "codegen") {
         codegenLines.push(line ?? "");
         if (codegenOutputEl) {
@@ -561,6 +585,7 @@ function handleWorkerMessage(event) {
       }
       break;
     case "stderr":
+      setBusyCursor(false);
       if (activeMode === "codegen") {
         codegenLines.push(line ?? "");
         if (codegenOutputEl) {
@@ -571,6 +596,7 @@ function handleWorkerMessage(event) {
       }
       break;
     case "stdin-request":
+      setBusyCursor(false);
       if (activeMode === "codegen") {
         break;
       }
@@ -584,12 +610,11 @@ function handleWorkerMessage(event) {
     case "exit":
       pendingInput = false;
       hideTerminalInput();
-      runBtn.disabled = false;
-      if (codegenBtn) {
-        codegenBtn.disabled = false;
-      }
+      setBusyCursor(false);
+      setRunState(false);
       break;
     case "error":
+      setBusyCursor(false);
       if (activeMode === "codegen") {
         codegenLines.push(error ?? "Unknown error");
         if (codegenOutputEl) {
@@ -600,10 +625,7 @@ function handleWorkerMessage(event) {
       }
       pendingInput = false;
       hideTerminalInput();
-      runBtn.disabled = false;
-      if (codegenBtn) {
-        codegenBtn.disabled = false;
-      }
+      setRunState(false);
       break;
     default:
       break;
@@ -626,10 +648,8 @@ function sendInput(value) {
 }
 
 async function runKip() {
-  runBtn.disabled = true;
-  if (codegenBtn) {
-    codegenBtn.disabled = true;
-  }
+  setBusyCursor(true);
+  setRunState(true);
   clearTerminal();
   terminateWorker();
   activeMode = "run";
@@ -637,6 +657,7 @@ async function runKip() {
 
   const { signal, buffer } = createInputBuffers();
   if (!interactiveSupported) {
+    setBusyCursor(false);
     appendTerminalLine("Interactive input requires cross-origin isolation (COOP/COEP).");
     appendTerminalLine("Running without stdin support.");
   }
@@ -644,8 +665,9 @@ async function runKip() {
   activeWorker = worker;
   worker.addEventListener("message", handleWorkerMessage);
   worker.addEventListener("error", (event) => {
+    setBusyCursor(false);
     appendTerminalLine(String(event.message || event.error || event));
-    runBtn.disabled = false;
+    setRunState(false);
   });
 
   const args = ["kip-playground", "--exec", "/main.kip", "--lang", langEl.value];
@@ -662,8 +684,8 @@ function runCodegen() {
   if (!codegenOutputEl || !codegenPanelEl) {
     return;
   }
-  runBtn.disabled = true;
-  codegenBtn.disabled = true;
+  setBusyCursor(true);
+  setRunState(true);
   terminateWorker();
   activeMode = "codegen";
   codegenLines = [];
@@ -674,10 +696,10 @@ function runCodegen() {
   activeWorker = worker;
   worker.addEventListener("message", handleWorkerMessage);
   worker.addEventListener("error", (event) => {
+    setBusyCursor(false);
     codegenLines.push(String(event.message || event.error || event));
     codegenOutputEl.innerHTML = highlightJs(codegenLines.join("\n"));
-    runBtn.disabled = false;
-    codegenBtn.disabled = false;
+    setRunState(false);
   });
 
   const args = ["kip-playground", "--codegen", "js", "/main.kip", "--lang", langEl.value];
@@ -807,4 +829,15 @@ if (terminalInputField) {
 runBtn.addEventListener("click", runKip);
 if (codegenBtn) {
   codegenBtn.addEventListener("click", runCodegen);
+}
+
+if (stopBtn) {
+  stopBtn.addEventListener("click", () => {
+    setBusyCursor(false);
+    terminateWorker();
+    pendingInput = false;
+    hideTerminalInput();
+    activeMode = null;
+    setRunState(false);
+  });
 }
