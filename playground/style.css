@@ -430,8 +430,15 @@ a.badge:hover {
   gap: 0.45rem;
 }
 
-.playground-actions {
+.playground-actions-group {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.playground-actions {
   display: inline-flex;
   align-items: center;
   gap: 0.6rem;
@@ -693,17 +700,30 @@ input[type="text"]::placeholder {
 
 button {
   padding: 0.6rem 1.05rem;
-  border: none;
+  border: 1px solid rgba(148, 163, 184, 0.25);
   border-radius: 12px;
-  background: linear-gradient(90deg, rgba(32, 214, 199, 0.95), rgba(26, 99, 255, 0.95));
-  color: #061018;
+  background: rgba(15, 20, 30, 0.9);
+  color: rgba(226, 232, 240, 0.95);
   cursor: pointer;
   font-weight: 800;
   letter-spacing: -0.01em;
+  box-shadow: none;
+  transition: transform 0.08s ease, box-shadow 0.15s ease, filter 0.15s ease;
 }
 
 button:hover {
-  filter: brightness(1.02);
+  background: rgba(20, 26, 38, 0.98);
+}
+
+button:active,
+button.is-active {
+  transform: translateY(2px);
+  background: rgba(12, 16, 24, 0.98);
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+button.is-active:disabled {
+  opacity: 1;
 }
 
 button:disabled {
@@ -802,6 +822,11 @@ pre {
 
   .playground-controls button {
     margin-left: 0;
+  }
+
+  .playground-actions-group {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .feature-grid {

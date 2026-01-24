@@ -18,7 +18,6 @@ const panelsEl = document.querySelector(".playground-panels");
 const panelDividerEl = document.getElementById("panel-divider");
 const playgroundShellEl = document.querySelector(".playground-shell");
 const fullscreenBtn = document.getElementById("fullscreen");
-const fullscreenLabelEl = fullscreenBtn ? fullscreenBtn.querySelector(".btn-label") : null;
 
 let busyCursor = false;
 
@@ -541,6 +540,7 @@ let interactiveSupported = true;
 let activeMode = null;
 let codegenLines = [];
 let isFullscreen = false;
+let activeAction = null;
 
 function setRunState(isRunning) {
   runBtn.disabled = isRunning;
@@ -549,6 +549,19 @@ function setRunState(isRunning) {
   }
   if (stopBtn) {
     stopBtn.disabled = !isRunning;
+  }
+}
+
+function setActiveAction(nextAction) {
+  activeAction = nextAction;
+  if (runBtn) {
+    const isActive = activeAction === "run";
+    runBtn.classList.toggle("is-active", isActive);
+    runBtn.setAttribute("aria-pressed", String(isActive));
+  }
+  if (codegenBtn) {
+    const isActive = activeAction === "codegen";
+    codegenBtn.classList.toggle("is-active", isActive);
   }
 }
 
@@ -562,9 +575,17 @@ function setFullscreen(nextFullscreen) {
   }
   if (fullscreenBtn) {
     fullscreenBtn.setAttribute("aria-pressed", String(isFullscreen));
-    if (fullscreenLabelEl) {
-      fullscreenLabelEl.textContent = isFullscreen ? "Exit Fullscreen" : "Fullscreen";
-    }
+    fullscreenBtn.classList.toggle("is-active", isFullscreen);
+  }
+}
+
+function setCodegenVisible(isVisible) {
+  if (!codegenPanelEl) {
+    return;
+  }
+  codegenPanelEl.classList.toggle("hidden", !isVisible);
+  if (codegenBtn) {
+    codegenBtn.setAttribute("aria-pressed", String(isVisible));
   }
 }
 
@@ -632,6 +653,7 @@ function handleWorkerMessage(event) {
       hideTerminalInput();
       setBusyCursor(false);
       setRunState(false);
+      setActiveAction(null);
       break;
     case "error":
       setBusyCursor(false);
@@ -646,6 +668,7 @@ function handleWorkerMessage(event) {
       pendingInput = false;
       hideTerminalInput();
       setRunState(false);
+      setActiveAction(null);
       break;
     default:
       break;
@@ -670,6 +693,7 @@ function sendInput(value) {
 async function runKip() {
   setBusyCursor(true);
   setRunState(true);
+  setActiveAction("run");
   clearTerminal();
   terminateWorker();
   activeMode = "run";
@@ -688,6 +712,7 @@ async function runKip() {
     setBusyCursor(false);
     appendTerminalLine(String(event.message || event.error || event));
     setRunState(false);
+    setActiveAction(null);
   });
 
   const args = ["kip-playground", "--exec", "/main.kip", "--lang", langEl.value];
@@ -704,13 +729,25 @@ function runCodegen() {
   if (!codegenOutputEl || !codegenPanelEl) {
     return;
   }
+  if (!codegenPanelEl.classList.contains("hidden")) {
+    setBusyCursor(false);
+    terminateWorker();
+    pendingInput = false;
+    hideTerminalInput();
+    activeMode = null;
+    setRunState(false);
+    setActiveAction(null);
+    setCodegenVisible(false);
+    return;
+  }
   setBusyCursor(true);
   setRunState(true);
+  setActiveAction("codegen");
   terminateWorker();
   activeMode = "codegen";
   codegenLines = [];
   codegenOutputEl.textContent = "";
-  codegenPanelEl.classList.remove("hidden");
+  setCodegenVisible(true);
 
   const worker = new Worker(workerUrl, { type: "module" });
   activeWorker = worker;
@@ -720,6 +757,7 @@ function runCodegen() {
     codegenLines.push(String(event.message || event.error || event));
     codegenOutputEl.innerHTML = highlightJs(codegenLines.join("\n"));
     setRunState(false);
+    setActiveAction(null);
   });
 
   const args = ["kip-playground", "--codegen", "js", "/main.kip", "--lang", langEl.value];
@@ -859,6 +897,7 @@ if (stopBtn) {
     hideTerminalInput();
     activeMode = null;
     setRunState(false);
+    setActiveAction(null);
   });
 }
 

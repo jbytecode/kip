@@ -79,7 +79,7 @@ Type variables are supported for generic data structures:
 ```
 Bir (öğe listesi)
 ya boş
-ya da öğenin öğe listesine eki
+ya da bir öğenin bir öğe listesine eki
 olabilir.
 ```
 
