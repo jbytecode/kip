@@ -437,6 +437,10 @@ a.badge:hover {
   gap: 0;
   padding: 1rem;
   align-items: stretch;
+  height: clamp(320px, 55vh, 640px);
+  min-height: 320px;
+  resize: vertical;
+  overflow: hidden;
 }
 
 .playground-panels.resizing {
@@ -473,10 +477,10 @@ a.badge:hover {
   display: grid;
   gap: 0.5rem;
   grid-template-rows: auto 1fr;
+  min-height: 0;
 }
 
 .terminal {
-  min-height: 320px;
   height: 100%;
   padding: 0.85rem;
   border-radius: 12px;
@@ -485,6 +489,7 @@ a.badge:hover {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
 }
 
 .terminal-body {
@@ -572,14 +577,13 @@ label {
 /* Editor with syntax highlighting overlay */
 .editor-wrap {
   position: relative;
-  min-height: 320px;
   height: 100%;
+  min-height: 0;
 }
 
 .editor-wrap textarea,
 .editor-wrap .editor-highlight {
   width: 100%;
-  min-height: 320px;
   height: 100%;
   padding: 0.85rem;
   border-radius: 12px;
@@ -595,7 +599,7 @@ label {
 
 .editor-wrap textarea {
   position: relative;
-  resize: vertical;
+  resize: none;
   border: 1px solid rgba(148, 163, 184, 0.22);
   background: transparent;
   color: white;
