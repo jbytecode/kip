@@ -1,0 +1,11 @@
+(bu tam-sayıyla tam-sayı çiftinin) toplamı,
+  bu x'le y çiftiyse, x'le y'nin toplamıdır.
+
+nokta, 10'la 20 çiftidir.
+
+(noktanın toplamını) yaz.
+
+(bu tam-sayıyla tam-sayı çiftinin) büyük-öğesi,
+  bu x'le y çiftiyse, (x'in y'den büyüklüğü) doğruysa, x, yanlışsa, y'dir.
+
+(noktanın büyük-öğesini) yaz.

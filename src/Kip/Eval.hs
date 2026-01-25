@@ -630,12 +630,10 @@ evalStmtInFile mPath stmt =
             resultTy =
               case params of
                 [] -> TyInd (mkAnn Nom NoSpan) name
-                _ ->
-                  let paramTys = map (TyVar (mkAnn Nom NoSpan)) params
-                  in TyApp (mkAnn Nom NoSpan) (TyInd (mkAnn Nom NoSpan) name) paramTys
+                _ -> TyApp (mkAnn Nom NoSpan) (TyInd (mkAnn Nom NoSpan) name) params
             ctorSigs =
               [ (ctorName, (ctorArgs, resultTy))
-              | (ctorName, ctorArgs) <- ctors
+              | ((ctorName, _), ctorArgs) <- ctors
               ]
         modify (\s -> s { evalSelectors = selectors ++ evalSelectors s
                         , evalCtors = ctorSigs ++ evalCtors s

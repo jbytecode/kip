@@ -426,14 +426,14 @@ renderTy cache fsm paramTyCons tyMods ty =
       renderIdentWithCase cache fsm name (annCase ann)
     TySkolem ann name ->
       renderIdentWithCase cache fsm name (annCase ann)
-    TyApp ann (TyInd _ name) [argTy] -> do
-      argStr <- renderTy cache fsm paramTyCons tyMods argTy
+    TyApp ann (TyInd _ name) args -> do
+      argStrs <- mapM (renderTy cache fsm paramTyCons tyMods) args
       let nameCases =
             if name `elem` paramTyCons
               then if annCase ann == Nom then [P3s] else [P3s, annCase ann]
               else [annCase ann]
       nameStr <- renderIdentWithCases cache fsm name nameCases
-      return (argStr ++ " " ++ nameStr)
+      return (unwords (argStrs ++ [nameStr]))
     TyApp ann ctor _ -> do
       ctorStr <- renderTy cache fsm paramTyCons tyMods ctor
       return (ctorStr ++ caseTag (annCase ann))
@@ -461,11 +461,11 @@ renderTyNom cache fsm paramTyCons tyMods ty =
       renderIdentWithCase cache fsm name Nom
     TySkolem _ name ->
       renderIdentWithCase cache fsm name Nom
-    TyApp _ (TyInd _ name) [argTy] -> do
-      argStr <- renderTyNom cache fsm paramTyCons tyMods argTy
+    TyApp _ (TyInd _ name) args -> do
+      argStrs <- mapM (renderTyNom cache fsm paramTyCons tyMods) args
       let nameCases = if name `elem` paramTyCons then [P3s] else [Nom]
       nameStr <- renderIdentWithCases cache fsm name nameCases
-      return (argStr ++ " " ++ nameStr)
+      return (unwords (argStrs ++ [nameStr]))
     TyApp _ ctor _ ->
       renderTyNom cache fsm paramTyCons tyMods ctor
     TyInt _ ->
@@ -495,12 +495,13 @@ renderTyParts cache fsm paramTyCons tyMods ty =
     TySkolem ann name -> do
       s <- renderIdentWithCase cache fsm name (annCase ann)
       return [(s, True)]
-    TyApp ann (TyInd _ name) [argTy] -> do
-      argParts <- renderTyParts cache fsm paramTyCons tyMods argTy
+    TyApp ann (TyInd _ name) args -> do
+      argPartsList <- mapM (renderTyParts cache fsm paramTyCons tyMods) args
       let nameCases =
             if name `elem` paramTyCons
               then if annCase ann == Nom then [P3s] else [P3s, annCase ann]
               else [annCase ann]
+          argParts = intercalate [(" ", False)] argPartsList
       nameStr <- renderIdentWithCases cache fsm name nameCases
       return (argParts ++ [(" ", False), (nameStr, False)])
     TyApp ann ctor _ -> do
@@ -574,10 +575,10 @@ renderTyPossessive cache fsm paramTyCons tyMods ty =
       renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
     TySkolem ann name ->
       renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
-    TyApp ann (TyInd _ name) [argTy] -> do
-      argStr <- renderTy cache fsm paramTyCons tyMods argTy
+    TyApp ann (TyInd _ name) args -> do
+      argStrs <- mapM (renderTy cache fsm paramTyCons tyMods) args
       nameStr <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
-      return (argStr ++ " " ++ nameStr)
+      return (unwords (argStrs ++ [nameStr]))
     TyApp ann ctor _ -> do
       ctorStr <- renderTy cache fsm paramTyCons tyMods ctor
       return (ctorStr ++ caseTag (annCase ann))
@@ -608,8 +609,9 @@ renderTyPartsPossessive cache fsm paramTyCons tyMods ty =
     TySkolem ann name -> do
       s <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
       return [(s, True)]
-    TyApp ann (TyInd _ name) [argTy] -> do
-      argParts <- renderTyParts cache fsm paramTyCons tyMods argTy
+    TyApp ann (TyInd _ name) args -> do
+      argPartsList <- mapM (renderTyParts cache fsm paramTyCons tyMods) args
+      let argParts = intercalate [(" ", False)] argPartsList
       nameStr <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
       return (argParts ++ [(" ", False), (nameStr, False)])
     TyApp ann ctor _ -> do

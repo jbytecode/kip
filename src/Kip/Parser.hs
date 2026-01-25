@@ -3,14 +3,86 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
--- | Parser and morphology-aware utilities for Kip syntax.
+{- |
+Parser and morphology-aware utilities for Kip syntax.
+
+= Overview
+
+Kip is a Turkish programming language with natural language-like syntax. The parser
+must handle Turkish morphology (grammatical cases, possessive forms) to resolve
+identifiers and types correctly.
+
+= Grammar Structure
+
+The Kip grammar consists of:
+
+* __Statements__: Top-level declarations
+    * Type declarations: @Bir (type-name) ... olabilir.@
+    * Function declarations: @(args) function-name, body.@
+    * Load statements: @module-name'i yükle.@
+
+* __Expressions__: Values and computations
+    * Literals: numbers, strings, booleans
+    * Function calls: @(argument'un) function-name'i@
+    * Match expressions: @value pattern-ise result1, pattern2-ise result2@
+    * Let bindings: @name olarak value@
+
+* __Types__: Type annotations
+    * Primitive: @tam-sayı@, @doğruluk@, @dizge@
+    * Type constructors: @(öğe listesi)@, @(a b çifti)@
+    * Function types: implicit, inferred from usage
+
+= Turkish Morphology Handling
+
+Turkish is an agglutinative language where grammatical information is expressed
+through suffixes. The parser uses TRmorph (a finite-state morphological analyzer)
+to handle:
+
+* __Grammatical Cases__:
+    * Nominative (yalın): @elma@ (apple)
+    * Accusative (-i): @elmayı@ (the apple, as object)
+    * Genitive (-in): @elmanın@ (of the apple)
+    * Dative (-e): @elmaya@ (to the apple)
+    * Locative (-de): @elmada@ (at/in the apple)
+    * Ablative (-den): @elmadan@ (from the apple)
+    * Instrumental (-le): @elmayla@ (with the apple)
+
+* __Possessive Forms__: @elmanın@ can mean "of the apple" or "its apple"
+
+* __Challenges__:
+    * Same base word appears in multiple forms: @b@, @b'den@, @b'yle@, @b'nin@
+    * Type variables must resolve consistently despite surface form differences
+    * Single-letter identifiers (like @a@, @b@) are not recognized by TRmorph
+
+= Parsing Strategy
+
+1. __Lexical Analysis__: Tokenize into identifiers, keywords, operators
+2. __Morphological Analysis__: Use TRmorph to generate candidate base forms
+3. __Context Resolution__: Match candidates against names/types in scope
+4. __AST Construction__: Build typed AST with case annotations
+
+The parser maintains state including:
+* @parserCtx@: Identifiers in scope (functions, variables, constructors)
+* @parserTyParams@: Type parameters in scope (e.g., @a@, @b@ in polymorphic types)
+* @parserTyCons@: Type constructors and their arities
+* FSM caches for morphology lookups
+
+= Example
+
+Given: @(bu tam-sayının) faktöriyeli@
+
+1. Lex: @(@, @bu@, @tam-sayının@, @)@, @faktöriyeli@
+2. Morphology: @tam-sayının@ → candidates: @(tam-sayı, Gen)@, @(tam-sayının, Nom)@
+3. Resolve: @tam-sayı@ is a type in scope, choose @(tam-sayı, Gen)@
+4. AST: Function argument @bu@ of type @TyInd "tam-sayı"@
+-}
 module Kip.Parser where
 
 import Data.List
 import Data.Maybe (maybeToList, mapMaybe, isJust, isNothing, fromMaybe)
 import qualified Data.Map.Strict as M
 import Control.Applicative (optional)
-import Control.Monad (forM, guard)
+import Control.Monad (forM, guard, unless, when)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, get, put, modify, runStateT)
@@ -89,20 +161,61 @@ renderParserErrorEn err =
     ErrYaDaInvalid -> "\"ya da\" can only appear before the last constructor."
     ErrInternal _ -> "Unexpected error."
 
--- | Hash table type alias for morphology caches.
+{- | Hash table type alias for morphology caches.
+
+TRmorph lookups are expensive, so we cache:
+* __Ups cache__: surface form → [base forms]
+* __Downs cache__: base form → [surface forms]
+-}
 type MorphCache = HT.BasicHashTable Text [Text]
 
--- | Parser state tracking context and morphology caches.
+{- | Parser state tracking context and morphology caches.
+
+The parser state is updated as we parse to track:
+
+* __Scope__: What identifiers are available
+* __Type context__: What type constructors and parameters are in scope
+* __Morphology caches__: Memoized TRmorph results for performance
+
+= Fields
+
+* @fsm@: The TRmorph finite-state machine for Turkish morphology analysis
+
+* @parserCtx@: Identifiers currently in scope (functions, variables, constructors).
+  Updated as we parse declarations. Used to resolve identifier references.
+  Example: @["topla", "çarp", "doğru", "yanlış"]@
+
+* @parserTyParams@: Type parameters in scope when parsing a polymorphic type definition.
+  Example: When parsing @Bir (a b çifti)@, contains @[([], "a"), ([], "b")]@
+  These may have case suffixes if defined with them: @[([], "a'yla"), ([], "b'den")]@
+
+* @parserTyCons@: Type constructors with their arities (number of type parameters).
+  Example: @[("liste", 1), ("çift", 2), ("biri", 2)]@
+  Used to check type applications have correct number of arguments.
+
+* @parserTyMods@: Type modifiers (prefixes) that expand to full type names.
+  Example: @[("tam-sayı", [["yerleşik"]])]@ means @yerleşik tam-sayı@ → @tam-sayı@
+
+* @parserPrimTypes@: Primitive (built-in) type names.
+  Example: @["tam-sayı", "ondalık-sayı", "dizge"]@
+  These don't need to be declared before use.
+
+* @parserUpsCache@: Morphology analysis cache. Maps surface forms to base forms.
+  Example: @"elmaların"@ → @["elma", "elmalar"]@
+
+* @parserDownsCache@: Morphology generation cache. Maps base+case to surface forms.
+  Example: @"elma+Gen"@ → @["elmanın"]@
+-}
 data ParserState =
   MkParserState
-    { fsm :: FSM -- ^ Morphology FSM.
-    , parserCtx :: [Identifier] -- ^ Names in scope.
-    , parserTyParams :: [Identifier] -- ^ Type parameters in scope.
-    , parserTyCons :: [(Identifier, Int)] -- ^ Type constructor arities.
-    , parserTyMods :: [(Identifier, [Identifier])] -- ^ Type modifier expansions.
-    , parserPrimTypes :: [Identifier] -- ^ Primitive types in scope.
-    , parserUpsCache :: !MorphCache -- ^ Cached morphology analyses.
-    , parserDownsCache :: !MorphCache -- ^ Cached morphology generations.
+    { fsm :: FSM
+    , parserCtx :: [Identifier]
+    , parserTyParams :: [Identifier]
+    , parserTyCons :: [(Identifier, Int)]
+    , parserTyMods :: [(Identifier, [Identifier])]
+    , parserPrimTypes :: [Identifier]
+    , parserUpsCache :: !MorphCache
+    , parserDownsCache :: !MorphCache
     }
 
 -- | Parser monad uses IO for morphology lookups.
@@ -110,11 +223,50 @@ type Outer = IO
 -- | Parser type for Kip with state and IO.
 type KipParser = ParsecT ParserError Text (StateT ParserState Outer)
 
+-- | Pre-populate a morphology cache with common Turkish demonstrative pronouns.
+-- These are pattern variables that TRmorph may not analyze correctly.
+-- Entries are stored in TRmorph format: "base<case_tag>"
+populateDemonstrativeCache :: MorphCache -- ^ Cache to populate.
+                           -> IO () -- ^ Populates the cache.
+populateDemonstrativeCache cache = do
+  -- Turkish demonstrative pronouns: bu (this), şu (that-near), o (that-far)
+  -- Each entry maps surface form to TRmorph-style analysis
+  let entries =
+        [ -- bu (this)
+          ("bu", ["bu<nom>"])
+        , ("bunu", ["bu<acc>"])
+        , ("buna", ["bu<dat>"])
+        , ("bunda", ["bu<loc>"])
+        , ("bundan", ["bu<abl>"])
+        , ("bunun", ["bu<gen>"])
+        , ("bunla", ["bu<ins>"])
+        , ("bununla", ["bu<ins>"])
+          -- şu (that, near listener)
+        , ("şu", ["şu<nom>"])
+        , ("şunu", ["şu<acc>"])
+        , ("şuna", ["şu<dat>"])
+        , ("şunda", ["şu<loc>"])
+        , ("şundan", ["şu<abl>"])
+        , ("şunun", ["şu<gen>"])
+        , ("şunla", ["şu<ins>"])
+        , ("şununla", ["şu<ins>"])
+          -- o (that, away from both)
+        , ("o", ["o<nom>"])
+        , ("onu", ["o<acc>"])
+        , ("ona", ["o<dat>"])
+        , ("onda", ["o<loc>"])
+        , ("ondan", ["o<abl>"])
+        , ("onun", ["o<gen>"])
+        , ("onunla", ["o<ins>"])
+        ]
+  mapM_ (uncurry (HT.insert cache)) entries
+
 -- | Create a new empty parser state with fresh caches.
 newParserState :: FSM -- ^ Morphology FSM.
                -> IO ParserState -- ^ Fresh parser state.
 newParserState fsm' = do
   upsCache <- HT.new
+  populateDemonstrativeCache upsCache
   MkParserState fsm' [] [] [] [] [] upsCache <$> HT.new
 
 -- | Create a parser state with a given context and fresh caches.
@@ -127,6 +279,7 @@ newParserStateWithCtx :: FSM -- ^ Morphology FSM.
                       -> IO ParserState -- ^ Fresh parser state.
 newParserStateWithCtx fsm' ctx tyParams tyCons tyMods primTypes = do
   upsCache <- HT.new
+  populateDemonstrativeCache upsCache
   MkParserState fsm' ctx tyParams tyCons tyMods primTypes upsCache <$> HT.new
 
 -- | Create a parser state with shared caches (for parse/render reuse).
@@ -170,6 +323,17 @@ withSpan p = do
   x <- p
   end <- getSourcePos
   return (x, Span start end)
+
+-- | Execute a parser with pattern variables temporarily added to context.
+withPatVars :: [Identifier] -- ^ Pattern variable names to add.
+            -> KipParser a -- ^ Inner parser.
+            -> KipParser a -- ^ Parsed result.
+withPatVars patVars p = do
+  MkParserState{parserCtx} <- getP
+  modifyP (\s -> s{parserCtx = patVars ++ parserCtx})
+  result <- p
+  modifyP (\s -> s{parserCtx = parserCtx})
+  return result
 
 -- | Whitespace parser.
 ws :: KipParser () -- ^ No result.
@@ -284,6 +448,64 @@ getPossibleCase s
     root = T.takeWhile (/= '<') s
 
 -- | Estimate candidate identifiers from morphology and context.
+{- | Estimate candidate base forms and cases for a surface identifier.
+
+= Purpose
+
+This is the CORE morphology resolution function. Given a Turkish surface form
+(e.g., @"kitaplarından"@ - "from their books"), it generates possible base forms
+and grammatical cases (e.g., @[("kitap", Abl), ("kitaplar", Abl)]@).
+
+= Algorithm Overview
+
+1. __Fast path__: If @useCtx@ is true and the identifier is already in scope,
+   return it immediately as nominative. Avoids expensive morphology lookups.
+
+2. __Morphology analysis__: Use TRmorph (via @upsCached@) to analyze the surface form.
+   The FSM returns morphological parses showing base + inflections.
+
+3. __Copula handling__: Turkish copulas (like "dir", "dır") attach to words.
+   Try stripping them and analyzing separately.
+
+4. __Context filtering__: If @useCtx@ is true, prefer candidates that are in @parserCtx@.
+
+5. __Special cases__:
+   * IP converb roots (gerunds ending in -ip/-ıp/-up/-üp)
+   * Possessive forms
+   * Conditional forms
+
+6. __Inflection matching__: For identifiers in context, try to match inflected forms
+   using TRmorph's "downs" (generation) capability.
+
+= Parameters
+
+* @useCtx@: If True, prefer identifiers in @parserCtx@. Use True when resolving
+  variable/function references, False when parsing new names.
+
+* @(ss, s)@: The surface identifier. @ss@ is modifiers (hyphenated prefix parts),
+  @s@ is the main word.
+
+= Return Value
+
+A list of @(Identifier, Case)@ pairs representing possible interpretations:
+* @Identifier@: The base form (nominative, without inflections)
+* @Case@: The grammatical case of the surface form
+
+= Example
+
+Input: @estimateCandidates True ([], "kitaplarından")@
+
+1. Not in context → do morphology
+2. TRmorph: "kitap" (book) + Pl + P3p + Abl
+3. Candidates: @[("kitap", Abl), ("kitaplar", Abl)]@
+4. If "kitap" is in context, filter to: @[("kitap", Abl)]@
+
+= Performance
+
+Uses caching heavily:
+* @upsCached@: Memoizes morphology analysis (surface → parses)
+* @downsCached@: Memoizes morphology generation (base+case → surfaces)
+-}
 estimateCandidates :: Bool -- ^ Whether to prefer identifiers already in context.
                    -> Identifier -- ^ Surface identifier.
                    -> KipParser [(Identifier, Case)] -- ^ Candidate roots with cases.
@@ -613,8 +835,44 @@ resolveCandidatePreferNom ident = do
             x:_ -> return x
             [] -> customFailure ErrNoMatchingNominative
 
--- | Resolve a type candidate, preferring names in scope.
--- Avoids extra morphology matching if we already have a direct candidate.
+{- | Resolve a type candidate, preferring names in scope.
+
+= Purpose
+
+This function resolves a surface-form type identifier (e.g., @"listesinin"@) to its
+base form and grammatical case (e.g., @("liste", Gen)@).
+
+= Type Resolution Strategy
+
+1. __Direct match__: If the identifier exactly matches a type in scope, return it
+   with nominative case. This is the fast path.
+
+2. __Morphology analysis__: Use TRmorph to generate candidate base forms and cases.
+
+3. __Filter by context__: Prefer candidates that are known types in scope
+   (type constructors, type parameters, or primitive types).
+
+4. __Inflection preference__: Choose inflected forms over base forms when available.
+
+= Example
+
+Given input @"listesinin"@ (genitive of "liste"):
+
+1. Not in @tyNames@ directly → proceed to morphology
+2. TRmorph generates: @[("liste", Gen), ("listesi", Nom)]@
+3. Filter: @"liste"@ is in @parserTyCons@ → @[("liste", Gen)]@
+4. Return: @("liste", Gen)@
+
+= Turkish Morphology Challenges
+
+Type parameters with case suffixes create problems:
+* If @parserTyParams = [("b'den")]@ (ablative)
+* And we see @"b'yle"@ (instrumental)
+* They don't match exactly, even though both are variants of @"b"@
+
+Current approach: Try exact match, then morphology.
+TODO: Consider base-form matching for type parameters (see MULTI_PARAM_TYPE_FIX_NOTES.md)
+-}
 resolveTypeCandidatePreferCtx :: Identifier -- ^ Surface type identifier.
                               -> KipParser (Identifier, Case) -- ^ Resolved type identifier and case.
 resolveTypeCandidatePreferCtx ident = do
@@ -666,16 +924,25 @@ resolveTypeCandidateLoose :: Identifier -- ^ Surface type identifier.
 resolveTypeCandidateLoose ident = do
   MkParserState{parserTyCons, parserTyParams, parserPrimTypes} <- getP
   let tyNames = map fst parserTyCons ++ parserTyParams ++ parserPrimTypes
-  if ident `elem` tyNames
-    then return (ident, Nom)
-    else do
-      mCandidates <- optional (try (estimateCandidates False ident))
-      case mCandidates of
-        Just candidates ->
-          case preferInflected candidates of
-            x:_ -> return x
-            [] -> return (ident, Nom)
-        Nothing -> return (ident, Nom)
+      -- Check if identifier matches a primitive type pattern
+      isPrimType base = isIntType base || isFloatType base || isStringType base
+  -- First try morphology analysis to extract case if present
+  mCandidates <- optional (try (estimateCandidates False ident))
+  case mCandidates of
+    Just candidates -> do
+      -- Check if any candidate's base form is in tyNames or matches a primitive pattern
+      let tyMatchesWithCase = [(base, cas) | (base, cas) <- candidates,
+                                              base `elem` tyNames || isPrimType base]
+      case preferInflected tyMatchesWithCase of
+        x:_ -> return x  -- Prefer inflected forms
+        [] -> case tyMatchesWithCase of
+                (base, cas):_ -> return (base, cas)  -- Take first match with its case
+                [] -> case preferInflected candidates of
+                        x:_ -> return x
+                        [] -> return (ident, Nom)
+    Nothing ->
+      -- No morphology candidates, return nominative
+      return (ident, Nom)
 
 -- | Prefer inflected candidates over nominative-only ones.
 preferInflected :: [(Identifier, Case)] -- ^ Candidate identifiers.
@@ -1190,6 +1457,66 @@ parseExpWithCtx useCtx =
       any (\(ident, _) -> identText ident == "yaz")
 
 -- | Parse a top-level statement.
+{- | Parse a top-level statement.
+
+= Statement Grammar
+
+Kip has five types of statements:
+
+1. __Load statement__: Import a module
+   @
+   module-name'i yükle.
+   @
+   The module name must be in accusative case (-i).
+
+2. __Primitive type__: Declare a built-in type
+   @
+   Bir yerleşik type-name olsun.
+   @
+   Example: @Bir yerleşik tam-sayı olsun.@
+
+3. __Type declaration__: Define an algebraic data type
+   @
+   Bir (params type-name)
+   ya constructor1
+   ya constructor2
+   ya da constructor3
+   olabilir.
+   @
+   Example:
+   @
+   Bir (öğe listesi)
+   ya boş
+   ya da bir öğenin bir öğe listesine eki
+   olabilir.
+   @
+
+4. __Function declaration__: Define a function
+   @
+   (arg1) (arg2) function-name, body.
+   @
+   or with match clauses:
+   @
+   (arg) function-name,
+     pattern1-ise, result1,
+     pattern2-ise, result2.
+   @
+
+5. __Expression statement__: Evaluate and print
+   @
+   expression.
+   @
+
+= Parsing Strategy
+
+We try parsers in order with backtracking:
+
+1. Load statements (must start with identifier + "yükle")
+2. Primitive types (must start with "Bir yerleşik")
+3. Type declarations (must start with "Bir")
+4. Function declarations (start with arguments or identifier)
+5. Expression statements (catch-all)
+-}
 parseStmt :: KipParser (Stmt Ann) -- ^ Parsed statement.
 parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
   where
@@ -1201,9 +1528,29 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
       period
       name <- resolveLoadCandidate rawName
       return (Load name)
-    -- | Parse constructor identifiers.
-    ctorIdent :: KipParser Identifier -- ^ Parsed constructor identifier.
-    ctorIdent = fst <$> (identifier >>= resolveCandidatePreferNom)
+    {- | Parse constructor identifiers with case annotation.
+
+    Constructors can be in either Nom (nominative) or P3s (3rd person possessive) case.
+    We use TRmorph to detect the actual case instead of forcing nominative.
+
+    Examples:
+    * @doğru@ → Nom
+    * @hata@ → Nom
+    * @başarı@ → Nom
+    * @eki@ → P3s (possessive form)
+    -}
+    ctorIdent :: KipParser (Identifier, Ann) -- ^ Parsed constructor identifier with annotation.
+    ctorIdent = do
+      rawIdent <- identifier
+      (_, sp) <- withSpan (return ())
+      -- Use resolveCandidatePreferCtx to get the actual case
+      candidates <- estimateCandidates False rawIdent
+      case candidates of
+        (ident, cas):_ -> return (ident, mkAnn cas sp)
+        [] -> do
+          -- Fallback: use nominative
+          (ident, cas) <- resolveCandidatePreferNom rawIdent
+          return (ident, mkAnn cas sp)
     -- | Parse constructors without arguments.
     ctor :: KipParser (Ctor Ann) -- ^ Parsed constructor.
     ctor = try ((, []) <$> ctorIdent)
@@ -1226,13 +1573,81 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                          , parserPrimTypes = name : parserPrimTypes ps
                          })
       return (PrimType name)
-    -- | Parse a type declaration.
+    {- | Parse a type declaration.
+
+    = Type Declaration Grammar
+
+    Types are declared with the keyword "Bir" (a/one):
+
+    @
+    Bir type-head
+    [ya constructor]*
+    ya da constructor
+    olabilir.
+    @
+
+    Or for empty types (like Void):
+    @
+    Bir type-name var olamaz.
+    @
+
+    The type head can be:
+
+    * Parenthesized with parameters: @(a b type-name)@
+    * Simple: @type-name@
+    * With modifier: @modifier type-name@
+
+    = Examples
+
+    Simple type:
+    @
+    Bir doğruluk ya doğru ya da yanlış olabilir.
+    @
+
+    Parameterized type:
+    @
+    Bir (öğe listesi)
+    ya boş
+    ya da bir öğenin bir öğe listesine eki
+    olabilir.
+    @
+
+    Multi-parameter type:
+    @
+    Bir (a b çifti)
+    ya bir a bir b çifti
+    olabilir.
+    @
+
+    = Type Parameters and Turkish Morphology
+
+    Type parameters may be written with Turkish case suffixes:
+    * @(a'yla b'den biri)@ - "a" with instrumental, "b" with ablative
+
+    When storing in @parserTyParams@, we keep the ORIGINAL form including suffixes.
+    This creates challenges when resolving constructor argument types, as @b'yle@
+    (instrumental) should match parameter @b'den@ (ablative) since they have the
+    same base @b@. See MULTI_PARAM_TYPE_FIX_NOTES.md for details.
+
+    = State Updates
+
+    After parsing the type head, we update parser state:
+    1. Add type name to @parserCtx@
+    2. Add parameters to @parserTyParams@ (scoped to this type definition)
+    3. Record arity in @parserTyCons@
+    4. Store any modifiers in @parserTyMods@
+
+    After parsing constructors:
+    5. Add constructor names to @parserCtx@
+    -}
     ty :: KipParser (Stmt Ann) -- ^ Parsed type declaration.
     ty = do
       lexeme (string "Bir")
       (n, params, mods) <- typeHead
-      modifyP (\ps -> ps { parserCtx = n : params ++ parserCtx ps
-                             , parserTyParams = params ++ parserTyParams ps
+      -- Extract parameter identifiers from TyVar nodes for parser state
+      let paramIdents = map (\(TyVar _ ident) -> ident) params
+      modifyP (\ps -> ps { parserCtx = n : paramIdents ++ parserCtx ps
+                             , parserTyParams = paramIdents ++ parserTyParams ps
                              , parserTyCons = (n, length params) : parserTyCons ps
                              , parserTyMods =
                                  case mods of
@@ -1242,21 +1657,63 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
       ctors <- try (lexeme (string "var olamaz") $> [])
            <|> (parseCtors <* lexeme (string "olabilir"))
       period
-      modifyP (\ps -> ps {parserCtx = n : map fst ctors ++ parserCtx ps})
+      -- Extract constructor names (now from ((Identifier, Ann), [Ty Ann]))
+      modifyP (\ps -> ps {parserCtx = n : map (fst . fst) ctors ++ parserCtx ps})
       return (NewType n params ctors)
     -- | Parse a type head (name and parameters).
-    typeHead :: KipParser (Identifier, [Identifier], [Identifier]) -- ^ Type head parts.
+    typeHead :: KipParser (Identifier, [Ty Ann], [Identifier]) -- ^ Type head parts.
     typeHead = try typeHeadParens <|> typeHeadInline
+    {- | Parse a type parameter, handling Turkish case suffixes.
+
+    Type parameters can be written with case suffixes: a'yla, b'nin, etc.
+    We need to:
+    1. Strip the case suffix to get the base identifier (a, b)
+    2. Detect the grammatical case from the suffix
+    3. Store both in a TyVar node
+    -}
+    parseTypeParam :: Identifier -> KipParser (Ty Ann)
+    parseTypeParam rawIdent@(mods, word) = do
+      (_, sp) <- withSpan (return ())
+      -- Check for apostrophe-based case markers (common for type variables)
+      let caseSuffixes =
+            [ ("'yla", Ins), ("'yle", Ins), ("'la", Ins), ("'le", Ins)
+            , ("'den", Abl), ("'dan", Abl), ("'ten", Abl), ("'tan", Abl)
+            , ("'nin", Gen), ("'nın", Gen), ("'nun", Gen), ("'nün", Gen)
+            , ("'yi", Acc), ("'yı", Acc), ("'yu", Acc), ("'yü", Acc)
+            , ("'ye", Dat), ("'ya", Dat)
+            , ("'de", Loc), ("'da", Loc), ("'te", Loc), ("'ta", Loc)
+            ]
+          tryStripSuffix [] = Nothing
+          tryStripSuffix ((suff, cas):rest) =
+            case T.stripSuffix (T.pack suff) word of
+              Just base | T.length base > 0 -> Just (base, cas)
+              _ -> tryStripSuffix rest
+      case tryStripSuffix caseSuffixes of
+        Just (base, cas) ->
+          -- Found a case suffix, use base identifier with detected case
+          return (TyVar (mkAnn cas sp) (mods, base))
+        Nothing -> do
+          -- No case suffix found, try regular resolution
+          (ident, cas) <- resolveCandidatePreferNom rawIdent
+          return (TyVar (mkAnn cas sp) ident)
+
     -- | Parse a parenthesized type head.
-    typeHeadParens :: KipParser (Identifier, [Identifier], [Identifier]) -- ^ Parsed type head.
+    typeHeadParens :: KipParser (Identifier, [Ty Ann], [Identifier]) -- ^ Parsed type head.
     typeHeadParens = parens $ do
-      param <- identifier
-      ws
-      rawName <- fst <$> (identifier >>= resolveCandidatePreferNom)
+      parts <- identifier `sepBy1` ws
+      let (paramIdents, nameIdent) =
+            case parts of
+              [] -> ([], ([], T.pack ""))
+              [_] -> ([], ([], T.pack ""))
+              _ -> (init parts, last parts)
+      when (length parts < 2) empty
+      -- Parse type parameters with case detection
+      params <- mapM parseTypeParam paramIdents
+      rawName <- fst <$> resolveCandidatePreferNom nameIdent
       name <- normalizeTypeHead rawName
-      return (name, [param], [])
+      return (name, params, [])
     -- | Parse a type head without parentheses.
-    typeHeadInline :: KipParser (Identifier, [Identifier], [Identifier]) -- ^ Parsed type head.
+    typeHeadInline :: KipParser (Identifier, [Ty Ann], [Identifier]) -- ^ Parsed type head.
     typeHeadInline = do
       first <- identifier
       second <- optional (try (ws *> identifierNotKeyword))
@@ -1312,8 +1769,8 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     ctorArgs :: KipParser (Ctor Ann) -- ^ Parsed constructor with arguments.
     ctorArgs = do
       args <- some (try (lexeme parseCtorArgType))
-      name <- ctorIdent
-      return (name, args)
+      nameWithAnn <- ctorIdent
+      return (nameWithAnn, args)
     -- | Parse a constructor argument type.
     parseCtorArgType :: KipParser (Ty Ann) -- ^ Parsed constructor argument type.
     parseCtorArgType = do
@@ -1439,15 +1896,18 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     parseReturnTypeLoose =
       try (parens parseReturnTypeLoose) <|> do
         (firstIdent, sp1) <- withSpan identifier
-        mSecond <- optional (try (ws *> withSpan identifier))
-        case mSecond of
-          Nothing -> typeFromIdentLoose firstIdent sp1
-          Just (secondIdent, sp2) -> do
-            firstTy <- typeFromIdentLoose firstIdent sp1
-            (ctorName, cas) <- resolveTypeCandidateLoose secondIdent
-            let annApp = mkAnn cas (mergeSpan sp1 sp2)
-                ctorAnn = mkAnn cas sp2
-            return (TyApp annApp (TyInd ctorAnn ctorName) [firstTy])
+        rest <- many (try (ws *> withSpan identifier))
+        case rest of
+          [] -> typeFromIdentLoose firstIdent sp1
+          _ -> do
+            let allIdents = (firstIdent, sp1) : rest
+                argIdents = init allIdents
+                (ctorIdent, ctorSp) = last allIdents
+            argTys <- mapM (uncurry typeFromIdentLoose) argIdents
+            (ctorName, cas) <- resolveTypeCandidateLoose ctorIdent
+            let annApp = mkAnn cas (mergeSpan sp1 ctorSp)
+                ctorAnn = mkAnn cas ctorSp
+            return (TyApp annApp (TyInd ctorAnn ctorName) argTys)
     -- | Build a loose type node for a return type identifier.
     typeFromIdentLoose :: Identifier -- ^ Surface identifier.
                        -> Span -- ^ Source span.
@@ -1491,9 +1951,25 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                 -> [Identifier] -- ^ Function argument names.
                 -> KipParser (Clause Ann) -- ^ Parsed clause.
     parseClause allowScrutinee argNames = do
-      pat <- parsePattern allowScrutinee argNames
-      lexeme (char ',')
-      Clause pat <$> parseExp
+      -- Check for wildcard pattern first
+      mWildcard <- optional (try (lexeme (string "değilse")))
+      case mWildcard of
+        Just _ -> do
+          lexeme (char ',')
+          Clause PWildcard <$> parseExp
+        Nothing -> do
+          -- Parse pattern expression first to extract pattern variables
+          patExp <- parseExpAny
+          let patVarNames = extractPatVarNames patExp
+          pat <- expToPat allowScrutinee argNames patExp
+          lexeme (char ',')
+          -- Add pattern variables to context when parsing body
+          body <- withPatVars patVarNames parseExp
+          return (Clause pat body)
+    -- | Parse a pattern expression (before conversion to Pat).
+    parsePatternExp :: Bool -- ^ Whether to allow scrutinee expressions.
+                    -> KipParser (Exp Ann) -- ^ Parsed pattern expression.
+    parsePatternExp _allowScrutinee = parseExpAny
     -- | Parse a pattern, optionally allowing a scrutinee expression.
     parsePattern :: Bool -- ^ Whether to allow scrutinee expressions.
                  -> [Identifier] -- ^ Function argument names.
@@ -1509,6 +1985,65 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
         lexeme (string "olarak")
         return True
     -- | Parse a type with optional case suffix.
+    {- | Parse a type with grammatical case information.
+
+    = Type Grammar
+
+    Types in Kip can appear in various forms:
+
+    1. __Simple__: @tam-sayı@, @doğruluk@
+    2. __Parenthesized__: @(tam-sayı)@
+    3. __Type application__: @(öğe listesi)@, @(a b çifti)@
+    4. __Modified__: @yerleşik tam-sayı@ (prefix modifier)
+
+    Types must be "in scope" - declared before use via type declarations or
+    available as type parameters.
+
+    = Type Application
+
+    For parameterized types, we collect arguments left-to-right:
+    @
+    arg1 arg2 ... argN type-constructor
+    @
+
+    Example: @(tam-sayı doğruluk çifti)@
+    * Arguments: [@tam-sayı@, @doğruluk@]
+    * Constructor: @çift@
+    * Arity check: @çift@ expects 2 arguments ✓
+
+    = Turkish Morphology Challenges
+
+    Type parameters with different case suffixes are problematic:
+
+    * Type defined as: @Bir (a'yla b'den biri)@
+    * @parserTyParams@ contains: @[([], "a'yla"), ([], "b'den")]@
+    * Constructor: @bir b'yle sağı@ (instrumental case)
+    * Problem: @"b'yle"@ doesn't exactly match @"b'den"@!
+
+    == Current Solution
+
+    The @findMatchingTypeParam@ helper strips case suffixes to match by base form:
+    * @"b'yle"@ → @"b"@ (strip @'yle@)
+    * @"b'den"@ → @"b"@ (strip @'den@)
+    * Match! Return the parameter name from @parserTyParams@
+
+    This allows @"b'yle"@ to resolve to the type parameter @"b'den"@.
+
+    == Limitations
+
+    This approach has issues (see MULTI_PARAM_TYPE_FIX_NOTES.md):
+    * Only works in @argTy@ helper, not in all parsing contexts
+    * Type definitions themselves still fail to parse
+    * Doesn't handle all morphological variations
+
+    = Implementation Notes
+
+    Helper functions:
+    * @requireInCtx@: Validates that a type identifier is in scope
+    * @argTy@: Resolves a type argument identifier to a type node
+    * @collectArgsLoop@: Greedily collects type arguments with arity checking
+    * @findMatchingTypeParam@: Matches identifiers to type params by base form
+    -}
     parseTypeWithCase :: KipParser (Ty Ann) -- ^ Parsed type.
     parseTypeWithCase =
       try (parens parseTypeWithCase) <|> try parseModifiedType <|> do
@@ -1523,7 +2058,9 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
             requireInCtx name =
               if name `elem` tyNames || name `elem` parserTyParams || name `elem` primNames
                 then return ()
-                else customFailure ErrTypeNotFound
+                else case findMatchingTypeParam name of
+                  Just _ -> return ()  -- Base-form matches a type parameter
+                  Nothing -> customFailure ErrTypeNotFound
             -- | Prefer a genitive case if the surface form is genitive.
             preferSurfaceCase :: Identifier -- ^ Surface identifier.
                               -> Case -- ^ Current case.
@@ -1542,15 +2079,117 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                       Just base -> Just (mods, base)
                       Nothing -> Nothing
               in foldr ((<|>) . tryStrip) Nothing suffixes
+            {- | Strip Turkish case suffixes to get base form of an identifier.
+
+            This is a simple heuristic for matching type parameters that appear
+            with different case suffixes.
+
+            = Stripped Suffixes
+
+            Covers common Turkish case markers:
+            * Instrumental: @'yla@, @'yle@, @'la@, @'le@
+            * Ablative: @'den@, @'dan@, @'ten@, @'tan@
+            * Genitive: @'nin@, @'nın@, @'nun@, @'nün@
+            * Accusative: @'yi@, @'yı@, @'yu@, @'yü@
+            * Dative: @'ye@, @'ya@
+            * Locative: @'de@, @'da@, @'te@, @'ta@
+
+            = Examples
+
+            * @"b'yle"@ → @"b"@
+            * @"b'den"@ → @"b"@
+            * @"elmanın"@ → @"elmanın"@ (no apostrophe, unchanged)
+            * @"liste'den"@ → @"liste"@
+
+            = Limitations
+
+            * Only handles apostrophe-marked suffixes (for type variables)
+            * Doesn't handle full Turkish morphology (use TRmorph for that)
+            * Assumes single-letter type variables or simple identifiers
+            -}
+            stripCaseSuffix :: Identifier -> Identifier
+            stripCaseSuffix (mods, word) =
+              let suffixes = ["'yla", "'yle", "'la", "'le",
+                              "'den", "'dan", "'ten", "'tan",
+                              "'nin", "'nın", "'nun", "'nün",
+                              "'yi", "'yı", "'yu", "'yü",
+                              "'ye", "'ya",
+                              "'de", "'da", "'te", "'ta"]
+                  lowerWord = T.toLower word
+                  tryStrip [] = word
+                  tryStrip (suff:rest) =
+                    if T.pack suff `T.isSuffixOf` lowerWord
+                      then let len = length suff
+                           in if T.length word > len
+                                then T.take (T.length word - len) word
+                                else tryStrip rest
+                      else tryStrip rest
+              in (mods, tryStrip suffixes)
+
+            {- | Find a type parameter that matches the identifier by base form.
+
+            This is part of the multi-parameter type fix (see MULTI_PARAM_TYPE_FIX_NOTES.md).
+
+            = Problem
+
+            Type parameters are stored with their original case suffixes:
+            * Type: @Bir (a'yla b'den biri)@
+            * @parserTyParams = [([], "a'yla"), ([], "b'den")]@
+
+            But constructor arguments may use different cases:
+            * Constructor: @bir b'yle sağı@
+            * Surface form: @"b'yle"@ (instrumental)
+            * Not in @parserTyParams@!
+
+            = Solution
+
+            Match by stripping case suffixes from both sides:
+            1. Strip from input: @"b'yle"@ → @"b"@
+            2. Strip from params: @"b'den"@ → @"b"@
+            3. Compare: @"b"@ == @"b"@ ✓
+            4. Return the original parameter: @"b'den"@
+
+            This ensures all references to the same type variable use the
+            same identifier for type checking.
+
+            = Return Value
+
+            * @Just param@: Found a matching parameter (returns original form)
+            * @Nothing@: No match found
+            -}
+            findMatchingTypeParam :: Identifier -- ^ Surface identifier.
+                                  -> Maybe Identifier -- ^ Matching type parameter.
+            findMatchingTypeParam ident =
+              let identBase = stripCaseSuffix ident
+                  matchesByBase = filter (\param -> stripCaseSuffix param == identBase) parserTyParams
+              in case matchesByBase of
+                   param:_ -> Just param
+                   [] -> Nothing
             -- | Build a type node for an identifier.
             argTy :: Identifier -- ^ Identifier to convert.
-                  -> Ty Ann -- ^ Type node.
-            argTy ident
-              | ident `elem` primNames && isIntType ident = TyInt (mkAnn Nom NoSpan)
-              | ident `elem` primNames && isFloatType ident = TyFloat (mkAnn Nom NoSpan)
-              | ident `elem` primNames && isStringType ident = TyString (mkAnn Nom NoSpan)
-              | ident `elem` tyNames = TyInd (mkAnn Nom NoSpan) ident
-              |  otherwise = TyVar (mkAnn Nom NoSpan) ident
+                  -> KipParser (Ty Ann) -- ^ Type node.
+            argTy ident = do
+              -- First, try base-form matching with type parameters
+              case findMatchingTypeParam ident of
+                Just paramName -> return (TyVar (mkAnn Nom NoSpan) paramName)
+                Nothing -> do
+                  -- If no type param match, try normal resolution
+                  mResolved <- optional (try (resolveTypeCandidatePreferCtx ident))
+                  let pickTy name cas
+                        | name `elem` primNames && isIntType name = TyInt (mkAnn cas NoSpan)
+                        | name `elem` primNames && isFloatType name = TyFloat (mkAnn cas NoSpan)
+                        | name `elem` primNames && isStringType name = TyString (mkAnn cas NoSpan)
+                        | name `elem` primNames = TyInd (mkAnn cas NoSpan) name  -- Other primitives like boolean
+                        | name `elem` tyNames = TyInd (mkAnn cas NoSpan) name
+                        | name `elem` parserTyParams = TyVar (mkAnn cas NoSpan) name
+                        | otherwise = TyVar (mkAnn cas NoSpan) name
+                  case mResolved of
+                    Just (name, cas) ->
+                      if name `elem` parserTyParams
+                        then return (TyVar (mkAnn cas NoSpan) name)
+                        else return (pickTy name cas)
+                    Nothing ->
+                      return (pickTy ident Nom)
             -- | Check if an identifier refers to a type in scope.
             isTypeIdent :: Identifier -- ^ Surface identifier.
                         -> KipParser Bool -- ^ True when identifier resolves to a type.
@@ -1560,28 +2199,55 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                 Just (name, _) ->
                   return (name `elem` tyNames || name `elem` parserTyParams || name `elem` primNames)
                 Nothing -> return False
-        arg <- optional (try (do
-          first <- identifier
-          ws
-          nextIdent <- lookAhead identifier
-          isTy <- isTypeIdent nextIdent
-          if isTy then return first else empty
+        let -- Collect all type identifiers greedily, validating arity at the end
+            collectArgsLoop soFar = do
+              mNext <- optional (try (do
+                arg <- identifier
+                ws
+                nextIdent <- lookAhead identifier
+                mNextResolved <- optional (try (resolveTypeCandidatePreferCtx nextIdent))
+                case mNextResolved of
+                  Just (nextName, _) -> do
+                    let isNextType = nextName `elem` tyNames || nextName `elem` parserTyParams || nextName `elem` primNames
+                    guard isNextType
+                    return arg
+                  Nothing -> empty
+                ))
+              case mNext of
+                Just arg -> collectArgsLoop (soFar ++ [arg])
+                Nothing -> return soFar
+        -- Try to parse as a type application, with arity validation inside try
+        mTypeApp <- optional (try (do
+          collected <- collectArgsLoop []
+          guard (not (null collected))
+          (rawIdent, sp) <- withSpan identifier
+          (name, cas) <- resolveTypeCandidatePreferCtx rawIdent
+          requireInCtx name
+          -- Validate arity: check if this type constructor accepts the right number of arguments
+          let numArgs = length collected
+              mArity = lookup name parserTyCons
+              arityMatches = case mArity of
+                Just expectedArity -> numArgs == expectedArity
+                Nothing ->
+                  -- Primitives have arity 0, type params shouldn't appear as constructors here
+                  (name `elem` primNames) && (numArgs == 0)
+          guard arityMatches  -- Allow backtracking if arity doesn't match
+          let cas' = preferSurfaceCase rawIdent cas
+              ann = mkAnn cas' sp
+          if name `elem` primNames && isIntType name
+            then return (TyInt ann)
+            else if name `elem` primNames && isFloatType name
+              then return (TyFloat ann)
+              else if name `elem` primNames && isStringType name
+                then return (TyString ann)
+                else do
+                  argTys <- mapM argTy collected
+                  return (TyApp ann (TyInd (mkAnn Nom NoSpan) name) argTys)
           ))
-        (rawIdent, sp) <- withSpan identifier
-        case arg of
-          Just t -> do
-            (name, cas) <- resolveTypeCandidatePreferCtx rawIdent
-            requireInCtx name
-            let cas' = preferSurfaceCase rawIdent cas
-                ann = mkAnn cas' sp
-            if name `elem` primNames && isIntType name
-              then return (TyInt ann)
-              else if name `elem` primNames && isFloatType name
-                then return (TyFloat ann)
-                else if name `elem` primNames && isStringType name
-                  then return (TyString ann)
-                  else return (TyApp ann (TyInd (mkAnn Nom NoSpan) name) [argTy t])
+        case mTypeApp of
+          Just ty -> return ty
           Nothing -> do
+            (rawIdent, sp) <- withSpan identifier
             case rawIdent of
               (xs, xraw) | not (null xs) -> do
                 (baseName, cas) <- resolveTypeCandidatePreferCtx ([], xraw)
@@ -1592,7 +2258,8 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                     case reverse xs of
                       arg:revPrefix -> do
                         let argIdent = (reverse revPrefix, arg)
-                        return (TyApp ann (TyInd (mkAnn Nom NoSpan) baseName) [argTy argIdent])
+                        argTy' <- argTy argIdent
+                        return (TyApp ann (TyInd (mkAnn Nom NoSpan) baseName) [argTy'])
                       [] -> customFailure (ErrInternal (T.pack "parseTypeHead"))
                   else do
                     (name, cas') <- resolveTypeCandidatePreferCtx rawIdent
@@ -1647,17 +2314,37 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
           return (TyInd (mkAnn cas (mergeSpan sp1 sp2)) fullName)
         [] -> empty
 
+-- | Extract pattern variable names from a pattern expression.
+extractPatVarNames :: Exp Ann -- ^ Pattern expression.
+                   -> [Identifier] -- ^ Pattern variable names.
+extractPatVarNames e =
+  case e of
+    Var {} -> []  -- Constructor with no arguments
+    App _ (Var {}) es -> concatMap getVarName es
+    _ -> []
+  where
+    getVarName (Var _ varName candidates) =
+      case preferInflected candidates of
+        (n, _):_ -> [n]
+        -- If no inflected candidates, try all candidates
+        _ -> case candidates of
+               (n, _):_ -> [n]
+               _ -> [varName]  -- Fallback to surface form
+    getVarName _ = []
+
 -- | Parse a match expression with optional context filtering.
 parseMatchExpr :: Bool -- ^ Whether to use context when resolving names.
                -> KipParser (Exp Ann) -- ^ Parsed match expression.
 parseMatchExpr useCtx = do
   (patExp, scrutVar, scrutName) <- parseFirstPattern
   let argNames = [scrutName]
+      patVarNames = extractPatVarNames patExp
   pat <- expToPat True argNames patExp
   lexeme (char ',')
-  body <- parseExpWithCtx useCtx
+  -- Add pattern variables to context when parsing body
+  body <- withPatVars patVarNames (parseExpWithCtx useCtx)
   let clause1 = Clause pat body
-  clauses <- parseMoreClauses argNames
+  clauses <- parseMoreClauses argNames patVarNames
   let allClauses = clause1 : clauses
       start = annSpan (annExp scrutVar)
       end =
@@ -1678,17 +2365,27 @@ parseMatchExpr useCtx = do
       return (patExp, scrutVar, scrutName)
     -- | Parse additional match clauses.
     parseMoreClauses :: [Identifier] -- ^ Bound pattern names.
+                     -> [Identifier] -- ^ Pattern variable names from first clause.
                      -> KipParser [Clause Ann] -- ^ Parsed clauses.
-    parseMoreClauses argNames = do
+    parseMoreClauses argNames _ = do
       mcomma <- optional (try (lexeme (char ',')))
       case mcomma of
         Nothing -> return []
         Just _ -> do
-          pat <- parsePattern False argNames
+          patExp <- parseWildcardOrExp
+          let clausePatVars = maybe [] extractPatVarNames patExp
+          pat <- case patExp of
+                   Nothing -> return PWildcard
+                   Just e -> expToPat False argNames e
           lexeme (char ',')
-          body <- parseExpWithCtx useCtx
-          rest <- parseMoreClauses argNames
+          body <- withPatVars clausePatVars (parseExpWithCtx useCtx)
+          rest <- parseMoreClauses argNames clausePatVars
           return (Clause pat body : rest)
+    -- | Parse either a wildcard pattern or a pattern expression.
+    parseWildcardOrExp :: KipParser (Maybe (Exp Ann)) -- ^ Nothing for wildcard, Just exp otherwise.
+    parseWildcardOrExp =
+      (lexeme (string "değilse") $> Nothing) <|>
+      (Just <$> parseExpAny)
     -- | Parse a pattern for a match clause.
     parsePattern :: Bool -- ^ Whether to allow scrutinee expressions.
                  -> [Identifier] -- ^ Bound pattern names.

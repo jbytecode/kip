@@ -756,6 +756,7 @@ main = do
   fsm <- fsmReadBinaryFile trmorphPath
   -- Create shared caches that will be used by both parser and renderer
   upsCache <- HT.new
+  populateDemonstrativeCache upsCache
   downsCache <- HT.new
   let renderCache = mkRenderCache upsCache downsCache
       title = T.pack ("Kip " ++ showVersion version)

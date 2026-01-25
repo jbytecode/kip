@@ -451,7 +451,7 @@ buildDefSpans src stmts =
         Defn name _ _ -> [name]
         Function name _ _ _ _ -> [name]
         PrimFunc name _ _ _ -> [name]
-        NewType name _ ctors -> name : map fst ctors
+        NewType name _ ctors -> name : map (fst . fst) ctors
         PrimType name -> [name]
         _ -> []
 

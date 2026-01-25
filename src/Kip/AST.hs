@@ -113,8 +113,17 @@ data Exp a =
 
 -- | Typed argument of a function.
 type Arg ann = (Identifier, Ty ann)
--- | Constructor with its argument types.
-type Ctor ann = (Identifier, [Ty ann])
+{- | Constructor with its argument types and case annotation.
+
+The constructor identifier includes a case annotation to track whether
+the constructor is in nominative case (e.g., @doğru@) or possessive case
+(e.g., @eki@ which is P3s).
+
+Components:
+1. @(Identifier, ann)@: Constructor name with its grammatical case annotation
+2. @[Ty ann]@: Argument types for the constructor
+-}
+type Ctor ann = ((Identifier, ann), [Ty ann])
 
 -- | Pattern syntax tree.
 data Pat ann =
@@ -145,15 +154,77 @@ instance (Binary ann) => Binary (Pat ann) where
 data Clause ann = Clause (Pat ann) (Exp ann)
   deriving (Show, Eq, Generic, Functor, Binary)
 
--- | Top-level statements.
+{- | Top-level statements.
+
+Statements are the top-level declarations in a Kip program.
+
+= Statement Types
+
+* __Defn__: Value definition
+  @
+  name, value.
+  @
+  Example: @pi, 3.14.@
+
+* __Function__: Function definition with pattern matching
+  @
+  (args) name, pattern1-ise result1, pattern2-ise result2.
+  @
+  The @Bool@ indicates whether it's a gerund (verb form).
+
+* __PrimFunc__: Primitive (built-in) function declaration
+  @
+  (args) name yerleşiktir.
+  @
+  The @Bool@ indicates whether it's a gerund.
+
+* __Load__: Module import
+  @
+  module-name'i yükle.
+  @
+
+* __NewType__: Algebraic data type declaration
+  @
+  Bir (params type-name) ya ctor1 ya ctor2 olabilir.
+  @
+  Components:
+  1. @Identifier@: Type name (e.g., @"liste"@, @"çift"@)
+  2. @[Ty ann]@: Type parameters as type variables with case annotations
+     Each parameter is a @TyVar@ that captures both the identifier and its case
+  3. @[Ctor ann]@: Constructors with their case annotations and argument types
+
+  Example: @Bir (öğe listesi) ya boş ya da bir öğenin bir öğe listesine eki olabilir.@
+  * Type name: @"liste"@
+  * Parameters: @[TyVar (Nom, span) "öğe"]@ (single type parameter in nominative)
+  * Constructors: @[(("boş", (Nom, span)), []), (("eki", (P3s, span)), [...])]@
+
+  Multi-parameter example: @Bir (a b çifti) ya bir a bir b çifti olabilir.@
+  * Type name: @"çift"@
+  * Parameters: @[TyVar (Nom, span) "a", TyVar (Nom, span) "b"]@
+  * Constructors: @[(("çifti", (Nom, span)), [TyVar _ "a", TyVar _ "b"])]@
+
+  With Turkish case suffixes: @Bir (a'yla b'nin sonucu) ...@
+  * Parameters: @[TyVar (Ins, span) "a", TyVar (Gen, span) "b"]@
+  * The case of each parameter is preserved in the @TyVar@ annotation
+
+* __PrimType__: Primitive type declaration
+  @
+  Bir yerleşik type-name olsun.
+  @
+
+* __ExpStmt__: Expression statement (evaluate and print)
+  @
+  expression.
+  @
+-}
 data Stmt ann =
-    Defn Identifier (Ty ann) (Exp ann) -- ^ Value definition.
-  | Function Identifier [Arg ann] (Ty ann) [Clause ann] Bool -- ^ Function definition.
-  | PrimFunc Identifier [Arg ann] (Ty ann) Bool -- ^ Primitive function declaration.
-  | Load Identifier -- ^ Module load statement.
-  | NewType Identifier [Identifier] [Ctor ann] -- ^ New type declaration.
-  | PrimType Identifier -- ^ Primitive type declaration.
-  | ExpStmt (Exp ann) -- ^ Standalone expression statement.
+    Defn Identifier (Ty ann) (Exp ann)
+  | Function Identifier [Arg ann] (Ty ann) [Clause ann] Bool
+  | PrimFunc Identifier [Arg ann] (Ty ann) Bool
+  | Load Identifier
+  | NewType Identifier [Ty ann] [Ctor ann]
+  | PrimType Identifier
+  | ExpStmt (Exp ann)
   deriving (Show, Eq, Generic, Functor, Binary)
 
 -- data Ty' a =

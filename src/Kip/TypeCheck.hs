@@ -553,16 +553,14 @@ tcStmt stmt =
     Load name ->
       return (Load name)
     NewType name params ctors -> do
-      let ctorNames = map fst ctors
+      let ctorNames = map (fst . fst) ctors
           resultTy =
             case params of
               [] -> TyInd (mkAnn Nom NoSpan) name
-              _ ->
-                let paramTys = map (TyVar (mkAnn Nom NoSpan)) params
-                in TyApp (mkAnn Nom NoSpan) (TyInd (mkAnn Nom NoSpan) name) paramTys
+              _ -> TyApp (mkAnn Nom NoSpan) (TyInd (mkAnn Nom NoSpan) name) params
           ctorSigs =
             [ (ctorName, (ctorArgs, resultTy))
-            | (ctorName, ctorArgs) <- ctors
+            | ((ctorName, _), ctorArgs) <- ctors
             ]
       modify (\s -> s { tcCtx = name : ctorNames ++ tcCtx s
                       , tcCtors = ctorSigs ++ tcCtors s
@@ -1086,16 +1084,14 @@ registerForwardDecls = mapM_ registerStmt
         Defn name _ _ ->
           modify (\s -> s { tcCtx = name : tcCtx s })
         NewType name params ctors -> do
-          let ctorNames = map fst ctors
+          let ctorNames = map (fst . fst) ctors
               resultTy =
                 case params of
                   [] -> TyInd (mkAnn Nom NoSpan) name
-                  _ ->
-                    let paramTys = map (TyVar (mkAnn Nom NoSpan)) params
-                    in TyApp (mkAnn Nom NoSpan) (TyInd (mkAnn Nom NoSpan) name) paramTys
+                  _ -> TyApp (mkAnn Nom NoSpan) (TyInd (mkAnn Nom NoSpan) name) params
               ctorSigs =
                 [ (ctorName, (ctorArgs, resultTy))
-                | (ctorName, ctorArgs) <- ctors
+                | ((ctorName, _), ctorArgs) <- ctors
                 ]
           modify (\s -> s { tcCtx = name : ctorNames ++ tcCtx s
                           , tcCtors = ctorSigs ++ tcCtors s

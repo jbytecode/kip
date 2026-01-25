@@ -1,0 +1,13 @@
+(* Çokbiçimli ikili çifti tipi. Haskell'deki (,) gibi. *)
+Bir (a'yla b çifti)
+ya bir a'yla bir b çifti
+olabilir.
+
+(bu tam-sayıyla dizge çiftinin) birinci-öğesi,
+  bu şunla o çiftiyse, şudur.
+
+(bu tam-sayıyla dizge çiftinin) ikinci-öğesi,
+  bu şunla o çiftiyse, odur.
+
+((5'le "abc" çiftinin) birinci-öğesini) yaz.
+((5'le "abc" çiftinin) ikinci-öğesini) yaz.

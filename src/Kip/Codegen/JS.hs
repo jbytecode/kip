@@ -505,17 +505,17 @@ renderNewType :: Identifier -> [Ctor Ann] -> Text
 renderNewType name ctors =
   let ctorLines =
         [ renderCtor ctorName args
-        | (ctorName, args) <- ctors
+        | ((ctorName, _), args) <- ctors
         ]
       ctorSig =
         T.intercalate " | "
           [ identText ctorName <> "(" <> T.replicate (length args) "_" <> ")"
-          | (ctorName, args) <- ctors
+          | ((ctorName, _), args) <- ctors
           ]
       -- For single-constructor types with no args, also alias the type name
       -- to the constructor (e.g., bitim = bitimlik for unit types)
       typeAlias = case ctors of
-        [(ctorName, [])] | identText name /= identText ctorName ->
+        [((ctorName, _), [])] | identText name /= identText ctorName ->
           ["var " <> toJsIdent name <> " = " <> toJsIdent ctorName <> ";"]
         _ -> []
   in
