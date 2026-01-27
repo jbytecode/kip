@@ -1215,10 +1215,10 @@ parseExpWithCtx useCtx =
     letExp :: KipParser (Exp Ann) -- ^ Parsed let expression.
     letExp = try $ do
       items <- some (lexeme atom)
-      let (exprItems, nameItem) =
-            case reverse items of
-              name:revExpr -> (reverse revExpr, name)
-              [] -> error "let expression needs at least two items"
+      -- some guarantees non-empty list, so reverse is also non-empty
+      let (name:revExpr) = reverse items
+          exprItems = reverse revExpr
+          nameItem = name
       (rawName, nameSpan) <- case nameItem of
         Var annExp n _ -> return (n, annSpan annExp)
         _ -> customFailure ErrDefinitionName
@@ -1361,7 +1361,7 @@ parseExpWithCtx useCtx =
                  -> KipParser (Exp Ann) -- ^ Parsed application.
     buildAppFrom xs =
       case xs of
-        [] -> error "application needs at least one item"
+        [] -> customFailure (ErrInternal "Internal error: buildAppFrom called with empty list")
         [x] -> return x
         first:_ ->
           case reverse xs of
@@ -1392,7 +1392,7 @@ parseExpWithCtx useCtx =
                                _ -> return (App ann x rest)
                            [] -> return (App ann x rest)
                    _ -> return (App ann x rest)
-            [] -> error "application needs at least one item"
+            [] -> customFailure (ErrInternal "Internal error: buildAppFrom reverse returned empty")
     -- | Attempt to reinterpret application as a type cast.
     tryApplyTypeCase :: Exp Ann -- ^ Candidate expression.
                      -> Exp Ann -- ^ Candidate type expression.
@@ -2648,14 +2648,14 @@ removeComments = TL.toStrict . TB.toLazyText . go 0
                   _ -> step n c rest
               else step n c rest
     -- | Emit or skip characters based on nesting depth.
-    step :: Int -- ^ Current nesting depth.
+    -- Invariant: n >= 0 (starts at 0, only decrements when n > 0)
+    step :: Int -- ^ Current nesting depth (non-negative).
          -> Char -- ^ Current character.
          -> Text -- ^ Remaining input.
          -> TB.Builder -- ^ Output builder.
     step n c rest
-      | n < 0 = error "Açılışı olmayan yorum kapanışı."
       | n == 0 = TB.singleton c <> go n rest
-      | otherwise = go n rest
+      | otherwise = go n rest -- n > 0: skip character (inside comment)
 
 -- | Parse a full statement from the REPL input.
 parseFromRepl :: ParserState -- ^ Initial parser state.

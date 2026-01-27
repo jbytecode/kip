@@ -497,7 +497,7 @@ requireCacheFsm = do
   ctx <- ask
   case (rcCache ctx, rcFsm ctx) of
     (Just cache, Just fsm) -> return (cache, fsm)
-    _ -> error "rendering requires RenderCache and FSM"
+    _ -> error "Internal error: rendering requires RenderCache and FSM"
 
 -- | Require parser morphology caches from the context.
 requireParserCaches :: RenderM (MorphCache, MorphCache) -- ^ Parser ups/downs caches.
@@ -505,7 +505,7 @@ requireParserCaches = do
   ctx <- ask
   case (rcUpsCache ctx, rcDownsCache ctx) of
     (Just ups, Just downs) -> return (ups, downs)
-    _ -> error "parser cache access requires morphology caches"
+    _ -> error "Internal error: parser cache access requires morphology caches"
 
 -- | Require an FSM from the context.
 requireFsm :: RenderM FSM -- ^ Morphology FSM.
@@ -513,7 +513,7 @@ requireFsm = do
   ctx <- ask
   case rcFsm ctx of
     Just fsm -> return fsm
-    Nothing -> error "rendering requires FSM"
+    Nothing -> error "Internal error: rendering requires FSM"
 
 -- | Render messages that do not require extra context.
 renderCompilerMsgBasic :: CompilerMsg -- ^ Message to render.
