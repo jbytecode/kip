@@ -37,8 +37,10 @@ import System.Console.Chalk
 import Kip.Parser
 import Kip.AST
 import qualified Data.HashTable.IO as HT
-import Kip.Eval hiding (Unknown, inferType)
+import Kip.Eval (EvalState, EvalM, EvalError, emptyEvalState, runEvalM, evalExp, evalStmt, evalStmtInFile, evalRender)
+import qualified Kip.Eval as Eval
 import Kip.TypeCheck
+import qualified Kip.TypeCheck as TC
 import Kip.Render
 import Kip.Cache
 import Kip.Codegen.JS (codegenProgram)
@@ -337,7 +339,7 @@ renderTCError paramTyCons tyMods tcErr = do
   case rcLang ctx of
     LangTr ->
       case tcErr of
-        Unknown ->
+        TC.Unknown ->
           return "Tip hatası: bilinmeyen hata."
         NoType sp ->
           return ("Tip hatası: uygun bir tip bulunamadı." <> renderSpan (rcLang ctx) sp)
@@ -382,7 +384,7 @@ renderTCError paramTyCons tyMods tcErr = do
           return header
     LangEn ->
       case tcErr of
-        Unknown ->
+        TC.Unknown ->
           return "Type error: unknown error."
         NoType sp ->
           return ("Type error: no suitable type found." <> renderSpan (rcLang ctx) sp)
@@ -445,7 +447,7 @@ tcErrSpan tcErr =
     NoMatchingOverload _ _ _ sp -> Just sp
     NoMatchingCtor _ _ _ sp -> Just sp
     PatternTypeMismatch _ _ _ sp -> Just sp
-    Unknown -> Nothing
+    TC.Unknown -> Nothing
 
 -- | Render a caret snippet for a source span.
 renderSpanSnippet :: Text -- ^ Source input.
@@ -568,8 +570,18 @@ renderCompilerMsgBasic msg = do
       MsgEvalError evalErr ->
         Just $
           case rcLang ctx of
-            LangTr -> renderError (rcUseColor ctx) ("Değerleme hatası: " <> T.pack (show evalErr))
-            LangEn -> renderError (rcUseColor ctx) ("Evaluation error: " <> T.pack (show evalErr))
+            LangTr -> renderError (rcUseColor ctx) $
+              case evalErr of
+                Eval.Unknown -> "Değerleme hatası: bilinmeyen hata."
+                Eval.UnboundVariable name -> "Değerleme hatası: " <> T.pack (prettyIdent name) <> " tanımlı değil."
+                Eval.NoMatchingFunction name -> "Değerleme hatası: " <> T.pack (prettyIdent name) <> " için uygun bir tanım bulunamadı."
+                Eval.NoMatchingClause -> "Değerleme hatası: eşleşen bir dal bulunamadı."
+            LangEn -> renderError (rcUseColor ctx) $
+              case evalErr of
+                Eval.Unknown -> "Evaluation error: unknown error."
+                Eval.UnboundVariable name -> "Evaluation error: " <> T.pack (prettyIdent name) <> " is not defined."
+                Eval.NoMatchingFunction name -> "Evaluation error: no matching definition found for " <> T.pack (prettyIdent name) <> "."
+                Eval.NoMatchingClause -> "Evaluation error: no matching clause found."
       MsgTypeInferFailed ->
         Just $
           case rcLang ctx of

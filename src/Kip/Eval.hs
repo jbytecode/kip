@@ -14,6 +14,7 @@ import Kip.AST
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Except
+import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class
 import Control.Exception (SomeException, try)
 import System.IO (hFlush, stdout)
@@ -51,6 +52,9 @@ emptyEvalState = MkEvalState [] [] [] [] [] [] Nothing (\_ e -> return (prettyEx
 -- | Evaluation errors (currently minimal).
 data EvalError =
    Unknown
+   | UnboundVariable Identifier
+   | NoMatchingFunction Identifier
+   | NoMatchingClause
    deriving (Show, Eq, Generic, Binary)
 -- | Evaluator monad stack.
 type EvalM = StateT EvalState (ExceptT EvalError IO)
@@ -73,9 +77,20 @@ evalExpWith localEnv e =
           case lookupBySuffix localEnv varName of
             Just v -> return v
             Nothing -> do
-              MkEvalState{evalVals} <- get
+              MkEvalState{evalVals, evalFuncs, evalPrimFuncs, evalSelectors, evalTyCons, evalCtors} <- get
               case lookupByCandidates evalVals varCandidates of
-                Nothing -> return (Var annExp varName varCandidates)
+                Nothing -> do
+                  -- Check if this refers to a function/selector/type/ctor (will be resolved in App context)
+                  let fnCandidates = map fst varCandidates
+                      fnExists = any (\(n, _) -> n `elem` fnCandidates) evalFuncs
+                      primExists = any (\(n, _, _) -> n `elem` fnCandidates) evalPrimFuncs
+                      selectorExists = any (\(n, _) -> n `elem` fnCandidates) evalSelectors
+                      tyExists = any (\(ident, _) -> ident `elem` map fst evalTyCons) varCandidates
+                      ctorExists = any (\(n, _) -> n `elem` fnCandidates) evalCtors
+                      randomExists = isRandomCandidate varCandidates
+                  if fnExists || primExists || selectorExists || tyExists || ctorExists || randomExists
+                    then return (Var annExp varName varCandidates) -- OK: function/selector/type/ctor reference
+                    else throwError (UnboundVariable varName) -- Error: truly undefined
                 Just v -> evalExpWith localEnv v
     App {annExp = annApp, fn, args} -> do
       fn' <- evalExpWith localEnv fn
@@ -101,7 +116,7 @@ evalExpWith localEnv e =
                         _ ->
                           if isRandomCandidate varCandidates
                             then primIntRandom args'
-                            else return (App annApp fn' args')
+                            else return (App annApp fn' args') -- Constructor application or unevaluated call
         _ -> return (App annApp fn' args')
     StrLit {annExp, lit} ->
       return (StrLit annExp lit)
@@ -123,7 +138,7 @@ evalExpWith localEnv e =
     Match {annExp, scrutinee, clauses} -> do
       scrutinee' <- evalExpWith localEnv scrutinee
       case findClause scrutinee' clauses of
-        Nothing -> return (Match annExp scrutinee' clauses)
+        Nothing -> throwError NoMatchingClause
         Just (Clause _ body, patBindings) -> do
           let env = patBindings ++ localEnv
           evalExpWith env body
