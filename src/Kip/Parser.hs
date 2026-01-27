@@ -1529,7 +1529,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     -- | Parse a module load statement.
     loadStmt :: KipParser (Stmt Ann) -- ^ Parsed load statement.
     loadStmt = do
-      rawName <- identifier
+      rawName <- identifierNotKeyword
       _ <- lexeme (string "yükle")
       period
       name <- resolveLoadCandidate rawName
@@ -1547,7 +1547,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     -}
     ctorIdent :: KipParser (Identifier, Ann) -- ^ Parsed constructor identifier with annotation.
     ctorIdent = do
-      rawIdent <- identifier
+      rawIdent <- identifierNotKeyword
       (_, sp) <- withSpan (return ())
       -- Constructor names should use their surface form without normalization
       -- Only detect the grammatical case for annotation purposes
@@ -1570,7 +1570,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     primTy = do
       lexeme (string "Bir")
       _ <- lexeme (string "yerleşik")
-      name <- fst <$> (identifier >>= resolveCandidatePreferNom)
+      name <- fst <$> (identifierNotKeyword >>= resolveCandidatePreferNom)
       lexeme (string "olsun")
       period
       modifyP (\ps -> ps { parserCtx = name : parserCtx ps
@@ -1705,7 +1705,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     -- | Parse a parenthesized type head.
     typeHeadParens :: KipParser (Identifier, [Ty Ann], [Identifier]) -- ^ Parsed type head.
     typeHeadParens = parens $ do
-      parts <- identifier `sepBy1` ws
+      parts <- identifierNotKeyword `sepBy1` ws
       let (paramIdents, nameIdent) =
             case parts of
               [] -> ([], ([], T.pack ""))
@@ -1720,7 +1720,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     -- | Parse a type head without parentheses.
     typeHeadInline :: KipParser (Identifier, [Ty Ann], [Identifier]) -- ^ Parsed type head.
     typeHeadInline = do
-      first <- identifier
+      first <- identifierNotKeyword
       second <- optional (try (ws *> identifierNotKeyword))
       case second of
         Nothing -> do
@@ -1779,19 +1779,19 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     -- | Parse a constructor argument type.
     parseCtorArgType :: KipParser (Ty Ann) -- ^ Parsed constructor argument type.
     parseCtorArgType = do
-      _ <- try (lexeme (string "bir") *> lookAhead (identifier <|> (char '(' $> ([], T.pack ""))))
+      _ <- try (lexeme (string "bir") *> lookAhead (identifierNotKeyword <|> (char '(' $> ([], T.pack ""))))
       parseTypeWithCase
     -- | Parse a function argument declaration.
     parseArg :: KipParser (Identifier, Ty Ann) -- ^ Parsed argument declaration.
     parseArg = do
-      argName <- identifier
+      argName <- identifierNotKeyword
       ws
       ty <- try parseTypeWithCase <|> parseTypeLoose
       return (argName, ty)
     -- | Parse a type without requiring it to be in scope.
     parseTypeLoose :: KipParser (Ty Ann) -- ^ Parsed type.
     parseTypeLoose = do
-      (rawIdent, sp) <- withSpan identifier
+      (rawIdent, sp) <- withSpan identifierNotKeyword
       candidates <- estimateCandidates False rawIdent
       let ann = mkAnn (pickCase False candidates) sp  -- Types are never P3s
           nameForTy =
@@ -1886,11 +1886,11 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     -- | Parse function header with optional return type.
     parseFuncHeader :: KipParser (Identifier, Maybe (Ty Ann)) -- ^ Function name and optional return type.
     parseFuncHeader = do
-      mHeader <- optional (try (parens ((,) <$> identifier <*> (ws *> parseReturnType))))
+      mHeader <- optional (try (parens ((,) <$> identifierNotKeyword <*> (ws *> parseReturnType))))
       case mHeader of
         Just (name, ty) -> return (name, Just ty)
         Nothing -> do
-          name <- identifier
+          name <- identifierNotKeyword
           return (name, Nothing)
     -- | Parse a return type with a lenient fallback for plain identifiers.
     parseReturnType :: KipParser (Ty Ann) -- ^ Parsed return type.
@@ -1900,8 +1900,8 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     parseReturnTypeLoose :: KipParser (Ty Ann) -- ^ Parsed return type.
     parseReturnTypeLoose =
       try (parens parseReturnTypeLoose) <|> do
-        (firstIdent, sp1) <- withSpan identifier
-        rest <- many (try (ws *> withSpan identifier))
+        (firstIdent, sp1) <- withSpan identifierNotKeyword
+        rest <- many (try (ws *> withSpan identifierNotKeyword))
         case rest of
           [] -> typeFromIdentLoose firstIdent sp1
           _ -> do
@@ -2188,9 +2188,9 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
         let -- Collect all type identifiers greedily, validating arity at the end
             collectArgsLoop soFar = do
               mNext <- optional (try (do
-                arg <- identifier
+                arg <- identifierNotKeyword
                 ws
-                nextIdent <- lookAhead identifier
+                nextIdent <- lookAhead identifierNotKeyword
                 mNextResolved <- optional (try (resolveTypeCandidatePreferCtx nextIdent))
                 case mNextResolved of
                   Just (nextName, _) -> do
@@ -2206,7 +2206,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
         mTypeApp <- optional (try (do
           collected <- collectArgsLoop []
           guard (not (null collected))
-          (rawIdent, sp) <- withSpan identifier
+          (rawIdent, sp) <- withSpan identifierNotKeyword
           (name, cas) <- resolveTypeCandidatePreferCtx rawIdent
           requireInCtx name
           -- Validate arity: check if this type constructor accepts the right number of arguments
@@ -2233,7 +2233,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
         case mTypeApp of
           Just ty -> return ty
           Nothing -> do
-            (rawIdent, sp) <- withSpan identifier
+            (rawIdent, sp) <- withSpan identifierNotKeyword
             case rawIdent of
               (xs, xraw) | not (null xs) -> do
                 (baseName, cas) <- resolveTypeCandidatePreferCtx ([], xraw)
@@ -2276,9 +2276,9 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     -- | Parse a type name with a modifier prefix.
     parseModifiedType :: KipParser (Ty Ann) -- ^ Parsed type.
     parseModifiedType = do
-      (firstIdent, sp1) <- withSpan identifier
+      (firstIdent, sp1) <- withSpan identifierNotKeyword
       ws
-      (secondIdent, sp2) <- withSpan identifier
+      (secondIdent, sp2) <- withSpan identifierNotKeyword
       MkParserState{parserTyCons} <- getP
       let tyNames = map fst parserTyCons
           prefix = fst firstIdent ++ [snd firstIdent]
