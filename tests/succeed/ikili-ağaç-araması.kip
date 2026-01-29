@@ -8,13 +8,13 @@ olabilir.
 
 (bu tam-sayı ağacında) (şu tam-sayıyı) araması,
   bu boş-ağaçsa,
-    yanlış,
+    yanlış;
   bu-kökün sola sağın dalıysa,
     (şunla bu-kökün eşitliği) doğruysa,
-      doğru,
+      doğru;
     değilse,
       (şunun bu-kökten küçüklüğü) doğruysa,
-        (solda şunu araması),
+        (solda şunu araması);
       değilse,
         (sağda şunu aramasıdır).
 
@@ -26,5 +26,5 @@ sağ-sağ, 7'nin yaprağıdır.
 sağ-ağaç, 6'nın sağ-sola sağ-sağın dalıdır.
 ağaç, 4'ün sol-ağaca sağ-ağacının dalıdır.
 
-(ağaçta 5'i araması) doğruysa, "evet"'i yaz, yanlışsa, "hayır"'ı yaz.
-(ağaçta 8'i araması) doğruysa, "evet"'i yaz, yanlışsa, "hayır"'ı yaz.
+(ağaçta 5'i araması) doğruysa, "evet"'i yaz; yanlışsa, "hayır"'ı yaz.
+(ağaçta 8'i araması) doğruysa, "evet"'i yaz; yanlışsa, "hayır"'ı yaz.

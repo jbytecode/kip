@@ -7,7 +7,7 @@ olabilir.
 (* Bu hata vermelidir çünkü tam-sayılar yapıcılarla eşleştirilemez. *)
 (bu tam-sayıyı) denemek,
   bu sıfırsa,
-    1'i yazmaktır,
+    1'i yazmaktır;
   değilse,
     0'ı yazmaktır.
 

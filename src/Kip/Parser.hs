@@ -359,6 +359,10 @@ ws = L.space space1 empty empty <?> "boşluk"
 period :: KipParser () -- ^ No result.
 period = ws >> string "." >> ws
 
+-- | Parse a clause separator between match clauses.
+clauseSep :: KipParser ()
+clauseSep = lexeme (char ';') $> ()
+
 -- | Parse a lexeme with trailing whitespace.
 lexeme :: KipParser a -- ^ Token parser.
        -> KipParser a -- ^ Parsed token.
@@ -1371,8 +1375,8 @@ parseExpWithCtx' useCtx allowMatch =
     parseMoreClausesCont :: [Identifier] -- ^ Bound pattern names.
                          -> KipParser [Clause Ann] -- ^ Parsed clauses.
     parseMoreClausesCont argNames = do
-      mcomma <- optional (try (lexeme (char ',')))
-      case mcomma of
+      msep <- optional (try clauseSep)
+      case msep of
         Nothing -> return []
         Just _ -> do
           pat <- parsePatternCont False argNames
@@ -2027,7 +2031,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     parseClauses argNames = do
       c <- parseClause True argNames
       (period >> return [c]) <|> do
-        lexeme (char ',')
+        clauseSep
         (c :) <$> parseClausesRest argNames
     -- | Parse the remaining clauses after a comma.
     parseClausesRest :: [Identifier] -- ^ Function argument names.
@@ -2035,7 +2039,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     parseClausesRest argNames = do
       c <- parseClause False argNames
       (period >> return [c]) <|> do
-        lexeme (char ',')
+        clauseSep
         (c :) <$> parseClausesRest argNames
     -- | Parse a single clause.
     parseClause :: Bool -- ^ Whether to allow scrutinee expressions.
@@ -2483,8 +2487,8 @@ parseMatchExpr useCtx = do
                      -> [Identifier] -- ^ Pattern variable names from first clause.
                      -> KipParser [Clause Ann] -- ^ Parsed clauses.
     parseMoreClauses argNames _ = do
-      mcomma <- optional (try (lexeme (char ',')))
-      case mcomma of
+      msep <- optional (try clauseSep)
+      case msep of
         Nothing -> return []
         Just _ -> do
           patExp <- parseWildcardOrExp

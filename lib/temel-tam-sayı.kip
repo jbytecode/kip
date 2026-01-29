@@ -39,6 +39,6 @@ temeli yükle.
 
 (bu tam-sayının) (faktöriyel tam-sayısı),
   (bunun 0'dan küçük-eşitliği) doğruysa,
-    1,
+    1;
   değilse,
     ((bunla 1'in farkının) faktöriyeliyle) bunun çarpımıdır.

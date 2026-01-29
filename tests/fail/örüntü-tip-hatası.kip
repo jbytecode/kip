@@ -1,4 +1,4 @@
 
 (bu tam-sayıyla) dene,
-  bu boşsa, 0,
+  bu boşsa, 0;
   ilkin devama ekiyse, 1.

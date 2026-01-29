@@ -1,6 +1,6 @@
 (bu öğe listesinin) (f işleviyle) eşlemi,
   bu boşsa,
-    boş,
+    boş;
   ilkin devama ekiyse,
     (ilk f) (devamın f'yle eşlemine) ekidir.
 

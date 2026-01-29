@@ -1,14 +1,14 @@
 (bu tam-sayı listesinin) ilki,
   bu boşsa,
-    0,
+    0;
   başın devama ekiyse,
     baştır.
 
 (bu tam-sayı listesinin) ikincisi,
   bu boşsa,
-    0,
+    0;
   bunun boşa ekiyse,
-    0,
+    0;
   bunun (şunun devama ekine) ekiyse,
     şudur.
 

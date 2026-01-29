@@ -4,7 +4,7 @@
 (* Liste tersi testi. *)
 (bu tam-sayı listesini) bastırmak,
   bu boşsa,
-    durmaktır,
+    durmaktır;
   ilkin devama ekiyse,
     ilki yazıp,
     devamı bastırmaktır.

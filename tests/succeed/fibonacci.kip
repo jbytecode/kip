@@ -1,7 +1,7 @@
 (* İlk n Fibonacci sayısını yazdırır. *)
 (bu tam-sayıyı) (şu tam-sayıyı) (o tam-sayıyı) işlemek,
   (onla 0'ın eşitliği) doğruysa,
-    durmaktır,
+    durmaktır;
   yanlışsa,
     bunu yazıp,
     şunu (bunla şunun toplamını) (onla 1'in farkını) işlemektir.
@@ -11,7 +11,7 @@
   isim olarak okuyup,
   ((ismin tam-sayı-hali)
     yokluksa,
-      "Geçersiz sayı."yı yazmaktır,
+      "Geçersiz sayı."yı yazmaktır;
     n'nin varlığıysa,
       0'ı 1'i n'yi işlemektir).
 

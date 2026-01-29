@@ -5,8 +5,8 @@ ya da bir b'yle başarı
 olabilir.
 
 (bu tam-sayıyla doğruluğun sonucunun) değeri,
-  bu şunla hataysa, şu,
-  şunla başarıysa, (şu doğruysa, 1, yanlışsa, 0).
+  bu şunla hataysa, şu;
+  şunla başarıysa, (şu doğruysa, 1; yanlışsa, 0).
 
 ((5'le hatanın) değerini) yaz.
 ((doğruyla başarının) değerini) yaz.

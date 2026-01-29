@@ -6,6 +6,6 @@ nokta, 10'la 20 ikilisidir.
 (noktanın toplamını) yaz.
 
 (bu tam-sayıyla tam-sayı çiftinin) büyük-öğesi,
-  bu x'le y ikilisiyse, (x'in y'den büyüklüğü) doğruysa, x, yanlışsa, y'dir.
+  bu x'le y ikilisiyse, (x'in y'den büyüklüğü) doğruysa, x; yanlışsa, y'dir.
 
 (noktanın büyük-öğesini) yaz.

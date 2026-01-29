@@ -4,14 +4,14 @@
   ((cevabın tam-sayı-hali)
     yokluksa,
       "Geçersiz sayı, tekrar deneyin."'i yazıp,
-      gizliyi tahmin-etmektir,
+      gizliyi tahmin-etmektir;
     tahminin varlığıysa,
       ((tahminin gizliyle eşitliği) doğruysa,
-        "Tebrikler! Doğru tahmin!"'i yazmaktır,
+        "Tebrikler! Doğru tahmin!"'i yazmaktır;
       yanlışsa,
         ((tahminin gizliden küçüklüğü) doğruysa,
           "Daha büyük bir sayı deneyin."'i yazıp,
-          gizliyi tahmin-etmektir,
+          gizliyi tahmin-etmektir;
         yanlışsa,
           "Daha küçük bir sayı deneyin."'i yazıp,
           gizliyi tahmin-etmektir))).

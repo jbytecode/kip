@@ -8,13 +8,13 @@ bir, sıfırın ardılıdır.
 
 (bu doğal-sayıyla) (şu doğal-sayının) toplamı,
   bu sıfırsa,
-    şu,
+    şu;
   öncülün ardılıysa,
     (öncülle) (şunun ardılının) toplamıdır.
 
 (bu doğal-sayı listesinin) toplamı,
   bu boşsa,
-    sıfır,
+    sıfır;
   ilk öğenin devam öğe listesine ekiyse,
     (ilk öğeyle) ((devam öğe listesinin) toplamının) toplamıdır.
 
