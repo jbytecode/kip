@@ -378,8 +378,10 @@ renderTCError paramTyCons tyMods tcErr = do
           let header =
                 T.pack (prettyIdent ctor) <> " yapıcısı " <> expStr <> " tipindendir, ancak burada " <> actStr <> " bekleniyor"
           return header
-        NonExhaustivePattern sp ->
-          return ("Tip hatası: örüntü eksik." <> renderSpan (rcLang ctx) sp)
+        NonExhaustivePattern pats sp -> do
+          missing <- renderMissingPatterns LangTr pats
+          let header = "Tip hatası: örüntü eksik." <> renderSpan (rcLang ctx) sp
+          return (T.intercalate "\n" [header, missing])
     LangEn ->
       case tcErr of
         TC.Unknown ->
@@ -419,8 +421,10 @@ renderTCError paramTyCons tyMods tcErr = do
           let header =
                 T.pack (prettyIdent ctor) <> " constructor has type " <> expStr <> ", but " <> actStr <> " is expected here"
           return header
-        NonExhaustivePattern sp ->
-          return ("Type error: non-exhaustive pattern match." <> renderSpan (rcLang ctx) sp)
+        NonExhaustivePattern pats sp -> do
+          missing <- renderMissingPatterns LangEn pats
+          let header = "Type error: non-exhaustive pattern match." <> renderSpan (rcLang ctx) sp
+          return (T.intercalate "\n" [header, missing])
 
 -- | Render a type checker error with a source snippet.
 renderTCErrorWithSource :: [Identifier] -- ^ Type parameters for rendering.
@@ -447,8 +451,36 @@ tcErrSpan tcErr =
     NoMatchingOverload _ _ _ sp -> Just sp
     NoMatchingCtor _ _ _ sp -> Just sp
     PatternTypeMismatch _ _ _ sp -> Just sp
-    NonExhaustivePattern sp -> Just sp
+    NonExhaustivePattern _ sp -> Just sp
     TC.Unknown -> Nothing
+
+-- | Render missing patterns for error messages.
+renderMissingPatterns :: Lang -> [Pat Ann] -> RenderM Text
+renderMissingPatterns lang pats = do
+  patTexts <- mapM (renderPatText False) pats
+  let prefix =
+        case lang of
+          LangTr -> "Eksik örüntüler: "
+          LangEn -> "Missing patterns: "
+  return (prefix <> T.intercalate ", " patTexts)
+  where
+    renderPatText :: Bool -- ^ Whether this is an argument position.
+                  -> Pat Ann
+                  -> RenderM Text
+    renderPatText isArg pat = do
+      (cache, fsm) <- requireCacheFsm
+      let renderIdent cas ident = T.pack <$> liftIO (renderIdentWithCase cache fsm ident cas)
+      case pat of
+        PWildcard _ -> return "değilse"
+        PVar n ann -> renderIdent (annCase ann) n
+        PCtor ctor args -> do
+          argTexts <- mapM (renderPatText True) args
+          ctorTxt <- renderIdent (if null args then Nom else P3s) ctor
+          let txt = T.unwords (argTexts ++ [ctorTxt])
+          return $
+            if isArg && not (null args)
+              then "(" <> txt <> ")"
+              else txt
 
 -- | Render a caret snippet for a source span.
 renderSpanSnippet :: Text -- ^ Source input.

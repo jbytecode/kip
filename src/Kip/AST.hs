@@ -130,7 +130,7 @@ data Pat ann =
     PWildcard ann -- ^ Wildcard pattern with annotation.
   | PVar Identifier ann -- ^ Variable pattern (binds a name).
   | PCtor Identifier [Pat ann] -- ^ Constructor pattern with nested sub-patterns.
-  deriving (Show, Eq, Generic)
+  deriving (Show, Eq, Ord, Generic)
 
 -- | Functor instance for pattern annotations.
 instance Functor Pat where

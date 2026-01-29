@@ -156,8 +156,8 @@ data TCError =
  | NoMatchingOverload Identifier [Maybe (Ty Ann)] [(Identifier, [Arg Ann])] Span
  | NoMatchingCtor Identifier [Maybe (Ty Ann)] [Ty Ann] Span
  | PatternTypeMismatch Identifier (Ty Ann) (Ty Ann) Span  -- ctor, expected (ctor result), actual (scrutinee)
- | NonExhaustivePattern Span
- deriving (Show, Ord, Eq, Generic)
+ | NonExhaustivePattern [Pat Ann] Span
+  deriving (Show, Ord, Eq, Generic)
 
 -- | Binary instance for type checker errors.
 instance Binary TCError where
@@ -168,7 +168,7 @@ instance Binary TCError where
   put (NoMatchingOverload ident mty sigs sp) = B.put (4 :: Word8) >> B.put ident >> B.put mty >> B.put sigs >> B.put sp
   put (NoMatchingCtor ident mty tys sp) = B.put (5 :: Word8) >> B.put ident >> B.put mty >> B.put tys >> B.put sp
   put (PatternTypeMismatch ctor expTy actTy sp) = B.put (6 :: Word8) >> B.put ctor >> B.put expTy >> B.put actTy >> B.put sp
-  put (NonExhaustivePattern sp) = B.put (7 :: Word8) >> B.put sp
+  put (NonExhaustivePattern pats sp) = B.put (7 :: Word8) >> B.put pats >> B.put sp
 
   get = do
     tag <- B.get :: Get Word8
@@ -180,7 +180,7 @@ instance Binary TCError where
       4 -> NoMatchingOverload <$> B.get <*> B.get <*> B.get <*> B.get
       5 -> NoMatchingCtor <$> B.get <*> B.get <*> B.get <*> B.get
       6 -> PatternTypeMismatch <$> B.get <*> B.get <*> B.get <*> B.get
-      7 -> NonExhaustivePattern <$> B.get
+      7 -> NonExhaustivePattern <$> B.get <*> B.get
       _ -> fail "Invalid TCError tag"
 
 -- | Type checker monad stack.
@@ -856,9 +856,10 @@ checkExhaustivePatterns scrutTy clauses ann = do
       case mCtors of
         Nothing -> return ()
         Just _ -> do
-          exhaustive <- isExhaustive [scrutTy] (map (: []) pats)
-          unless exhaustive $
-            lift (throwE (NonExhaustivePattern (annSpan ann)))
+          missing <- missingPatternsForType scrutTy pats
+          case missing of
+            [] -> return ()
+            _ -> lift (throwE (NonExhaustivePattern missing (annSpan ann)))
   where
     isWildcardPat pat =
       case pat of
@@ -898,6 +899,210 @@ isExhaustive :: [Ty Ann] -- ^ Column types.
 isExhaustive tys matrix = do
   useful <- isUseful tys matrix (replicate (length tys) (PWildcard (mkAnn Nom NoSpan)))
   return (not useful)
+
+-- | Compute missing patterns for a single scrutinee type.
+missingPatternsForType :: Ty Ann -- ^ Scrutinee type.
+                       -> [Pat Ann] -- ^ Existing patterns.
+                       -> TCM [Pat Ann]
+missingPatternsForType scrutTy pats = do
+  witness <- missingWitness [scrutTy] (map (: []) pats)
+  case witness of
+    Nothing -> return []
+    Just [pat] -> do
+      pat' <- annotateMissingPattern scrutTy pat
+      return [pat']
+    Just _ -> return []
+
+-- | Find a witness pattern vector not covered by the matrix.
+missingWitness :: [Ty Ann] -- ^ Column types.
+               -> [[Pat Ann]] -- ^ Pattern matrix.
+               -> TCM (Maybe [Pat Ann])
+missingWitness [] matrix =
+  if null matrix then return (Just []) else return Nothing
+missingWitness (t:ts) matrix = do
+  mCtors <- ctorsForType t
+  case mCtors of
+    Nothing -> do
+      mw <- missingWitness ts (map tail matrix)
+      return (mw >>= \rest -> Just (PWildcard (mkAnn Nom NoSpan) : rest))
+    Just ctors -> do
+      let wildRows = filter (isWildcardHead . head) matrix
+          present = constructorsInColumn matrix
+          complete = constructorsComplete ctors present
+          missingCtor = find (\ctorInfo -> not (any (identMatchesCtor (ctorName ctorInfo)) present)) ctors
+      if not (null wildRows)
+        then do
+          mw <- missingWitness ts (defaultMatrix matrix)
+          return (mw >>= \rest -> Just (PWildcard (mkAnn Nom NoSpan) : rest))
+        else if not complete
+        then do
+          case missingCtor of
+            Just ctorInfo -> do
+              let argPats = replicate (length (ctorArgs ctorInfo)) (PWildcard (mkAnn Nom NoSpan))
+                  restPats = replicate (length ts) (PWildcard (mkAnn Nom NoSpan))
+              return (Just (PCtor (ctorName ctorInfo) argPats : restPats))
+            Nothing -> return Nothing
+        else do
+          mFromCtors <- firstJustM
+            [ do
+                let matrix' = specializeMatrix ctorInfo matrix
+                mw <- missingWitness (ctorArgs ctorInfo ++ ts) matrix'
+                return (mw >>= \w ->
+                  let (argPats, restPats) = splitAt (length (ctorArgs ctorInfo)) w
+                  in Just (PCtor (ctorName ctorInfo) argPats : restPats))
+            | ctorInfo <- ctors
+            ]
+          case mFromCtors of
+            Just _ -> return mFromCtors
+            Nothing ->
+              if null wildRows
+                then return Nothing
+                else do
+                  mw <- missingWitness ts (defaultMatrix matrix)
+                  return (mw >>= \rest -> Just (PWildcard (mkAnn Nom NoSpan) : rest))
+  where
+    isWildcardHead pat =
+      case pat of
+        PWildcard {} -> True
+        PVar {} -> True
+        _ -> False
+
+    constructorsInColumn = mapMaybe firstCtor
+    firstCtor row =
+      case row of
+        (PCtor name _ : _) -> Just name
+        _ -> Nothing
+
+    constructorsComplete ctors present =
+      all (\ctorInfo -> any (identMatchesCtor (ctorName ctorInfo)) present) ctors
+
+    defaultMatrix = map tail . filter (isWildcardHead . head)
+
+    specializeMatrix ctorInfo =
+      mapMaybe (specializeRow ctorInfo)
+    specializeRow ctorInfo row =
+      case row of
+        [] -> Nothing
+        (p:ps) ->
+          case p of
+            PCtor name subPats | identMatchesCtor (ctorName ctorInfo) name ->
+              Just (subPats ++ ps)
+            PWildcard {} ->
+              Just (replicate (length (ctorArgs ctorInfo)) (PWildcard (mkAnn Nom NoSpan)) ++ ps)
+            PVar {} ->
+              Just (replicate (length (ctorArgs ctorInfo)) (PWildcard (mkAnn Nom NoSpan)) ++ ps)
+            _ -> Nothing
+
+    identMatchesCtor left right =
+      identMatches left right || identMatchesPoss left right
+
+    identMatchesPoss (xs1, x1) (xs2, x2) =
+      (xs1 == xs2 || null xs1 || null xs2)
+      && not (null (roots x1 `intersect` roots x2))
+
+    roots txt =
+      nub (catMaybes [Just txt, dropTrailingVowel txt >>= dropTrailingSoftG])
+
+    dropTrailingVowel txt =
+      case T.unsnoc txt of
+        Just (pref, c)
+          | c `elem` ['i', 'ı', 'u', 'ü'] -> Just pref
+        _ -> Nothing
+
+    dropTrailingSoftG txt =
+      case T.unsnoc txt of
+        Just (pref, 'ğ') -> Just (pref <> T.pack "k")
+        _ -> Nothing
+
+    firstJustM [] = return Nothing
+    firstJustM (m:ms) = do
+      res <- m
+      case res of
+        Just _ -> return res
+        Nothing -> firstJustM ms
+
+-- | Replace wildcards in a missing pattern with fresh variables and cases.
+annotateMissingPattern :: Ty Ann -- ^ Expected type for the pattern.
+                       -> Pat Ann -- ^ Pattern with wildcards.
+                       -> TCM (Pat Ann)
+annotateMissingPattern scrutTy pat = do
+  (pat', _) <- go 0 scrutTy pat
+  return pat'
+  where
+    go :: Int -> Ty Ann -> Pat Ann -> TCM (Pat Ann, Int)
+    go idx ty p =
+      case p of
+        PWildcard _ -> do
+          let (name, idx') = freshIdent idx
+              ann = mkAnn (annCase (annTy ty)) NoSpan
+          return (PVar name ann, idx')
+        PVar n ann -> return (PVar n ann, idx)
+        PCtor ctor subPats -> do
+          mCtor <- ctorInfoFor ty ctor
+          case mCtor of
+            Nothing ->
+              if null subPats
+                then do
+                  let (name, idx') = freshIdent idx
+                      ann = mkAnn (annCase (annTy ty)) NoSpan
+                  return (PVar name ann, idx')
+                else return (PCtor ctor subPats, idx)
+            Just ctorInfo ->
+              if null (ctorArgs ctorInfo)
+                then do
+                  let ann = mkAnn (annCase (annTy ty)) NoSpan
+                  return (PVar ctor ann, idx)
+                else do
+                  let argTys = ctorArgs ctorInfo
+                      subPats' = take (length argTys) (subPats ++ repeat (PWildcard (mkAnn Nom NoSpan)))
+                  (subPatsAnn, idx') <- goList idx (zip subPats' argTys)
+                  return (PCtor ctor subPatsAnn, idx')
+
+    goList :: Int -> [(Pat Ann, Ty Ann)] -> TCM ([Pat Ann], Int)
+    goList idx [] = return ([], idx)
+    goList idx ((p, ty):rest) = do
+      (p', idx') <- go idx ty p
+      (rest', idx'') <- goList idx' rest
+      return (p' : rest', idx'')
+
+    ctorInfoFor :: Ty Ann -> Identifier -> TCM (Maybe CtorInfo)
+    ctorInfoFor ty ctorIdent = do
+      mCtors <- ctorsForType ty
+      case mCtors of
+        Nothing -> return Nothing
+        Just ctors -> return (find (\ctorInfo -> identMatchesCtor (ctorName ctorInfo) ctorIdent) ctors)
+
+    freshIdent :: Int -> (Identifier, Int)
+    freshIdent idx =
+      let letters = ['a'..'z']
+          base = letters !! (idx `mod` length letters)
+          suffix = idx `div` length letters
+          name =
+            if suffix == 0
+              then T.singleton base
+              else T.singleton base <> T.pack (show suffix)
+      in (([], name), idx + 1)
+
+    identMatchesCtor left right =
+      identMatches left right || identMatchesPoss left right
+
+    identMatchesPoss (xs1, x1) (xs2, x2) =
+      (xs1 == xs2 || null xs1 || null xs2)
+      && not (null (roots x1 `intersect` roots x2))
+
+    roots txt =
+      nub (catMaybes [Just txt, dropTrailingVowel txt >>= dropTrailingSoftG])
+
+    dropTrailingVowel txt =
+      case T.unsnoc txt of
+        Just (pref, c)
+          | c `elem` ['i', 'ı', 'u', 'ü'] -> Just pref
+        _ -> Nothing
+
+    dropTrailingSoftG txt =
+      case T.unsnoc txt of
+        Just (pref, 'ğ') -> Just (pref <> T.pack "k")
+        _ -> Nothing
 
 -- | Determine whether a pattern vector is useful (matches an uncovered case).
 isUseful :: [Ty Ann] -- ^ Column types.
