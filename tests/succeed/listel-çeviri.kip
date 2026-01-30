@@ -1,0 +1,15 @@
+(* Liste yazımı testi. *)
+(bu tam-sayı listesini) bastırmak,
+  bu boşsa,
+    durmaktır;
+  ilkin devama ekiyse,
+    ilki yazıp,
+    devamı bastırmaktır.
+
+(bu tam-sayı listesinin) ilki,
+  bu boşsa, 0;
+  başın devama ekiyse, baştır.
+
+[]'u bastır.
+[1, 2, 3]'ü bastır.
+[1, 2, 3]'ün ilki yaz.

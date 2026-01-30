@@ -1194,7 +1194,10 @@ typeMatchesAllowUnknown :: [(Identifier, Int)] -- ^ Type constructor arities.
 typeMatchesAllowUnknown tyCons mTy ty =
   case mTy of
     Nothing -> True
-    Just t -> tyEq tyCons t ty
+    Just t ->
+      tyEq tyCons t ty
+      || isJust (unifyTypes tyCons [ty] [t])
+      || isJust (unifyTypes tyCons [t] [ty])
 
 -- | Check if a type contains any type variables or undefined type identifiers.
 -- In Kip, undefined type identifiers are treated as implicitly quantified type variables.

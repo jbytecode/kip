@@ -694,7 +694,9 @@ estimateCandidates useCtx (ss, s) = do
       p3sForms <- downsCachedBatch p3sStems
       let stemMap = M.fromList (zip uniqueStems stemForms)
           p3sMap = M.fromList (zip p3sStems p3sForms)
-      candidates <- nub . concat <$> forM (zip morphAnalyses stems) (\(y, stem) ->
+      let hasCompoundP3sAcc =
+            any (\analysis -> "<p3s>" `T.isInfixOf` analysis && "<acc>" `T.isInfixOf` analysis) morphAnalyses
+      candidatesRaw <- concat <$> forM (zip morphAnalyses stems) (\(y, stem) ->
         case getPossibleCase y of
           Nothing -> return []
           Just (_, cas) -> do
@@ -714,7 +716,14 @@ estimateCandidates useCtx (ss, s) = do
                         [] -> [baseRoot]
                         xs -> xs ++ [baseRoot]
                 return [((ss, root), cas) | root <- nub roots])
-      let filtered = filter (\(ident, _) -> ident `elem` ctx) candidates
+      let candidatesDedup = nub candidatesRaw
+          candidates =
+            if not hasCompoundP3sAcc
+              then
+                let (p3s, rest) = partition (\(_, cas) -> cas == P3s) candidatesDedup
+                in if null p3s then candidatesDedup else p3s ++ rest
+              else candidatesDedup
+          filtered = filter (\(ident, _) -> ident `elem` ctx) candidates
       return (candidates, filtered)
     condCandidates :: Text -- ^ Surface form.
                    -> [(Identifier, Case)] -- ^ Candidate conditional forms.
@@ -1253,10 +1262,66 @@ parseExpWithCtx' useCtx allowMatch =
     atom :: KipParser (Exp Ann) -- ^ Parsed atomic expression.
     atom =
       (if allowMatch then try matchExpr else empty)
+      <|> try listLiteral
       <|> try stringLiteral
       <|> try numberLiteral
       <|> try var
       <|> parens (parseExpWithCtx' useCtx allowMatch)
+    -- | Parse a list literal like [1, 2, 3]'ü.
+    listLiteral :: KipParser (Exp Ann) -- ^ Parsed list literal expression.
+    listLiteral = do
+      ((elems, cas), sp) <- withSpan parseListLiteral
+      buildListLiteral elems cas sp
+      where
+        parseListLiteral :: KipParser ([Exp Ann], Case)
+        parseListLiteral = do
+          _ <- char '['
+          ws
+          elems <- sepBy (parseExpWithCtx' useCtx allowMatch) (lexeme (char ','))
+          ws
+          _ <- char ']'
+          mSuffix <- optional $ do
+            _ <- optional (char '\'')
+            takeWhile1P (Just "ek") isLetter
+          let cas = maybe Nom stringCaseFromSuffix mSuffix
+          return (elems, cas)
+        buildListLiteral :: [Exp Ann] -> Case -> Span -> KipParser (Exp Ann)
+        buildListLiteral elems cas sp = do
+          let mkCtorVar name ctorCase =
+                let ident = ([], name)
+                    ann = mkAnn ctorCase sp
+                in Var ann ident [(ident, ctorCase)]
+              setExpCasePrefer expCase expItem =
+                let updateAnn ann = setAnnCase ann expCase
+                in case expItem of
+                  Var ann name cands ->
+                    let filtered = filter ((== expCase) . snd) cands
+                        cands' =
+                          case filtered of
+                            [] ->
+                              case cands of
+                                (ident, _):_ -> (ident, expCase) : cands
+                                [] -> cands
+                            _ -> filtered
+                    in Var (updateAnn ann) name cands'
+                  App ann fn args -> App (updateAnn ann) fn args
+                  StrLit ann txt -> StrLit (updateAnn ann) txt
+                  IntLit ann n -> IntLit (updateAnn ann) n
+                  FloatLit ann n -> FloatLit (updateAnn ann) n
+                  Bind ann name body -> Bind (updateAnn ann) name body
+                  Seq ann a b -> Seq (updateAnn ann) a b
+                  Match ann scrut clauses -> Match (updateAnn ann) scrut clauses
+                  Let ann name body -> Let (updateAnn ann) name body
+              emptyNom = mkCtorVar (T.pack "boş") Nom
+              emptyDat = setExpCasePrefer Dat emptyNom
+              ekiVar = mkCtorVar (T.pack "eki") P3s
+              cons elemExp (tailNom, tailDat) =
+                let elemGen = setExpCasePrefer Gen elemExp
+                    consNom = App (mkAnn Nom sp) ekiVar [elemGen, tailDat]
+                    consDat = setExpCasePrefer Dat consNom
+                in (consNom, consDat)
+              (listNom, _) = foldr cons (emptyNom, emptyDat) elems
+          return (setExpCasePrefer cas listNom)
     -- | Parse application chains.
     app :: KipParser (Exp Ann) -- ^ Parsed application expression.
     app = do
