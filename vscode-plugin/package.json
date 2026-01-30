@@ -1,0 +1,83 @@
+{
+  "name": "kip",
+  "displayName": "Kip",
+  "description": "Kip language support with the kip-lsp language server.",
+  "version": "0.1.0",
+  "publisher": "kip",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:kip"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "kip",
+        "aliases": [
+          "Kip",
+          "kip"
+        ],
+        "extensions": [
+          ".kip"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kip",
+        "scopeName": "source.kip",
+        "path": "./syntaxes/kip.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Kip",
+      "properties": {
+        "kip.languageServerPath": {
+          "type": "string",
+          "default": "kip-lsp",
+          "description": "Path to the kip-lsp executable (must be on PATH or an absolute path)."
+        },
+        "kip.languageServerArgs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments passed to kip-lsp."
+        },
+        "kip.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace LSP communication to the Kip output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "package": "vsce package",
+    "lint": "eslint src --ext .ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/vscode": "^1.84.0",
+    "typescript": "^5.4.5",
+    "vsce": "^2.15.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}
