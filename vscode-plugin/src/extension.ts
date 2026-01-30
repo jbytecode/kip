@@ -4,6 +4,7 @@ import {
   LanguageClientOptions,
   ServerOptions,
   TransportKind,
+  Trace,
 } from "vscode-languageclient/node";
 
 let client: LanguageClient | undefined;
@@ -29,8 +30,30 @@ function resolveTrace(): "off" | "messages" | "verbose" {
   return "off";
 }
 
+function toClientTrace(trace: "off" | "messages" | "verbose"): Trace {
+  switch (trace) {
+    case "messages":
+      return Trace.Messages;
+    case "verbose":
+      return Trace.Verbose;
+    case "off":
+    default:
+      return Trace.Off;
+  }
+}
+
+function applyTraceSetting(target: LanguageClient, trace: "off" | "messages" | "verbose"): void {
+  const setter = (target as unknown as { setTrace?: (value: Trace) => void }).setTrace;
+  if (setter) {
+    setter(toClientTrace(trace));
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel("Kip");
+  outputChannel.appendLine("Kip extension activated.");
+  outputChannel.appendLine(`Workspace: ${vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath).join(", ") ?? "<none>"}`);
+  console.log("Kip extension activated.");
 
   const serverCommand = resolveServerPath();
   const serverArgs = resolveServerArgs();
@@ -64,10 +87,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     clientOptions
   );
 
-  client.trace = resolveTrace();
+  applyTraceSetting(client, resolveTrace());
 
   context.subscriptions.push(outputChannel);
-  context.subscriptions.push(client.start());
+  context.subscriptions.push(client);
+  void client.start();
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
@@ -114,7 +138,7 @@ async function restartClient(): Promise<void> {
     clientOptions
   );
 
-  client.trace = newTrace;
+  applyTraceSetting(client, newTrace);
   void client.start();
 }
 

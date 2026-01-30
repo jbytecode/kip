@@ -100,7 +100,10 @@ lspOptions = defaultOptions
 
 handlers :: Handlers (LspM Config)
 handlers = mconcat
-  [ notificationHandler SMethod_TextDocumentDidOpen onDidOpen
+  [ notificationHandler SMethod_Initialized onInitialized
+  , notificationHandler SMethod_SetTrace onSetTrace
+  , notificationHandler SMethod_WorkspaceDidChangeWatchedFiles onDidChangeWatchedFiles
+  , notificationHandler SMethod_TextDocumentDidOpen onDidOpen
   , notificationHandler SMethod_TextDocumentDidChange onDidChange
   , notificationHandler SMethod_TextDocumentDidSave onDidSave
   , requestHandler SMethod_TextDocumentHover onHover
@@ -108,6 +111,15 @@ handlers = mconcat
   , requestHandler SMethod_TextDocumentCompletion onCompletion
   , requestHandler SMethod_TextDocumentFormatting onFormatting
   ]
+
+onInitialized :: TNotificationMessage 'Method_Initialized -> LspM Config ()
+onInitialized _ = return ()
+
+onSetTrace :: TNotificationMessage 'Method_SetTrace -> LspM Config ()
+onSetTrace _ = return ()
+
+onDidChangeWatchedFiles :: TNotificationMessage 'Method_WorkspaceDidChangeWatchedFiles -> LspM Config ()
+onDidChangeWatchedFiles _ = return ()
 
 withState :: (LspState -> IO (LspState, a)) -> LspM Config a
 withState f = do

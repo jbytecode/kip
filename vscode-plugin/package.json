@@ -12,7 +12,9 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:kip"
+    "onLanguage:kip",
+    "onStartupFinished",
+    "*"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -29,6 +31,18 @@
         "configuration": "./language-configuration.json"
       }
     ],
+    "configurationDefaults": {
+      "files.associations": {
+        "*.kip": "kip"
+      },
+      "[kip]": {
+        "editor.unicodeHighlight.ambiguousCharacters": false,
+        "editor.unicodeHighlight.allowedCharacters": {
+          "ı": true,
+          "İ": true
+        }
+      }
+    },
     "grammars": [
       {
         "language": "kip",
