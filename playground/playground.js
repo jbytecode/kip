@@ -214,7 +214,7 @@ function highlightJs(text) {
 }
 
 function highlightNonString(text) {
-  const tokenPattern = /\d+(?:'?\p{L}+)?|\p{L}+(?:-\p{L}+)*|[(),.]/gu;
+  const tokenPattern = /\d+(?:'?\p{L}+)?|\p{L}+(?:'\p{L}+)?(?:-\p{L}+)*|[(),.]/gu;
   const tokens = [];
   let match;
 
