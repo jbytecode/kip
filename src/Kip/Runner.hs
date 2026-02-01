@@ -32,7 +32,7 @@ module Kip.Runner
   , resolveModulePath
   , resolveBuildTargets
   , listKipFilesRecursive
-  , collectNonGerundRefs
+  , collectNonInfinitiveRefs
     -- * Utilities
   , foldM'
   , mapParseErrorBundle
@@ -536,7 +536,7 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
                   stmts = cachedStmts cached
                   paramTyCons = [name | (name, arity) <- parserTyCons pst', arity > 0]
                   source = ""
-                  primRefs = collectNonGerundRefs stmts
+                  primRefs = collectNonInfinitiveRefs stmts
               let defSpansRaw = defSpansFromStmts stmts (parserDefSpans pst')
                   sigSpans = funcSigSpansFromStmts stmts (parserDefSpans pst')
               tcStWithDefs <- liftIO $ runTCM (recordDefLocations absPath defSpansRaw >> recordFuncSigLocations absPath sigSpans) tcSt >>= \case
@@ -553,7 +553,7 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
             Right (stmts, pst') -> do
               let paramTyCons = [name | (name, arity) <- parserTyCons pst', arity > 0]
                   source = input
-                  primRefs = collectNonGerundRefs stmts
+                  primRefs = collectNonInfinitiveRefs stmts
               liftIO (runTCM (registerForwardDecls stmts) tcSt) >>= \case
                 Left tcErr -> do
                   msg <- renderMsg (MsgTCError tcErr (Just source) paramTyCons (parserTyMods pst'))
@@ -679,9 +679,9 @@ runStmtCollect showDefn showLoad buildOnly moduleDirs currentPath paramTyCons ty
                   liftIO (die (T.unpack msg))
                 Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded, typedAcc ++ [stmt'])
 
--- | Collect non-gerund primitive references from statements.
-collectNonGerundRefs :: [Stmt Ann] -> [Identifier]
-collectNonGerundRefs stmts =
+-- | Collect non-infinitive primitive references from statements.
+collectNonInfinitiveRefs :: [Stmt Ann] -> [Identifier]
+collectNonInfinitiveRefs stmts =
   nub (concatMap (stmtRefs []) stmts)
   where
     stmtRefs :: [Identifier] -> Stmt Ann -> [Identifier]

@@ -458,22 +458,22 @@ loadCachedDoc st uri text =
 typecheckStmts :: LspState -> Text -> TCState -> [Stmt Ann] -> IO (TCState, [Diagnostic])
 typecheckStmts st source tcSt stmts = do
   -- NOTE: The LSP server should stay useful even when a file violates
-  -- effect restrictions (e.g. calling a gerund function from a pure
+  -- effect restrictions (e.g. calling an infinitive function from a pure
   -- context). For editor features like "go to definition" we prefer
   -- a best-effort typed state over early failure. We therefore
-  -- *continuously* clear the gerund table during LSP-only typechecking
+  -- *continuously* clear the infinitive table during LSP-only typechecking
   -- so `rejectReadEffect` never aborts the pass and we can still collect
   -- resolved symbols and overload information.
-  let tcStLsp = tcSt { tcGerunds = [] }
+  let tcStLsp = tcSt { tcInfinitives = [] }
   let go acc stt =
         case acc of
           Left diags -> return (Left diags)
           Right current ->
             do
-              -- Reset gerunds before each statement to avoid effect
+              -- Reset infinitives before each statement to avoid effect
               -- rejection inside that statement (previous definitions
-              -- may have populated tcGerunds).
-              let currentLsp = current { tcGerunds = [] }
+              -- may have populated tcInfinitives).
+              let currentLsp = current { tcInfinitives = [] }
               res <- runTCM (tcStmt stt) currentLsp
               case res of
                 Left tcErr -> do
@@ -482,7 +482,7 @@ typecheckStmts st source tcSt stmts = do
                 Right (_, next) ->
                   -- Clear again after the statement so later statements
                   -- also run without effect rejections.
-                  return (Right next { tcGerunds = [] })
+                  return (Right next { tcInfinitives = [] })
   res <- foldl' (\ioAcc stt -> ioAcc >>= \acc -> go acc stt) (return (Right tcStLsp)) stmts
   case res of
     Left diags -> return (tcStLsp, diags)
@@ -675,7 +675,7 @@ collectAllRelatedIdents initial stmts defSpans =
 -- Two identifiers share a common root if:
 -- 1. They share a common prefix of at least 5 characters, OR
 -- 2. One is a prefix of the other (for base forms like "bastır" and "bastırmak"), OR
--- 3. They share 4+ chars prefix and lengths differ by at most 4 (for gerund variants)
+-- 3. They share 4+ chars prefix and lengths differ by at most 4 (for infinitive variants)
 shareCommonRoot :: Identifier -> Set.Set Identifier -> Bool
 shareCommonRoot (ns1, name1) identSet =
   let minPrefixLen = 5

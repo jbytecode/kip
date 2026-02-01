@@ -652,9 +652,9 @@ instance Render CompilerMsg where
         case msg of
           MsgTCError tcErr mSource paramTyCons tyMods ->
             render (RenderTCError tcErr mSource paramTyCons tyMods)
-          MsgFuncAdded name args isGerund paramTyCons tyMods -> do
+          MsgFuncAdded name args isInfinitive paramTyCons tyMods -> do
             (cache, fsm) <- requireCacheFsm
-            (sigArgs, sigName) <- liftIO (renderFunctionSignatureParts cache fsm paramTyCons tyMods isGerund name args)
+            (sigArgs, sigName) <- liftIO (renderFunctionSignatureParts cache fsm paramTyCons tyMods isInfinitive name args)
             let argStrs =
                   [ T.concat ["(", T.pack argName, " ", colorizeTyParts (rcUseColor ctx) tyParts, ")"]
                   | (argName, tyParts) <- sigArgs
@@ -665,9 +665,9 @@ instance Render CompilerMsg where
                     LangTr -> " tanımlandı."
                     LangEn -> " defined."
             return (renderDefnLine (rcUseColor ctx) (base <> suffix))
-          MsgFuncLoaded name args isGerund paramTyCons tyMods -> do
+          MsgFuncLoaded name args isInfinitive paramTyCons tyMods -> do
             (cache, fsm) <- requireCacheFsm
-            (sigArgs, sigName) <- liftIO (renderFunctionSignatureParts cache fsm paramTyCons tyMods isGerund name args)
+            (sigArgs, sigName) <- liftIO (renderFunctionSignatureParts cache fsm paramTyCons tyMods isInfinitive name args)
             let argStrs =
                   [ T.concat ["(", T.pack argName, " ", colorizeTyParts (rcUseColor ctx) tyParts, ")"]
                   | (argName, tyParts) <- sigArgs
@@ -678,9 +678,9 @@ instance Render CompilerMsg where
                     LangTr -> " yüklendi."
                     LangEn -> " loaded."
             return (renderDefnLine (rcUseColor ctx) (base <> suffix))
-          MsgPrimFuncAdded name args isGerund paramTyCons tyMods -> do
+          MsgPrimFuncAdded name args isInfinitive paramTyCons tyMods -> do
             (cache, fsm) <- requireCacheFsm
-            (sigArgs, sigName) <- liftIO (renderFunctionSignatureParts cache fsm paramTyCons tyMods isGerund name args)
+            (sigArgs, sigName) <- liftIO (renderFunctionSignatureParts cache fsm paramTyCons tyMods isInfinitive name args)
             let argStrs =
                   [ T.concat ["(", T.pack argName, " ", colorizeTyParts (rcUseColor ctx) tyParts, ")"]
                   | (argName, tyParts) <- sigArgs
@@ -981,10 +981,10 @@ main = do
                       (cache, fsm) <- runApp requireCacheFsm
                       let sigs' = reverse sigs
                           sigs'' = nubBy (\(n1, a1) (n2, a2) -> n1 == n2 && a1 == a2) sigs'
-                          isGerund = isJust (gerundRoot varName)
+                          isInfinitive = isJust (infinitiveRoot varName)
                       forM_ sigs'' $ \(name, args) -> do
                         let mRet = lookup (name, map snd args) (tcFuncSigRets (replTCState rs))
-                        line <- liftIO (renderReplSig ctx cache fsm paramTyCons (replTyMods rs) isGerund varName name args mRet)
+                        line <- liftIO (renderReplSig ctx cache fsm paramTyCons (replTyMods rs) isInfinitive varName name args mRet)
                         lift (outputStrLn (T.unpack line))
                       loop rs
                 _ -> inferExprType ctx paramTyCons parsed expr
@@ -1097,20 +1097,20 @@ main = do
                       -> FSM -- ^ Morphology FSM.
                       -> [Identifier] -- ^ Type parameters for rendering.
                       -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
-                      -> Bool -- ^ Whether the function is a gerund.
+                      -> Bool -- ^ Whether the function is an infinitive.
                       -> Identifier -- ^ Input name (raw).
                       -> Identifier -- ^ Canonical function name.
                       -> [Arg Ann] -- ^ Argument types.
                       -> Maybe (Ty Ann) -- ^ Optional return type.
                       -> IO Text -- ^ Rendered signature.
-        renderReplSig ctx cache fsm paramTyCons tyMods isGerund inputName name args mRet = do
+        renderReplSig ctx cache fsm paramTyCons tyMods isInfinitive inputName name args mRet = do
           argParts <- mapM (renderArgParts cache fsm paramTyCons tyMods) args
           let argStrs =
                 [ T.concat ["(", T.pack argName, " ", colorizeTyParts (rcUseColor ctx) tyParts, ")"]
                 | (argName, tyParts) <- argParts
                 ]
           nameStr <-
-            if isGerund
+            if isInfinitive
               then return (prettyIdent inputName)
               else renderIdentWithCase cache fsm name Nom
           retPart <-
@@ -1177,12 +1177,12 @@ main = do
           case stmt of
             Defn name _ _ ->
               emitMsgTCtx (MsgDefnAdded name)
-            Function name args retTy _ isGerund ->
+            Function name args retTy _ isInfinitive ->
               if isExplicitRetTy retTy
-                then emitMsgTCtx (MsgFuncLoaded name args isGerund paramTyCons tyMods)
-                else emitMsgTCtx (MsgFuncAdded name args isGerund paramTyCons tyMods)
-            PrimFunc name args _ isGerund ->
-              emitMsgTCtx (MsgPrimFuncAdded name args isGerund paramTyCons tyMods)
+                then emitMsgTCtx (MsgFuncLoaded name args isInfinitive paramTyCons tyMods)
+                else emitMsgTCtx (MsgFuncAdded name args isInfinitive paramTyCons tyMods)
+            PrimFunc name args _ isInfinitive ->
+              emitMsgTCtx (MsgPrimFuncAdded name args isInfinitive paramTyCons tyMods)
             NewType name _ _ ->
               emitMsgTCtx (MsgTypeAdded name)
             PrimType name ->
@@ -1333,7 +1333,7 @@ main = do
                       stmts = cachedStmts cached
                       paramTyCons = [name | (name, arity) <- parserTyCons pst', arity > 0]
                       source = ""
-                      primRefs = collectNonGerundRefs stmts
+                      primRefs = collectNonInfinitiveRefs stmts
                   foldM' (runStmt showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) (pst', tcSt', evalSt', loaded') stmts
             Nothing -> do
               input <- liftIO (TIO.readFile path)
@@ -1345,7 +1345,7 @@ main = do
                 Right (stmts, pst') -> do
                   let paramTyCons = [name | (name, arity) <- parserTyCons pst', arity > 0]
                       source = input
-                      primRefs = collectNonGerundRefs stmts
+                      primRefs = collectNonInfinitiveRefs stmts
                   -- Pre-register forward declarations for all functions and types
                   liftIO (runTCM (registerForwardDecls stmts) tcSt) >>= \case
                     Left tcErr -> do
@@ -1404,7 +1404,7 @@ main = do
             -> FilePath -- ^ Current file path.
             -> [Identifier] -- ^ Type parameters for rendering.
             -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
-            -> [Identifier] -- ^ Non-gerund primitive refs.
+            -> [Identifier] -- ^ Non-infinitive primitive refs.
             -> Text -- ^ Source input.
             -> (ParserState, TCState, EvalState, Set FilePath) -- ^ Current states.
             -> Stmt Ann -- ^ Statement to run.
@@ -1433,13 +1433,13 @@ main = do
               when showDefn $
                 case stmt' of
                   Defn name _ _ -> emitMsgIOCtx (MsgDefnAdded name)
-                  Function name args retTy _ isGerund ->
+                  Function name args retTy _ isInfinitive ->
                     if isExplicitRetTy retTy
-                      then emitMsgIOCtx (MsgFuncLoaded name args isGerund paramTyCons tyMods)
-                      else emitMsgIOCtx (MsgFuncAdded name args isGerund paramTyCons tyMods)
-                  PrimFunc name args _ isGerund -> do
+                      then emitMsgIOCtx (MsgFuncLoaded name args isInfinitive paramTyCons tyMods)
+                      else emitMsgIOCtx (MsgFuncAdded name args isInfinitive paramTyCons tyMods)
+                  PrimFunc name args _ isInfinitive -> do
                     when (name `elem` primRefs || isWritePrim name) $
-                      emitMsgIOCtx (MsgPrimFuncAdded name args isGerund paramTyCons tyMods)
+                      emitMsgIOCtx (MsgPrimFuncAdded name args isInfinitive paramTyCons tyMods)
                   NewType name _ _ -> emitMsgIOCtx (MsgTypeAdded name)
                   PrimType name -> emitMsgIOCtx (MsgPrimTypeAdded name)
                   _ -> return ()
@@ -1468,7 +1468,7 @@ main = do
                    -> FilePath -- ^ Current file path.
                    -> [Identifier] -- ^ Type parameters for rendering.
                    -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
-                   -> [Identifier] -- ^ Non-gerund primitive refs.
+                   -> [Identifier] -- ^ Non-infinitive primitive refs.
                    -> Text -- ^ Source input.
                    -> (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann]) -- ^ Current states.
                    -> Stmt Ann -- ^ Statement to run.
@@ -1497,13 +1497,13 @@ main = do
               when showDefn $
                 case stmt' of
                   Defn name _ _ -> emitMsgIOCtx (MsgDefnAdded name)
-                  Function name args retTy _ isGerund ->
+                  Function name args retTy _ isInfinitive ->
                     if isExplicitRetTy retTy
-                      then emitMsgIOCtx (MsgFuncLoaded name args isGerund paramTyCons tyMods)
-                      else emitMsgIOCtx (MsgFuncAdded name args isGerund paramTyCons tyMods)
-                  PrimFunc name args _ isGerund -> do
+                      then emitMsgIOCtx (MsgFuncLoaded name args isInfinitive paramTyCons tyMods)
+                      else emitMsgIOCtx (MsgFuncAdded name args isInfinitive paramTyCons tyMods)
+                  PrimFunc name args _ isInfinitive -> do
                     when (name `elem` primRefs || isWritePrim name) $
-                      emitMsgIOCtx (MsgPrimFuncAdded name args isGerund paramTyCons tyMods)
+                      emitMsgIOCtx (MsgPrimFuncAdded name args isInfinitive paramTyCons tyMods)
                   NewType name _ _ -> emitMsgIOCtx (MsgTypeAdded name)
                   PrimType name -> emitMsgIOCtx (MsgPrimTypeAdded name)
                   _ -> return ()
@@ -1524,10 +1524,10 @@ main = do
                       liftIO (die (T.unpack msg))
                     Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded, typedAcc ++ [stmt'])
 
-    -- | Collect non-gerund primitive references from statements.
-    collectNonGerundRefs :: [Stmt Ann] -- ^ Statements to inspect.
+    -- | Collect non-infinitive primitive references from statements.
+    collectNonInfinitiveRefs :: [Stmt Ann] -- ^ Statements to inspect.
                          -> [Identifier] -- ^ Referenced identifiers.
-    collectNonGerundRefs stmts =
+    collectNonInfinitiveRefs stmts =
       nub (concatMap (stmtRefs []) stmts)
       where
         -- | Collect references from a statement.

@@ -656,16 +656,16 @@ renderFunctionSignatureParts :: RenderCache -- ^ Render cache.
                              -> FSM -- ^ Morphology FSM.
                              -> [Identifier] -- ^ Type parameters to render with P3s.
                              -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
-                             -> Bool -- ^ Whether the function is a gerund.
+                             -> Bool -- ^ Whether the function is an infinitive.
                              -> Identifier -- ^ Function name.
                              -> [Arg Ann] -- ^ Argument types.
                              -> IO ([(String, [(String, Bool)])], String) -- ^ Rendered parts and name.
-renderFunctionSignatureParts cache fsm paramTyCons tyMods isGerund name args = do
+renderFunctionSignatureParts cache fsm paramTyCons tyMods isInfinitive name args = do
   let args' = normalizeSigArgs args
   argsParts <- mapM (renderArgParts cache fsm paramTyCons tyMods) args'
   nameStr <-
-    if isGerund
-      then renderGerundName cache fsm name
+    if isInfinitive
+      then renderInfinitiveName cache fsm name
       else renderIdentWithCase cache fsm name (if null args then Nom else P3s)
   return (argsParts, nameStr)
 
@@ -706,24 +706,24 @@ normalizeSigArgs args =
         Arr ann d i -> Arr (setAnnCase ann Gen) (forceGen d) (forceGen i)
         TyApp ann ctor args -> TyApp (setAnnCase ann Gen) ctor args
 
--- | Render a function name in its gerund form.
-renderGerundName :: RenderCache -- ^ Render cache.
+-- | Render a function name in its infinitive form.
+renderInfinitiveName :: RenderCache -- ^ Render cache.
                  -> FSM -- ^ Morphology FSM.
                  -> Identifier -- ^ Function identifier.
-                 -> IO String -- ^ Rendered gerund name.
-renderGerundName cache fsm (xs, x) = do
+                 -> IO String -- ^ Rendered infinitive name.
+renderInfinitiveName cache fsm (xs, x) = do
   let tagged = T.pack (T.unpack x ++ "<V><vn:inf><N>")
   forms <- map T.unpack <$> downsCached cache fsm tagged
   let base = T.unpack x
       root = case pickDownForm forms of
         Just f | '\'' `notElem` f && base `isPrefixOf` f -> f
-        _ -> fallbackGerund base
+        _ -> fallbackInfinitive base
   return (T.unpack (T.intercalate (T.pack "-") (xs ++ [T.pack root])))
 
--- | Fallback gerund formation without morphology.
-fallbackGerund :: String -- ^ Base verb stem.
-               -> String -- ^ Gerund form.
-fallbackGerund base =
+-- | Fallback infinitive formation without morphology.
+fallbackInfinitive :: String -- ^ Base verb stem.
+               -> String -- ^ Infinitive form.
+fallbackInfinitive base =
   base ++ if isFrontVowel (lastVowel base) then "mek" else "mak"
 
 -- | Check if a vowel is front (e,i,o,u variants).

@@ -497,7 +497,7 @@ and grammatical cases (e.g., @[("kitap", Abl), ("kitaplar", Abl)]@).
 4. __Context filtering__: If @useCtx@ is true, prefer candidates that are in @parserCtx@.
 
 5. __Special cases__:
-   * IP converb roots (gerunds ending in -ip/-ıp/-up/-üp)
+   * IP converb roots (infinitives ending in -ip/-ıp/-up/-üp)
    * Possessive forms
    * Conditional forms
 
@@ -891,7 +891,7 @@ resolveCandidate useCtx ident = do
             let (mods, _) = ident
             in Just (mods, stripped)
           Nothing -> Nothing
-      mRoot = gerundRoot ident <|> (copulaStripped >>= gerundRoot)
+      mRoot = infinitiveRoot ident <|> (copulaStripped >>= infinitiveRoot)
   case mRoot of
     Just root ->
       case find (\(cand, _) -> cand == root) candidates of
@@ -1082,10 +1082,10 @@ preferInflected candidates =
     [] -> candidates
     inflected -> inflected
 
--- | Extract a gerund root from a verb identifier if present.
-gerundRoot :: Identifier -- ^ Surface identifier.
-           -> Maybe Identifier -- ^ Root without gerund suffix.
-gerundRoot (xs, x)
+-- | Extract an infinitive root from a verb identifier if present.
+infinitiveRoot :: Identifier -- ^ Surface identifier.
+           -> Maybe Identifier -- ^ Root without infinitive suffix.
+infinitiveRoot (xs, x)
   | T.isSuffixOf "mak" x = Just (xs, T.dropEnd 3 x)
   | T.isSuffixOf "mek" x = Just (xs, T.dropEnd 3 x)
   | otherwise = Nothing
@@ -2124,10 +2124,10 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     func = do
       args <- many (try (lexeme (parens parseArg) <* notFollowedBy (lexeme (char ','))))
       (rawName, nameSpan, mRetTy) <- parseFuncHeader
-      let isGerund = isJust (gerundRoot rawName)
-          baseName = fromMaybe rawName (gerundRoot rawName)
+      let isInfinitive = isJust (infinitiveRoot rawName)
+          baseName = fromMaybe rawName (infinitiveRoot rawName)
       (fname, _) <-
-        if isGerund
+        if isInfinitive
           then return (baseName, Nom)
           else do
             basePoss <- normalizePossessive baseName
@@ -2149,7 +2149,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                         return (cand, Nom)
       recordDefSpan fname nameSpan
       lexeme (char ',')
-      let isDefnCandidate = null args && not isGerund && isNothing mRetTy
+      let isDefnCandidate = null args && not isInfinitive && isNothing mRetTy
       if isDefnCandidate
         then do
           clauses <- parseBodyOnly []
@@ -2168,7 +2168,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
             Just _ -> do
               st' <- getP
               putP (st' {parserCtx = fname : parserCtx st})
-              return (PrimFunc fname args retTy isGerund)
+              return (PrimFunc fname args retTy isInfinitive)
             Nothing -> do
               isBindStart <- option False (try bindStartLookahead)
               clauses <-
@@ -2177,7 +2177,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                   else try (parseBodyOnly argNames) <|> parseClauses argNames
               st' <- getP
               putP (st' {parserCtx = fname : parserCtx st})
-              return (Function fname args retTy clauses isGerund)
+              return (Function fname args retTy clauses isInfinitive)
     -- | Parse function header with optional return type.
     parseFuncHeader :: KipParser (Identifier, Span, Maybe (Ty Ann)) -- ^ Function name, span, and optional return type.
     parseFuncHeader = do

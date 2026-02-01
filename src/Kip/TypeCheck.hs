@@ -146,7 +146,7 @@ data TCState =
     , tcVals :: [(Identifier, Exp Ann)] -- ^ Value bindings for inlining.
     , tcCtors :: [(Identifier, ([Ty Ann], Ty Ann))] -- ^ Constructor signatures.
     , tcTyCons :: [(Identifier, Int)] -- ^ Type constructor arities.
-    , tcGerunds :: [Identifier] -- ^ Gerund (effectful) functions.
+    , tcInfinitives :: [Identifier] -- ^ Infinitive (effectful) functions.
     , tcResolvedNames :: [(Span, Identifier)] -- ^ Resolved variable names by span.
     , tcResolvedSigs :: [(Span, (Identifier, [Ty Ann]))] -- ^ Resolved function signatures by span.
     , tcDefLocations :: Map.Map Identifier (FilePath, Span) -- ^ Definition locations by identifier.
@@ -165,7 +165,7 @@ instance Binary TCState where
     B.put tcVals
     B.put tcCtors
     B.put tcTyCons
-    B.put tcGerunds
+    B.put tcInfinitives
     B.put tcResolvedNames
     B.put tcResolvedSigs
     B.put tcDefLocations
@@ -426,13 +426,13 @@ tcExp1With allowEffect e =
             Nothing -> lift (throwE (PatternTypeMismatch ([], T.pack "ascribe") ascType expTy (annSpan annExp)))
         Nothing -> return (Ascribe annExp ascType exp')
 
--- | Reject pure uses of effectful read primitives and gerund functions.
+-- | Reject pure uses of effectful read primitives and infinitive functions.
 rejectReadEffect :: Ann -- ^ Expression annotation.
                  -> Identifier -- ^ Identifier being checked.
                  -> TCM () -- ^ No result.
 rejectReadEffect ann ident = do
-  MkTCState{tcGerunds} <- get
-  when (ident == ([], T.pack "oku") || ident `elem` tcGerunds) $
+  MkTCState{tcInfinitives} <- get
+  when (ident == ([], T.pack "oku") || ident `elem` tcInfinitives) $
     lift (throwE (NoType (annSpan ann)))
 
 -- | Apply a grammatical case to a value expression.
@@ -484,9 +484,9 @@ resolveVar annExp originalName mArity candidates = do
       case scoped of
         [] -> do
           -- NOTE: We may have candidates in scope that fail the case/arity
-          -- filtering, but the surface form could still be a copula/gerund
+          -- filtering, but the surface form could still be a copula/infinitive
           -- variant of a known name (e.g. "yazmaktır" -> "yazmak").
-          -- Try the copula/gerund fallback *again* here so we don't
+          -- Try the copula/infinitive fallback *again* here so we don't
           -- incorrectly reject a valid reference and lose overload info.
           case fallbackCopulaIdent tcCtx originalName of
             Just ident ->
@@ -505,11 +505,11 @@ fallbackCopulaIdent :: [Identifier] -- ^ Context identifiers.
 fallbackCopulaIdent ctx (mods, word) = do
   stripped <- stripCopulaSuffix word
   let baseRoots = catMaybes [Just stripped, dropTrailingVowel stripped >>= dropTrailingSoftG]
-      gerundRoots = catMaybes
-        [ stripGerundSuffix stripped
-        , stripGerundSuffix stripped >>= dropTrailingVowel >>= dropTrailingSoftG
+      infinitiveRoots = catMaybes
+        [ stripInfinitiveSuffix stripped
+        , stripInfinitiveSuffix stripped >>= dropTrailingVowel >>= dropTrailingSoftG
         ]
-      roots = nub (baseRoots ++ gerundRoots)
+      roots = nub (baseRoots ++ infinitiveRoots)
   find (`elem` ctx) [(mods, root) | root <- roots]
   where
     -- | Strip common copula suffixes from a surface word.
@@ -526,10 +526,10 @@ fallbackCopulaIdent ctx (mods, word) = do
              in if T.length txt > len
                  then Just (T.take (T.length txt - len) txt)
                  else Nothing
-    -- | Strip gerund suffixes from a surface word.
-    stripGerundSuffix :: T.Text -- ^ Surface word.
-                      -> Maybe T.Text -- ^ Stripped gerund root.
-    stripGerundSuffix txt
+    -- | Strip infinitive suffixes from a surface word.
+    stripInfinitiveSuffix :: T.Text -- ^ Surface word.
+                      -> Maybe T.Text -- ^ Stripped infinitive root.
+    stripInfinitiveSuffix txt
       | T.pack "mak" `T.isSuffixOf` txt = Just (T.dropEnd 3 txt)
       | T.pack "mek" `T.isSuffixOf` txt = Just (T.dropEnd 3 txt)
       | otherwise = Nothing
@@ -628,11 +628,11 @@ tcStmt stmt =
                       , tcVals = (name, e') : tcVals s
                       })
       return (Defn name ty e')
-    Function name args ty body isGerund -> do
+    Function name args ty body isInfinitive -> do
       let argNames = map fst args
           skolemArgs = map (Bifunctor.second skolemizeTy) args
       mRet <- withCtx (name : argNames) (withVarTypes skolemArgs (inferReturnType body))
-      body' <- withCtx (name : argNames) (withFuncRet name (map snd skolemArgs) mRet (withFuncSig name skolemArgs (mapM (tcClause skolemArgs isGerund) body)))
+      body' <- withCtx (name : argNames) (withFuncRet name (map snd skolemArgs) mRet (withFuncSig name skolemArgs (mapM (tcClause skolemArgs isInfinitive) body)))
       case skolemArgs of
         (_, argTy):_ -> checkExhaustivePatterns argTy body (annTy ty)
         _ -> return ()
@@ -656,18 +656,18 @@ tcStmt stmt =
                           let explicit = annSpan (annTy ty) /= NoSpan
                               retTy = if explicit then ty else fromMaybe ty mRet
                           in ((name, map snd args), normalizePrimTy retTy) : tcFuncSigRets s
-                      , tcGerunds = if isGerund then name : tcGerunds s else tcGerunds s
+                      , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
                       })
-      return (Function name args ty body' isGerund)
-    PrimFunc name args ty isGerund -> do
+      return (Function name args ty body' isInfinitive)
+    PrimFunc name args ty isInfinitive -> do
       modify (\s ->
         s { tcCtx = name : tcCtx s
           , tcFuncs = (name, length args) : tcFuncs s
           , tcFuncSigs = (name, args) : tcFuncSigs s
           , tcFuncSigRets = ((name, map snd args), normalizePrimTy ty) : tcFuncSigRets s
-          , tcGerunds = if isGerund then name : tcGerunds s else tcGerunds s
+          , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
           })
-      return (PrimFunc name args ty isGerund)
+      return (PrimFunc name args ty isInfinitive)
     Load name ->
       return (Load name)
     NewType name params ctors -> do
@@ -732,15 +732,15 @@ reorderByCases expected actual xs
 
 -- | Type-check a clause in the context of argument types.
 tcClause :: [Arg Ann] -- ^ Argument signature.
-         -> Bool -- ^ Whether this is a gerund function (allows effects).
+         -> Bool -- ^ Whether this is an infinitive function (allows effects).
          -> Clause Ann -- ^ Clause to check.
          -> TCM (Clause Ann) -- ^ Type-checked clause.
-tcClause args isGerund (Clause pat body) = do
+tcClause args isInfinitive (Clause pat body) = do
   let argNames = map fst args
       patNames = patIdentifiers pat
   patTys <- inferPatTypes pat args
   let argTys = args
-  body' <- withCtx (patNames ++ argNames) (withVarTypes (patTys ++ argTys) (tcExp1With isGerund body))
+  body' <- withCtx (patNames ++ argNames) (withVarTypes (patTys ++ argTys) (tcExp1With isInfinitive body))
   return (Clause pat body')
 
 -- | Collect identifiers bound by a pattern.
@@ -1545,17 +1545,17 @@ registerForwardDecls = mapM_ registerStmt
                  -> TCM () -- ^ No result.
     registerStmt stmt =
       case stmt of
-        Function name args _ _ isGerund ->
+        Function name args _ _ isInfinitive ->
           modify (\s -> s { tcCtx = name : tcCtx s
                           , tcFuncs = (name, length args) : tcFuncs s
                           , tcFuncSigs = (name, args) : tcFuncSigs s
-                          , tcGerunds = if isGerund then name : tcGerunds s else tcGerunds s
+                          , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
                           })
-        PrimFunc name args _ isGerund ->
+        PrimFunc name args _ isInfinitive ->
           modify (\s -> s { tcCtx = name : tcCtx s
                           , tcFuncs = (name, length args) : tcFuncs s
                           , tcFuncSigs = (name, args) : tcFuncSigs s
-                          , tcGerunds = if isGerund then name : tcGerunds s else tcGerunds s
+                          , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
                           })
         Defn name _ _ ->
           modify (\s -> s { tcCtx = name : tcCtx s })

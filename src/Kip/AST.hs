@@ -180,13 +180,13 @@ Statements are the top-level declarations in a Kip program.
   @
   (args) name, pattern1-ise result1, pattern2-ise result2.
   @
-  The @Bool@ indicates whether it's a gerund (verb form).
+  The @Bool@ indicates whether it's an infinitive (verb form).
 
 * __PrimFunc__: Primitive (built-in) function declaration
   @
   (args) name yerleşiktir.
   @
-  The @Bool@ indicates whether it's a gerund.
+  The @Bool@ indicates whether it's an infinitive.
 
 * __Load__: Module import
   @
