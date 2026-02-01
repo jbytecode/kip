@@ -13,7 +13,7 @@ For you to get a taste of what Kip looks like, here is an example program that r
 
 ```
 selamlamak,
-  isim olarak okuyup,
+  isim için okuyup,
   ("Merhaba "yla ismin birleşimini) yazmaktır.
 
 selamla.
@@ -113,11 +113,11 @@ dünya, "Dünya"'dır.
 
 ### Effects and I/O
 
-Sequencing with `-ip/-ıp/-up/-üp` suffixes and binding with `olarak`:
+Sequencing with `-ip/-ıp/-up/-üp` suffixes and binding with `için`:
 
 ```
 selamlamak,
-  isim olarak okuyup,
+  isim için okuyup,
   ("Merhaba "yla ismin birleşimini) yazmaktır.
 ```
 
