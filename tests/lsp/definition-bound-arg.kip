@@ -1,0 +1,6 @@
+(* Test go-to-definition on function argument binders *)
+
+(bu tam-sayının) karesi,
+  bunun bunla çarpımıdır.
+
+(5'in karesini) yaz.

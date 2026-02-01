@@ -1,0 +1,10 @@
+(* Test go-to-definition on pattern-bound variables *)
+
+Bir (a'yla b çifti)
+ya bir a'yla bir b ikilisi
+olabilir.
+
+(bu tam-sayıyla dizge çiftinin) birincisi,
+  bu şunla o ikilisiyse, şudur.
+
+(5'le "test" ikilisinin birincisini) yaz.

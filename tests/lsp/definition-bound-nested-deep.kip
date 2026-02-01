@@ -1,0 +1,12 @@
+(* Test go-to-definition on deeply nested pattern-bound variables *)
+
+Bir (a listesi)
+ya boş
+ya da bir a'nın bir a listesine eki
+olabilir.
+
+(bu tam-sayı listesinin) toplamı,
+  bu boşsa,
+    0;
+  şunun onun ekiyse,
+    şunun onun toplamına toplamıdır.

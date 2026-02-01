@@ -1,0 +1,11 @@
+(* Test go-to-definition on nested pattern-bound variables *)
+
+Bir (a'yla b çifti)
+ya bir a'yla bir b ikilisi
+olabilir.
+
+(bu tam-sayıyla dizge çiftinin) toplamı,
+  bu şunla onu ikilisiyse,
+    şunun onu birleşimidir.
+
+(5'le "test" ikilisinin toplamını) yaz.

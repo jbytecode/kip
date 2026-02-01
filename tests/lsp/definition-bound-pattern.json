@@ -1,0 +1,12 @@
+{
+  "diagnosticsAtLeast": 0,
+  "formattingEdits": false,
+  "hover": false,
+  "completionIncludes": [],
+  "cache": false,
+  "definitionAt": {
+    "line": 7,
+    "character": 27,
+    "atLeast": 1
+  }
+}

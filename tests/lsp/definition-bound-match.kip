@@ -1,0 +1,11 @@
+(* Test go-to-definition for bound variables in match expressions *)
+
+Bir (a seçeneği)
+ya bir a değeri
+olabilir.
+
+(bu tam-sayı seçeneğinin) çıkar,
+  bu şu değeriyse,
+    şudur.
+
+(5 değerinin çıkarını) yaz.

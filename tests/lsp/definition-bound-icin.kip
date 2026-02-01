@@ -1,0 +1,9 @@
+(* Test go-to-definition for bound variables in için expressions *)
+
+denemek,
+  "./yazı.tmp"ye "selam kip"i yazıp,
+  değer için "./yazı.tmp"'den okuyup,
+  değer yokluksa, durmaktır;
+  (metnin varlığıysa), metni yazmaktır.
+
+dene.

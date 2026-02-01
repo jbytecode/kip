@@ -1,0 +1,12 @@
+(* Test go-to-definition in nested constructor patterns *)
+
+Bir (a listesi)
+ya boş
+ya da bir a'nın bir a listesine eki
+olabilir.
+
+(bu tam-sayı listesinin) ikincisi,
+  bu boşsa,
+    0;
+  şunun bunun ekiyse,
+    budur.

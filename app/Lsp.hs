@@ -72,6 +72,7 @@ data DocState = DocState
   , dsDefSpans :: Map.Map Identifier Range
   , dsResolved :: Map.Map Span Identifier
   , dsResolvedSigs :: Map.Map Span (Identifier, [Ty Ann])
+  , dsBinderSpans :: Map.Map Identifier Range
   }
 
 newtype Config = Config { cfgVar :: MVar LspState }
@@ -253,41 +254,50 @@ onDefinition req respond = do
       case mIdent of
         Nothing -> respond (Right (InL (Definition (InR []))))
         Just (ident, candidates) -> do
-          let mResolved =
-                case findExpAt pos (dsStmts doc) of
-                  Just Var{annExp = annExp'} -> Map.lookup (annSpan annExp') (dsResolved doc)
-                  _ -> Nothing
-              mResolvedSig =
-                case findExpAt pos (dsStmts doc) of
-                  Just Var{annExp = annExp'} -> Map.lookup (annSpan annExp') (dsResolvedSigs doc)
-                  _ -> Nothing
-              keys =
-                case mResolved of
-                  Just resolved -> [resolved]
-                  Nothing -> dedupeIdents (ident : map fst candidates)
-              tcLoc = case mResolvedSig of
-                Just sig -> defLocationFromSig sig (dsTC doc)
-                Nothing ->
-                  case mResolved of
-                    Just resolved -> defLocationFromTC resolved (dsTC doc)
-                    Nothing -> Nothing
-          case tcLoc of
-            Just loc -> respond (Right (InL (Definition (InR [loc]))))
+          -- First check if this is a bound variable (pattern variable or let/bind binding)
+          let keys = dedupeIdents (ident : map fst candidates)
+              binderLoc = lookupDefRange keys (dsBinderSpans doc)
+          case binderLoc of
+            Just range -> do
+              let loc = Location uri range
+              respond (Right (InL (Definition (InR [loc]))))
             Nothing -> do
-              case lookupDefRange keys (dsDefSpans doc) of
-                Just range -> do
-                  let loc = Location uri range
-                  respond (Right (InL (Definition (InR [loc]))))
+              -- Not a bound variable, continue with normal definition lookup
+              let mResolved =
+                    case findExpAt pos (dsStmts doc) of
+                      Just Var{annExp = annExp'} -> Map.lookup (annSpan annExp') (dsResolved doc)
+                      _ -> Nothing
+                  mResolvedSig =
+                    case findExpAt pos (dsStmts doc) of
+                      Just Var{annExp = annExp'} -> Map.lookup (annSpan annExp') (dsResolvedSigs doc)
+                      _ -> Nothing
+                  resolvedKeys =
+                    case mResolved of
+                      Just resolved -> [resolved]
+                      Nothing -> keys
+                  tcLoc = case mResolvedSig of
+                    Just sig -> defLocationFromSig sig (dsTC doc)
+                    Nothing ->
+                      case mResolved of
+                        Just resolved -> defLocationFromTC resolved (dsTC doc)
+                        Nothing -> Nothing
+              case tcLoc of
+                Just loc -> respond (Right (InL (Definition (InR [loc]))))
                 Nothing -> do
-                  case lookupDefLocPreferExternal uri keys (lsDefIndex st) of
-                    Just loc -> respond (Right (InL (Definition (InR [loc]))))
+                  case lookupDefRange resolvedKeys (dsDefSpans doc) of
+                    Just range -> do
+                      let loc = Location uri range
+                      respond (Right (InL (Definition (InR [loc]))))
                     Nothing -> do
-                      let currentDefs = defLocationsForUri uri (dsDefSpans doc)
-                      idx <- liftIO (buildDefinitionIndex st uri currentDefs)
-                      withState $ \s -> return (s { lsDefIndex = idx }, ())
-                      case lookupDefLocPreferExternal uri keys idx of
-                        Nothing -> respond (Right (InL (Definition (InR []))))
+                      case lookupDefLocPreferExternal uri resolvedKeys (lsDefIndex st) of
                         Just loc -> respond (Right (InL (Definition (InR [loc]))))
+                        Nothing -> do
+                          let currentDefs = defLocationsForUri uri (dsDefSpans doc)
+                          idx <- liftIO (buildDefinitionIndex st uri currentDefs)
+                          withState $ \s -> return (s { lsDefIndex = idx }, ())
+                          case lookupDefLocPreferExternal uri resolvedKeys idx of
+                            Nothing -> respond (Right (InL (Definition (InR []))))
+                            Just loc -> respond (Right (InL (Definition (InR [loc]))))
 
 #if MIN_VERSION_lsp_types(2,3,0)
 onCompletion :: TRequestMessage 'Method_TextDocumentCompletion -> (Either (TResponseError 'Method_TextDocumentCompletion) (MessageResult 'Method_TextDocumentCompletion) -> LspM Config ()) -> LspM Config ()
@@ -391,7 +401,8 @@ analyzeDocument st uri text = do
           docSpans = docSpanSet stmts
           resolved = Map.fromList (filterResolved docSpans (tcResolvedNames tcCached))
           resolvedSigs = Map.fromList (filterResolved docSpans (tcResolvedSigs tcCached))
-          doc = DocState text pstCached tcCached stmts [] defSpans resolved resolvedSigs
+          binderSpans = collectBinderSpans stmts
+          doc = DocState text pstCached tcCached stmts [] defSpans resolved resolvedSigs binderSpans
       return (doc, [])
     Nothing -> do
       let basePst = lsBaseParser st
@@ -400,7 +411,7 @@ analyzeDocument st uri text = do
       case parseRes of
         Left err -> do
           let diag = parseErrorToDiagnostic text err
-              doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty
+              doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty Map.empty
           return (doc, [diag])
         Right (stmts, pst') -> do
           let defSpans = defSpansFromParser (lsBaseParser st) stmts pst'
@@ -408,7 +419,8 @@ analyzeDocument st uri text = do
           case declRes of
             Left tcErr -> do
               diag <- tcErrorToDiagnostic st text tcErr
-              let doc = DocState text pst' baseTC stmts [diag] defSpans Map.empty Map.empty
+              let binderSpans = collectBinderSpans stmts
+                  doc = DocState text pst' baseTC stmts [diag] defSpans Map.empty Map.empty binderSpans
               return (doc, [diag])
             Right (_, tcStWithDecls) -> do
               tcStWithDefs <- case uriToFilePath uri of
@@ -427,7 +439,8 @@ analyzeDocument st uri text = do
               let docSpans = docSpanSet stmts
                   resolved = Map.fromList (filterResolved docSpans (tcResolvedNames tcStFinal))
                   resolvedSigs = Map.fromList (filterResolved docSpans (tcResolvedSigs tcStFinal))
-                  doc = DocState text pst' tcStFinal stmts diags defSpans resolved resolvedSigs
+                  binderSpans = collectBinderSpans stmts
+                  doc = DocState text pst' tcStFinal stmts diags defSpans resolved resolvedSigs binderSpans
               return (doc, diags)
 
 loadCachedDoc :: LspState -> Uri -> Text -> IO (Maybe (ParserState, TCState, [Stmt Ann]))
@@ -1035,3 +1048,49 @@ completionItem ident =
     , _command = Nothing
     , _data_ = Nothing
     }
+
+-- | Collect all bound variable spans from statements.
+-- Maps variable names to the location where they are bound (in patterns or Let/Bind expressions).
+collectBinderSpans :: [Stmt Ann] -> Map.Map Identifier Range
+collectBinderSpans stmts =
+  foldl' Map.union Map.empty (map stmtBinders stmts)
+  where
+    stmtBinders stmt =
+      case stmt of
+        Defn _ _ e -> expBinders e
+        Function _ args _ clauses _ ->
+          let argBinders = foldl' Map.union Map.empty (map argBinder args)
+              clauseBinders' = foldl' Map.union Map.empty (map clauseBinders clauses)
+          in Map.union argBinders clauseBinders'
+        PrimFunc _ args _ _ ->
+          foldl' Map.union Map.empty (map argBinder args)
+        ExpStmt e -> expBinders e
+        _ -> Map.empty
+
+    argBinder (ident, ty) =
+      Map.singleton ident (spanToRange (annSpan (annTy ty)))
+
+    clauseBinders (Clause pat body) =
+      Map.union (patBinders pat) (expBinders body)
+
+    patBinders pat =
+      case pat of
+        PWildcard _ -> Map.empty
+        PVar ident ann -> Map.singleton ident (spanToRange (annSpan ann))
+        PCtor _ pats -> foldl' Map.union Map.empty (map patBinders pats)
+        PIntLit _ _ -> Map.empty
+        PFloatLit _ _ -> Map.empty
+        PStrLit _ _ -> Map.empty
+        PListLit pats -> foldl' Map.union Map.empty (map patBinders pats)
+
+    expBinders e =
+      case e of
+        Let ann name body ->
+          Map.insert name (spanToRange (annSpan ann)) (expBinders body)
+        Bind ann name b ->
+          Map.insert name (spanToRange (annSpan ann)) (expBinders b)
+        App _ f args -> foldl' Map.union Map.empty (map expBinders (f:args))
+        Seq _ a b -> Map.union (expBinders a) (expBinders b)
+        Match _ scr clauses ->
+          Map.union (expBinders scr) (foldl' Map.union Map.empty (map clauseBinders clauses))
+        _ -> Map.empty
