@@ -1,0 +1,19 @@
+(* Yapkı örüntülerinde argümanların farklı durumlarda esnek sırayla kullanımı *)
+
+Bir (a'yla b çifti)
+ya bir a'yla bir b ikilisi
+olabilir.
+
+(* İlk sırada: a ile b *)
+(bu tam-sayıyla dizge çiftinin) birinci-eleman,
+  bu şunla o ikilisiyse, şudur.
+
+(* Ters sırada: b ile a *)
+(bu dizgeyle tam-sayı çiftinin) ikinci-eleman,
+  bu onla şu ikilisiyse, şudur.
+
+ilk-çift, 5'le "test" ikilisidir.
+ikinci-çift, "abc"yle 10 ikilisidir.
+
+((ilk-çiftin) birinci-elemanını) yaz.
+((ikinci-çiftin) ikinci-elemanını) yaz.

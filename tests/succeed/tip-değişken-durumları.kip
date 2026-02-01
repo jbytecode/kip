@@ -1,0 +1,19 @@
+(* Tip değişkenlerinin farklı durumlarda esnek sırayla kullanımı *)
+
+Bir (a'nın b'yle c'den grubu)
+ya bir a'dan bir b'ye bir c üçlü
+olabilir.
+
+(* Farklı somut tipler farklı sıralarda *)
+(bu tam-sayının dizgeyle ondalık-sayıdan grubun) birincisi,
+  bu şundan buna ondan üçlüyse, şudur.
+
+(bu dizgenin ondalık-sayıyla tam-sayıdan grubun) ikincisi,
+  bu ondan buna şundan üçlüyse, budur.
+
+(bu ondalık-sayının tam-sayıyla dizgeden grubun) üçüncüsü,
+  bu bundan şuna ondan üçlüyse, odur.
+
+bir-değer, 5'ten "test"e 3.14'ten üçlüdür.
+
+((bir-değerin) birincisini) yaz.
