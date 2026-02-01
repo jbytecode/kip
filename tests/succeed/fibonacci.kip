@@ -8,7 +8,7 @@
 
 çalıştırmak,
   "Bir sayı girin:"i yazıp,
-  isim olarak okuyup,
+  isim için okuyup,
   ((ismin tam-sayı-hali)
     yokluksa,
       "Geçersiz sayı."yı yazmaktır;

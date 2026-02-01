@@ -258,7 +258,7 @@ prettyExp (StrLit _ s) = show (T.unpack s)
 prettyExp (IntLit _ n) = show n
 prettyExp (FloatLit _ n) = show n
 prettyExp (Bind _ name e) =
-  T.unpack (T.intercalate "-" (fst name ++ [snd name])) ++ " olarak " ++ prettyExp e
+  T.unpack (T.intercalate "-" (fst name ++ [snd name])) ++ " için " ++ prettyExp e
 prettyExp (Seq _ a b) =
   prettyExp a ++ ", " ++ prettyExp b
 prettyExp (App _ f xs) =

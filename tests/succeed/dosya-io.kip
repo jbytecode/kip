@@ -1,6 +1,6 @@
 çalıştırmak,
   "./yazı.tmp"ye "selam kip"i yazıp,
-  sonuç olarak "./yazı.tmp"'den okuyup,
+  sonuç için "./yazı.tmp"'den okuyup,
   sonuç yokluksa, durmaktır;
   (metnin varlığıysa), metni yazmaktır.
 

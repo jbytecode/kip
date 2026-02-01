@@ -1,6 +1,6 @@
 (gizli tam-sayıyı) tahmin-etmek,
   "Tahmininizi girin:"'i yazıp,
-  cevap olarak okuyup,
+  cevap içinokuyup,
   ((cevabın tam-sayı-hali)
     yokluksa,
       "Geçersiz sayı, tekrar deneyin."'i yazıp,
@@ -16,6 +16,6 @@
           "Daha küçük bir sayı deneyin."'i yazıp,
           gizliyi tahmin-etmektir))).
 
-sayı olarak 0'dan 100'e sayı-çekip, 
+sayı için0'dan 100'e sayı-çekip, 
 "0 ile 100 arası bir sayı tuttum."'u yazıp,
 sayıyı tahmin-et.

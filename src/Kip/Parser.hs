@@ -25,7 +25,7 @@ The Kip grammar consists of:
     * Literals: numbers, strings, booleans
     * Function calls: @(argument'un) function-name'i@
     * Match expressions: @value pattern-ise result1, pattern2-ise result2@
-    * Let bindings: @name olarak value@
+    * Let bindings: @name için value@
 
 * __Types__: Type annotations
     * Primitive: @tam-sayı@, @doğruluk@, @dizge@
@@ -447,7 +447,7 @@ identifier = do
 identifierNotKeyword :: KipParser Identifier -- ^ Parsed identifier.
 identifierNotKeyword = do
   ident@(ss, s) <- identifier
-  if null ss && s `elem` ["ya", "var", "olarak", "dersek"]
+  if null ss && s `elem` ["ya", "var", "için", "dersek"]
     then customFailure ErrKeywordAsIdent
     else return ident
 
@@ -1415,11 +1415,11 @@ parseExpWithCtx' useCtx allowMatch =
             Just x' -> return x'
             Nothing -> buildAppFrom a
         _ -> buildAppFrom a
-    -- | Parse binding expressions with "olarak".
+    -- | Parse binding expressions with "için".
     bindExp :: KipParser (Exp Ann) -- ^ Parsed binding expression.
     bindExp = try $ do
       (name, sp) <- withSpan identifierNotKeyword
-      lexeme (string "olarak")
+      lexeme (string "için")
       action <- app <|> atom
       let ann = mkAnn (annCase (annExp action)) (mergeSpan sp (annSpan (annExp action)))
       return (Bind ann name action)
@@ -2342,7 +2342,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     bindStartLookahead = do
       lookAhead $ do
         _ <- identifierNotKeyword
-        lexeme (string "olarak")
+        lexeme (string "için")
         return True
     -- | Parse a type with optional case suffix.
     {- | Parse a type with grammatical case information.

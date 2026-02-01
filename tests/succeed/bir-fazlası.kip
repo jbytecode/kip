@@ -1,6 +1,6 @@
 (* İç örüntü etrafında parantez yok! *)
 çalıştırmak,
-  isim olarak okuyup,
+  isim için okuyup,
   (ismin tam-sayı-hali)
     yokluksa,
       "Hata!"yı yazıp,
