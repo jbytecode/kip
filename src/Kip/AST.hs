@@ -109,6 +109,7 @@ data Exp a =
   | Seq    { annExp :: a , first :: Exp a , second :: Exp a } -- ^ Sequential composition.
   | Match  { annExp :: a , scrutinee :: Exp a , clauses :: [Clause a] } -- ^ Pattern match.
   | Let    { annExp :: a , varName :: Identifier , body :: Exp a } -- ^ Let binding.
+  | Ascribe { annExp :: a , ascType :: Ty a , ascExp :: Exp a } -- ^ Type ascription.
   deriving (Show, Eq, Generic, Functor, Binary)
 
 -- | Typed argument of a function.
@@ -289,3 +290,12 @@ prettyExp (Match _ scrut clauses) =
           in unwords (argStrs ++ [prettyIdent' ctor])
 prettyExp (Let _ name body) =
   "let " ++ T.unpack (T.intercalate "-" (fst name ++ [snd name])) ++ " in " ++ prettyExp body
+prettyExp (Ascribe _ ty e) =
+  prettyTySimple ty ++ " olarak " ++ prettyExp e
+  where
+    prettyTySimple (TyString _) = "dizge"
+    prettyTySimple (TyInt _) = "tam-sayı"
+    prettyTySimple (TyFloat _) = "ondalık-sayı"
+    prettyTySimple (TyInd _ name) = T.unpack (T.intercalate "-" (fst name ++ [snd name]))
+    prettyTySimple (TyVar _ name) = T.unpack (T.intercalate "-" (fst name ++ [snd name]))
+    prettyTySimple _ = "..."

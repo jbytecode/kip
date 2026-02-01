@@ -77,7 +77,7 @@
         },
         {
           "name": "keyword.control.kip",
-          "match": "\\b(?:ya|olabilir|var|için|dersek)\\b"
+          "match": "\\b(?:ya|olabilir|var|için|olarak|dersek)\\b"
         },
         {
           "name": "keyword.control.conditional.kip",

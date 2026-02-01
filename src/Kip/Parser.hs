@@ -447,7 +447,7 @@ identifier = do
 identifierNotKeyword :: KipParser Identifier -- ^ Parsed identifier.
 identifierNotKeyword = do
   ident@(ss, s) <- identifier
-  if null ss && s `elem` ["ya", "var", "için", "dersek"]
+  if null ss && s `elem` ["ya", "var", "için", "olarak", "dersek"]
     then customFailure ErrKeywordAsIdent
     else return ident
 
@@ -1420,9 +1420,40 @@ parseExpWithCtx' useCtx allowMatch =
     bindExp = try $ do
       (name, sp) <- withSpan identifierNotKeyword
       lexeme (string "için")
-      action <- app <|> atom
+      action <- try ascribeInner <|> app <|> atom
       let ann = mkAnn (annCase (annExp action)) (mergeSpan sp (annSpan (annExp action)))
       return (Bind ann name action)
+      where
+        -- | Parse type ascription without consuming from seqExp.
+        ascribeInner :: KipParser (Exp Ann)
+        ascribeInner = do
+          (ty, sp') <- withSpan parseTypeForAscription
+          lexeme (string "olarak")
+          expr <- atom
+          let ann' = mkAnn (annCase (annExp expr)) (mergeSpan sp' (annSpan (annExp expr)))
+          return (Ascribe ann' ty expr)
+        parseTypeForAscription :: KipParser (Ty Ann)
+        parseTypeForAscription = do
+          (rawIdent, sp'') <- withSpan identifierNotKeyword
+          candidates <- estimateCandidates False rawIdent
+          let ann'' = mkAnn (pickCase False candidates) sp''
+              nameForTy =
+                case candidates of
+                  (ident, _):_ -> ident
+                  [] -> rawIdent
+          MkParserState{parserPrimTypes, parserTyCons} <- getP
+          let tyNames = map fst parserTyCons
+          case candidates of
+            (ident, _):_
+              | ident `elem` parserPrimTypes && isIntType ident -> return (TyInt ann'')
+            (ident, _):_
+              | ident `elem` parserPrimTypes && isFloatType ident -> return (TyFloat ann'')
+            (ident, _):_
+              | ident `elem` parserPrimTypes && isStringType ident -> return (TyString ann'')
+            _ ->
+              if nameForTy `elem` tyNames
+                then return (TyInd ann'' nameForTy)
+                else return (TyVar ann'' nameForTy)
     -- | Parse a let expression with "dersek".
     letExp :: KipParser (Exp Ann) -- ^ Parsed let expression.
     letExp = try $ do
@@ -1450,10 +1481,42 @@ parseExpWithCtx' useCtx allowMatch =
           putP st
           let ann = mkAnn (annCase (annExp body)) (mergeSpan bindSpan (annSpan (annExp body)))
           return (Seq ann bindExp body)
+    -- | Parse type ascription expressions with "olarak".
+    ascribeExp :: KipParser (Exp Ann) -- ^ Parsed type ascription expression.
+    ascribeExp = try $ do
+      (ty, sp) <- withSpan parseTypeForAscription
+      lexeme (string "olarak")
+      expr <- app
+      let ann = mkAnn (annCase (annExp expr)) (mergeSpan sp (annSpan (annExp expr)))
+      return (Ascribe ann ty expr)
+      where
+        -- | Parse a type for ascription (inline version of parseTypeLoose).
+        parseTypeForAscription :: KipParser (Ty Ann)
+        parseTypeForAscription = do
+          (rawIdent, sp') <- withSpan identifierNotKeyword
+          candidates <- estimateCandidates False rawIdent
+          let ann' = mkAnn (pickCase False candidates) sp'
+              nameForTy =
+                case candidates of
+                  (ident, _):_ -> ident
+                  [] -> rawIdent
+          MkParserState{parserPrimTypes, parserTyCons} <- getP
+          let tyNames = map fst parserTyCons
+          case candidates of
+            (ident, _):_
+              | ident `elem` parserPrimTypes && isIntType ident -> return (TyInt ann')
+            (ident, _):_
+              | ident `elem` parserPrimTypes && isFloatType ident -> return (TyFloat ann')
+            (ident, _):_
+              | ident `elem` parserPrimTypes && isStringType ident -> return (TyString ann')
+            _ ->
+              if nameForTy `elem` tyNames
+                then return (TyInd ann' nameForTy)
+                else return (TyVar ann' nameForTy)
     -- | Parse comma-separated sequence expressions.
     seqExp :: KipParser (Exp Ann) -- ^ Parsed sequence expression.
     seqExp = do
-      e1 <- bindExp <|> app <|> atom
+      e1 <- ascribeExp <|> bindExp <|> app <|> atom
       mcomma <- optional (try (lookAhead (lexeme (char ','))))
       case mcomma of
         Nothing -> return e1

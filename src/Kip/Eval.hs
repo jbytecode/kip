@@ -166,6 +166,8 @@ evalExpWith localEnv e =
           evalExpWith env body
     Let {annExp, varName, body} ->
       evalExpWith localEnv body
+    Ascribe {ascExp} ->
+      evalExpWith localEnv ascExp
   where
     -- | Find the first matching clause for a scrutinee.
     findClause :: Exp Ann -- ^ Scrutinee expression.

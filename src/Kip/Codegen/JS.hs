@@ -367,6 +367,8 @@ codegenExp exp' =
       renderMatch scrutinee clauses
     Let {body} ->
       codegenExp body
+    Ascribe {ascExp} ->
+      codegenExp ascExp
 
 renderFunction :: Identifier -> [Arg Ann] -> [Clause Ann] -> Text
 renderFunction name args clauses =

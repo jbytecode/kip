@@ -415,6 +415,16 @@ tcExp1With allowEffect e =
       return (Match annExp scrutinee' clauses')
     Let {annExp, varName, body} ->
       withCtx [varName] (tcExp1With allowEffect body)
+    Ascribe {annExp, ascType, ascExp} -> do
+      exp' <- tcExp1With allowEffect ascExp
+      mExpTy <- inferType exp'
+      MkTCState{tcTyCons} <- get
+      case mExpTy of
+        Just expTy -> do
+          case unifyTypes tcTyCons [ascType] [expTy] of
+            Just _ -> return (Ascribe annExp ascType exp')
+            Nothing -> lift (throwE (PatternTypeMismatch ([], T.pack "ascribe") ascType expTy (annSpan annExp)))
+        Nothing -> return (Ascribe annExp ascType exp')
 
 -- | Reject pure uses of effectful read primitives and gerund functions.
 rejectReadEffect :: Ann -- ^ Expression annotation.
@@ -854,6 +864,7 @@ inferType e =
       case clauses of
         [] -> return Nothing
         Clause _ body:_ -> inferType body
+    Ascribe {ascType} -> return (Just ascType)
     _ -> return Nothing
 
 -- | Infer a return type from a list of clauses.
