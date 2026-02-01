@@ -1,0 +1,16 @@
+(* Tam sayı literal örüntüleri *)
+
+(bu tam-sayının) sınıfı,
+  bu, 0'ysa,
+    "sıfır";
+  1'se,
+    "bir";
+  2'yse,
+    "iki";
+  değilse,
+    "diğer".
+
+(0'ın sınıfını) yaz.
+(1'in sınıfını) yaz.
+(2'nin sınıfını) yaz.
+(5'in sınıfını) yaz.

@@ -751,6 +751,10 @@ patIdentifiers pat =
     PWildcard _ -> []
     PVar n _ -> [n]
     PCtor _ pats -> concatMap patIdentifiers pats
+    PIntLit _ _ -> []
+    PFloatLit _ _ -> []
+    PStrLit _ _ -> []
+    PListLit pats -> concatMap patIdentifiers pats
 
 -- | Lookup a binding by candidate identifiers.
 lookupByCandidates :: forall a.
@@ -929,6 +933,16 @@ inferPatTypes pat args =
   case (pat, args) of
     (PWildcard _, _) -> return []
     (PVar n ann, (_, ty):_) -> return [(n, ty)]
+    (PIntLit _ _, _) -> return []
+    (PFloatLit _ _, _) -> return []
+    (PStrLit _ _, _) -> return []
+    (PListLit pats, (_, scrutTy):_) -> do
+      MkTCState{tcTyCons} <- get
+      -- For list patterns, infer the element type from the scrutinee type
+      -- List type is represented as nested applications of eki constructor
+      -- We need to extract the element type and apply it to each pattern
+      let elemTy = extractListElemType tcTyCons scrutTy
+      concat <$> mapM (\p -> inferPatTypes p [(undefined, elemTy)]) pats
     (PCtor ctor pats, (_, scrutTy):_) -> do
       MkTCState{tcCtors, tcTyCons} <- get
       case lookup ctor tcCtors of
@@ -960,6 +974,15 @@ inferPatTypes pat args =
     _ -> return []
 
 -- | Check whether a set of patterns exhausts a scrutinee type.
+
+-- | Extract the element type from a list type.
+extractListElemType :: [(Identifier, Int)] -- ^ Type constructor arities.
+                    -> Ty Ann -- ^ List type.
+                    -> Ty Ann -- ^ Element type.
+extractListElemType tcTyCons ty =
+  case ty of
+    TyApp _ _ (elemTy:_) -> elemTy
+    _ -> TyVar (mkAnn Nom NoSpan) ([], T.pack "a")
 checkExhaustivePatterns :: Ty Ann -- ^ Scrutinee type.
                         -> [Clause Ann] -- ^ Clauses to inspect.
                         -> Ann -- ^ Annotation for span reporting.

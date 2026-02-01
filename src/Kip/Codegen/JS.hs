@@ -445,6 +445,10 @@ renderPatternBindings scrutinee pats startIdx =
           let argAccess = patArgAccess scrut patLen idx
               (subBinds, _, seen') = renderPatternBindingsWithSeen argAccess subPats 0 seen
           in (subBinds, idx + 1, seen')
+        PIntLit _ _ -> ([], idx + 1, seen)
+        PFloatLit _ _ -> ([], idx + 1, seen)
+        PStrLit _ _ -> ([], idx + 1, seen)
+        PListLit _ -> ([], idx + 1, seen)
 
     renderPatternBindingsWithSeen scrut pats idx seen =
       -- Each nested constructor has its own argument list length, so we
@@ -478,6 +482,10 @@ renderPatMatchCond scrutinee pat =
       let cond = renderPatCond scrutinee pat
           (binds, _) = renderPatternBindings scrutinee pats 0
       in (cond, binds)
+    PIntLit _ _ -> (renderPatCond scrutinee pat, [])
+    PFloatLit _ _ -> (renderPatCond scrutinee pat, [])
+    PStrLit _ _ -> (renderPatCond scrutinee pat, [])
+    PListLit _ -> (renderPatCond scrutinee pat, [])
 
 -- | Render a boolean condition for a pattern.
 renderPatCond :: Text -> Pat Ann -> Text
@@ -502,6 +510,31 @@ renderPatCond scrutinee pat =
             , cond /= "true"
             ]
       in T.intercalate " && " (headCond : lenCond : argConds)
+    PIntLit n _ ->
+      scrutinee <> " === " <> T.pack (show n)
+    PFloatLit n _ ->
+      "__kip_num(" <> scrutinee <> ") === " <> T.pack (show n)
+    PStrLit s _ ->
+      scrutinee <> " === " <> renderString s
+    PListLit pats ->
+      renderListPatCond scrutinee pats
+
+-- | Render a boolean condition for a list pattern.
+-- Lists are represented as nested 'eki' constructors with 'boş' at the end.
+renderListPatCond :: Text -> [Pat Ann] -> Text
+renderListPatCond scrutinee [] =
+  -- Empty list pattern matches 'boş'
+  scrutinee <> ".tag === \"boş\""
+renderListPatCond scrutinee (p:ps) =
+  -- Non-empty list pattern matches 'eki' with head and tail
+  let headCond = scrutinee <> ".tag === \"eki\""
+      lenCond = scrutinee <> ".args.length >= 2"
+      headMatch = renderPatCond (scrutinee <> ".args[0]") p
+      tailMatch = renderListPatCond (scrutinee <> ".args[1]") ps
+      conds = filter (/= "true") [headCond, lenCond, headMatch, tailMatch]
+  in if null conds
+       then "true"
+       else T.intercalate " && " conds
 
 -- | Access constructor arguments aligned from the right.
 patArgAccess :: Text -> Int -> Int -> Text

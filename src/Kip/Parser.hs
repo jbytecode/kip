@@ -3030,7 +3030,15 @@ expToPat allowScrutinee argNames e = do
           pats <- mapM expToPatArg es'
           pats' <- dropScrutineePat allowScrutinee argNames pats
           return (PCtor ctorName pats')
-        _ -> customFailure ErrPatternExpected
+        IntLit ann n -> return (PIntLit n ann)
+        FloatLit ann n -> return (PFloatLit n ann)
+        StrLit ann s -> return (PStrLit s ann)
+        _ -> do
+          -- Try to parse as list literal pattern
+          mListPat <- tryParseListPattern e
+          case mListPat of
+            Just pat -> return pat
+            Nothing -> customFailure ErrPatternExpected
   where
     condSurfaceToPat :: Bool -> [Identifier] -> Exp Ann -> KipParser (Maybe (Pat Ann))
     condSurfaceToPat allowScrutinee' argNames' expItem =
@@ -3047,7 +3055,24 @@ expToPat allowScrutinee argNames e = do
               pats' <- dropScrutineePat allowScrutinee' argNames' pats
               return (Just (PCtor (mods, base) pats'))
             Nothing -> return Nothing
-        _ -> return Nothing
+        IntLit ann n ->
+          if annCase ann == Cond
+            then return (Just (PIntLit n ann))
+            else return Nothing
+        FloatLit ann n ->
+          if annCase ann == Cond
+            then return (Just (PFloatLit n ann))
+            else return Nothing
+        StrLit ann s ->
+          if annCase ann == Cond
+            then return (Just (PStrLit s ann))
+            else return Nothing
+        _ -> do
+          -- Try to parse as list literal pattern
+          mListPat <- tryParseListPattern expItem
+          case mListPat of
+            Just pat -> return (Just pat)
+            Nothing -> return Nothing
     stripCondSuffix txt =
       let suffixes = ["ysa", "yse", "sa", "se"]
           match = find (`T.isSuffixOf` txt) suffixes
@@ -3105,6 +3130,23 @@ expToPat allowScrutinee argNames e = do
             then return pats
             else customFailure ErrPatternArgNameRepeated
         _ -> return pats
+    -- | Try to parse a list literal pattern from an expression.
+    tryParseListPattern :: Exp Ann -> KipParser (Maybe (Pat Ann))
+    tryParseListPattern exp =
+      case extractListElements exp of
+        Just elems -> do
+          elemPats <- mapM (expToPat allowScrutinee argNames) elems
+          return (Just (PListLit elemPats))
+        Nothing -> return Nothing
+    -- | Extract list elements from a list expression structure.
+    extractListElements :: Exp Ann -> Maybe [Exp Ann]
+    extractListElements (Var _ ([], name) _)
+      | name == T.pack "boş" = Just []
+    extractListElements (App _ (Var _ ([], name) _) [elem, rest])
+      | name == T.pack "eki" = do
+          restElems <- extractListElements rest
+          return (elem : restElems)
+    extractListElements _ = Nothing
 
 -- | Convert a pattern argument expression into a pattern.
 -- Unlike expToPat, this treats bare Var nodes as variables without checking if they're constructors.
@@ -3135,7 +3177,33 @@ expToPatArg e = do
                 (n, c):_ -> return (PVar n (mkAnn c NoSpan))
                 _ -> customFailure ErrPatternAmbiguousName
             _ -> customFailure ErrPatternOnlyNames
-    _ -> customFailure ErrPatternOnlyNames
+    IntLit ann n -> return (PIntLit n ann)
+    FloatLit ann n -> return (PFloatLit n ann)
+    StrLit ann s -> return (PStrLit s ann)
+    _ -> do
+      -- Try to parse as list literal pattern
+      mListPat <- tryParseListPatternArg e
+      case mListPat of
+        Just pat -> return pat
+        Nothing -> customFailure ErrPatternOnlyNames
+  where
+    -- | Try to parse a list literal pattern from an expression.
+    tryParseListPatternArg :: Exp Ann -> KipParser (Maybe (Pat Ann))
+    tryParseListPatternArg exp =
+      case extractListElements exp of
+        Just elems -> do
+          elemPats <- mapM expToPatArg elems
+          return (Just (PListLit elemPats))
+        Nothing -> return Nothing
+    -- | Extract list elements from a list expression structure.
+    extractListElements :: Exp Ann -> Maybe [Exp Ann]
+    extractListElements (Var _ ([], name) _)
+      | name == T.pack "boş" = Just []
+    extractListElements (App _ (Var _ ([], name) _) [elem, rest])
+      | name == T.pack "eki" = do
+          restElems <- extractListElements rest
+          return (elem : restElems)
+    extractListElements _ = Nothing
 
 -- | Select a constructor name only when it is in scope.
 selectCondNameInCtors :: [Identifier] -- ^ Constructor identifiers.

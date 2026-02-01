@@ -1,0 +1,13 @@
+(* Dizge literal örüntüleri *)
+
+(bu dizgenin) karşılaması,
+  bu, "merhaba"'ysa,
+    "selam!";
+  "güle güle"'yse,
+    "hoşçakal!";
+  değilse,
+    "anlamadım".
+
+("merhaba"nın karşılamasını) yaz.
+("güle güle"nin karşılamasını) yaz.
+("test"in karşılamasını) yaz.

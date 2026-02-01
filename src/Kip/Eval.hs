@@ -236,6 +236,22 @@ matchPat pat mval =
       case mval of
         Nothing -> Nothing
         Just v -> matchCtor ctor pats v
+    PIntLit n _ ->
+      case mval of
+        Just (IntLit _ n') | n == n' -> Just []
+        _ -> Nothing
+    PFloatLit n _ ->
+      case mval of
+        Just (FloatLit _ n') | n == n' -> Just []
+        _ -> Nothing
+    PStrLit s _ ->
+      case mval of
+        Just (StrLit _ s') | s == s' -> Just []
+        _ -> Nothing
+    PListLit pats ->
+      case mval of
+        Nothing -> Nothing
+        Just v -> matchList pats v
 
 -- | Match a constructor pattern against an expression.
 matchCtor :: Identifier -- ^ Constructor identifier.
@@ -338,6 +354,19 @@ matchCtor ctor pats v =
 
 -- | Try resolving an ip-converb function to its base name when prim lookup fails.
 -- | Recognize the random primitive in either split or dashed identifier form.
+
+-- | Match a list pattern against an expression.
+matchList :: [Pat Ann] -- ^ Element patterns.
+          -> Exp Ann -- ^ Scrutinee expression.
+          -> Maybe [(Identifier, Exp Ann)] -- ^ Bindings when matched.
+matchList [] (Var _ ([], name) _)
+  | name == T.pack "boş" = Just []
+matchList (p:ps) (App _ (Var _ ([], name) _) [elem, rest])
+  | name == T.pack "eki" = do
+      elemBinds <- matchPat p (Just elem)
+      restBinds <- matchList ps rest
+      return (elemBinds ++ restBinds)
+matchList _ _ = Nothing
 isRandomCandidate :: [(Identifier, Case)] -> Bool
 isRandomCandidate =
   any (\(ident, _) -> ident == (["sayı"], "çek") || ident == ([], "sayı-çek"))

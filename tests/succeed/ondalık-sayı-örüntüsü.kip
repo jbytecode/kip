@@ -1,0 +1,13 @@
+(* Ondalık sayı literal örüntüleri *)
+
+(bu ondalık-sayının) kontrolü,
+  bu, 3.14'yse,
+    "pi";
+  2.71'yse,
+    "e";
+  değilse,
+    "diğer".
+
+(3.14'ün kontrolünü) yaz.
+(2.71'in kontrolünü) yaz.
+(1.5'in kontrolünü) yaz.

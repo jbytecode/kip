@@ -131,6 +131,10 @@ data Pat ann =
     PWildcard ann -- ^ Wildcard pattern with annotation.
   | PVar Identifier ann -- ^ Variable pattern (binds a name).
   | PCtor Identifier [Pat ann] -- ^ Constructor pattern with nested sub-patterns.
+  | PIntLit Integer ann -- ^ Integer literal pattern.
+  | PFloatLit Double ann -- ^ Float literal pattern.
+  | PStrLit Text ann -- ^ String literal pattern.
+  | PListLit [Pat ann] -- ^ List literal pattern.
   deriving (Show, Eq, Ord, Generic)
 
 -- | Functor instance for pattern annotations.
@@ -138,6 +142,10 @@ instance Functor Pat where
   fmap f (PWildcard ann) = PWildcard (f ann)
   fmap f (PVar ident ann) = PVar ident (f ann)
   fmap f (PCtor ident pats) = PCtor ident (map (fmap f) pats)
+  fmap f (PIntLit n ann) = PIntLit n (f ann)
+  fmap f (PFloatLit n ann) = PFloatLit n (f ann)
+  fmap f (PStrLit s ann) = PStrLit s (f ann)
+  fmap f (PListLit pats) = PListLit (map (fmap f) pats)
 
 -- | Binary instance for pattern annotations.
 instance (Binary ann) => Binary (Pat ann) where
@@ -152,12 +160,31 @@ instance (Binary ann) => Binary (Pat ann) where
     put (2 :: Word8)
     put ident
     put pats
+  put (PIntLit n ann) = do
+    put (3 :: Word8)
+    put n
+    put ann
+  put (PFloatLit n ann) = do
+    put (4 :: Word8)
+    put n
+    put ann
+  put (PStrLit s ann) = do
+    put (5 :: Word8)
+    put s
+    put ann
+  put (PListLit pats) = do
+    put (6 :: Word8)
+    put pats
   get = do
     tag <- get :: Get Word8
     case tag of
       0 -> PWildcard <$> get
       1 -> PVar <$> get <*> get
       2 -> PCtor <$> get <*> get
+      3 -> PIntLit <$> get <*> get
+      4 -> PFloatLit <$> get <*> get
+      5 -> PStrLit <$> get <*> get
+      6 -> PListLit <$> get
       _ -> fail "Invalid Pat tag"
 
 -- | Match clause of a pattern and expression.

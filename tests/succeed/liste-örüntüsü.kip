@@ -1,0 +1,16 @@
+(* Liste literal örüntüleri *)
+
+(bu tam-sayı listesinin) açıklaması,
+  bu, boşsa,
+    "boş liste";
+  [1, 2, 3]'yse,
+    "bir iki üç";
+  [5, 10]'ysa,
+    "beş on";
+  değilse,
+    "başka liste".
+
+(boşun açıklamasını) yaz.
+([1, 2, 3]'ün açıklamasını) yaz.
+([5, 10]'un açıklamasını) yaz.
+([7, 8]'in açıklamasını) yaz.
