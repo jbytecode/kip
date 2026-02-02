@@ -11,7 +11,7 @@ import Control.Applicative ((<|>))
 import Control.Monad (void, when, forM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (runReaderT)
-import Data.List (foldl', nub, isPrefixOf)
+import Data.List (foldl', nub, isPrefixOf, sortOn)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList, listToMaybe)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -62,6 +62,13 @@ data LspState = LspState
   , lsDefIndex :: Map.Map Identifier Location
   }
 
+-- | Information about a bound variable with its scope.
+data BinderInfo = BinderInfo
+  { biIdent :: !Identifier
+  , biRange :: !Range
+  , biScope :: !Span
+  }
+
 -- | Per-document cached state.
 data DocState = DocState
   { dsText :: !Text
@@ -72,7 +79,7 @@ data DocState = DocState
   , dsDefSpans :: Map.Map Identifier Range
   , dsResolved :: Map.Map Span Identifier
   , dsResolvedSigs :: Map.Map Span (Identifier, [Ty Ann])
-  , dsBinderSpans :: Map.Map Identifier Range
+  , dsBinderSpans :: [BinderInfo]
   }
 
 newtype Config = Config { cfgVar :: MVar LspState }
@@ -256,7 +263,7 @@ onDefinition req respond = do
         Just (ident, candidates) -> do
           -- First check if this is a bound variable (pattern variable or let/bind binding)
           let keys = dedupeIdents (ident : map fst candidates)
-              binderLoc = lookupDefRange keys (dsBinderSpans doc)
+              binderLoc = lookupBinderRange pos keys (dsBinderSpans doc)
           case binderLoc of
             Just range -> do
               let loc = Location uri range
@@ -411,7 +418,7 @@ analyzeDocument st uri text = do
       case parseRes of
         Left err -> do
           let diag = parseErrorToDiagnostic text err
-              doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty Map.empty
+              doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty []
           return (doc, [diag])
         Right (stmts, pst') -> do
           let defSpans = defSpansFromParser (lsBaseParser st) stmts pst'
@@ -777,6 +784,43 @@ lookupDefRange :: [Identifier] -> Map.Map Identifier Range -> Maybe Range
 lookupDefRange keys m =
   listToMaybe (mapMaybe (`Map.lookup` m) keys)
 
+-- | Find the binder for a variable at a given position.
+-- Searches for binders whose scope contains the position, picking the innermost one.
+lookupBinderRange :: Position -> [Identifier] -> [BinderInfo] -> Maybe Range
+lookupBinderRange pos keys binders =
+  let -- Find all binders with matching identifiers
+      matching = [bi | bi <- binders, biIdent bi `elem` keys]
+      -- Filter to those whose scope contains the position
+      inScope = [bi | bi <- matching, posInSpan pos (biScope bi)]
+      -- Sort by scope size (smallest first = innermost scope)
+      sorted = sortOn (spanSize . biScope) inScope
+  in case sorted of
+       (bi:_) -> Just (biRange bi)
+       [] -> Nothing
+  where
+    posInSpan p sp = case sp of
+      NoSpan -> False
+      Span start end ->
+        let Position line char = p
+            SourcePos _ startLine startCol = start
+            SourcePos _ endLine endCol = end
+            l = fromIntegral line
+            c = fromIntegral char
+            sl = unPos startLine - 1
+            sc = unPos startCol - 1
+            el = unPos endLine - 1
+            ec = unPos endCol - 1
+        in (l > sl || (l == sl && c >= sc)) && (l < el || (l == el && c < ec))
+
+    spanSize sp = case sp of
+      NoSpan -> maxBound :: Int
+      Span start end ->
+        let SourcePos _ startLine startCol = start
+            SourcePos _ endLine endCol = end
+            lines = unPos endLine - unPos startLine
+            cols = if lines == 0 then unPos endCol - unPos startCol else maxBound :: Int
+        in lines * 10000 + cols
+
 lookupDefLoc :: [Identifier] -> Map.Map Identifier Location -> Maybe Location
 lookupDefLoc keys m =
   listToMaybe (mapMaybe (`Map.lookup` m) keys)
@@ -1049,48 +1093,67 @@ completionItem ident =
     , _data_ = Nothing
     }
 
--- | Collect all bound variable spans from statements.
--- Maps variable names to the location where they are bound (in patterns or Let/Bind expressions).
-collectBinderSpans :: [Stmt Ann] -> Map.Map Identifier Range
-collectBinderSpans stmts =
-  foldl' Map.union Map.empty (map stmtBinders stmts)
+-- | Collect all bound variable spans from statements with their scopes.
+collectBinderSpans :: [Stmt Ann] -> [BinderInfo]
+collectBinderSpans = concatMap stmtBinders
   where
     stmtBinders stmt =
       case stmt of
-        Defn _ _ e -> expBinders e
-        Function _ args _ clauses _ ->
-          let argBinders = foldl' Map.union Map.empty (map argBinder args)
-              clauseBinders' = foldl' Map.union Map.empty (map clauseBinders clauses)
-          in Map.union argBinders clauseBinders'
-        PrimFunc _ args _ _ ->
-          foldl' Map.union Map.empty (map argBinder args)
-        ExpStmt e -> expBinders e
-        _ -> Map.empty
+        Defn _ ty e ->
+          -- For Defn, the scope is the entire statement
+          let scope = mergeSpan (annSpan (annTy ty)) (annSpan (annExp e))
+          in expBinders scope e
+        Function _ args retTy clauses _ ->
+          -- For Function, arguments are valid in all clause bodies
+          -- Use the merged span of all clause bodies as the scope
+          let bodySpans = [annSpan (annExp body) | Clause _ body <- clauses]
+              fnScope = case bodySpans of
+                [] -> annSpan (annTy retTy)
+                (first:rest) -> foldl' mergeSpan first rest
+              argBinders' = concatMap (argBinder fnScope) args
+              clauseBinders' = concatMap clauseBindersWithOwnScope clauses
+          in argBinders' ++ clauseBinders'
+        PrimFunc _ args retTy _ ->
+          let scope = annSpan (annTy retTy)
+          in concatMap (argBinder scope) args
+        ExpStmt e ->
+          let scope = annSpan (annExp e)
+          in expBinders scope e
+        _ -> []
 
-    argBinder (ident, ty) =
-      Map.singleton ident (spanToRange (annSpan (annTy ty)))
+    argBinder scope (ident, ty) =
+      [BinderInfo ident (spanToRange (annSpan (annTy ty))) scope]
 
-    clauseBinders (Clause pat body) =
-      Map.union (patBinders pat) (expBinders body)
+    clauseBindersWithOwnScope (Clause pat body) =
+      -- Each clause uses its own body as the scope for pattern variables
+      let bodyScope = annSpan (annExp body)
+      in patBinders bodyScope pat ++ expBinders bodyScope body
 
-    patBinders pat =
+    clauseBinders scope (Clause pat body) =
+      patBinders scope pat ++ expBinders scope body
+
+    patBinders scope pat =
       case pat of
-        PWildcard _ -> Map.empty
-        PVar ident ann -> Map.singleton ident (spanToRange (annSpan ann))
-        PCtor _ pats -> foldl' Map.union Map.empty (map patBinders pats)
-        PIntLit _ _ -> Map.empty
-        PFloatLit _ _ -> Map.empty
-        PStrLit _ _ -> Map.empty
-        PListLit pats -> foldl' Map.union Map.empty (map patBinders pats)
+        PWildcard _ -> []
+        PVar ident ann -> [BinderInfo ident (spanToRange (annSpan ann)) scope]
+        PCtor _ pats -> concatMap (patBinders scope) pats
+        PIntLit _ _ -> []
+        PFloatLit _ _ -> []
+        PStrLit _ _ -> []
+        PListLit pats -> concatMap (patBinders scope) pats
 
-    expBinders e =
+    expBinders scope e =
       case e of
         Let ann name body ->
-          Map.insert name (spanToRange (annSpan ann)) (expBinders body)
+          -- For Let, the variable is bound in the body
+          let letScope = annSpan (annExp body)
+          in BinderInfo name (spanToRange (annSpan ann)) letScope : expBinders letScope body
         Bind ann name b ->
-          Map.insert name (spanToRange (annSpan ann)) (expBinders b)
-        App _ f args -> foldl' Map.union Map.empty (map expBinders (f:args))
-        Seq _ a b -> Map.union (expBinders a) (expBinders b)
+          -- For Bind, use the provided scope (from the enclosing context)
+          BinderInfo name (spanToRange (annSpan ann)) scope : expBinders scope b
+        App _ f args -> concatMap (expBinders scope) (f:args)
+        Seq _ a b -> expBinders scope a ++ expBinders scope b
         Match _ scr clauses ->
-          Map.union (expBinders scr) (foldl' Map.union Map.empty (map clauseBinders clauses))
-        _ -> Map.empty
+          expBinders scope scr ++ concatMap (clauseBinders scope) clauses
+        _ -> []
+

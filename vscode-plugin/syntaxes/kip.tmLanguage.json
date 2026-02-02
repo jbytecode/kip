@@ -6,10 +6,7 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#numbers" },
-    { "include": "#boolean-literals" },
     { "include": "#keywords" },
-    { "include": "#constructors" },
-    { "include": "#types" },
     { "include": "#identifiers" }
   ],
   "repository": {
@@ -53,23 +50,11 @@
         }
       ]
     },
-    "boolean-literals": {
-      "patterns": [
-        {
-          "name": "constant.language.boolean.kip",
-          "match": "\\b(?:doğru|yanlış)(?='|[\\s,;.)]|$)"
-        },
-        {
-          "name": "constant.language.boolean.kip meta.suffix.kip",
-          "match": "(?<=doğru|yanlış)'[\\p{L}\\p{M}]+"
-        }
-      ]
-    },
     "keywords": {
       "patterns": [
         {
           "name": "keyword.declaration.kip",
-          "match": "\\b(?:Bir|yerleşiktir)\\b"
+          "match": "\\b(?:Bir|yerleşiktir|olsun)\\b"
         },
         {
           "name": "keyword.control.kip",
@@ -78,42 +63,6 @@
         {
           "name": "keyword.control.kip",
           "match": "\\b(?:ya|olabilir|var|için|olarak|dersek)\\b"
-        },
-        {
-          "name": "keyword.control.conditional.kip",
-          "match": "\\b[\\p{Ll}\\p{M}]+(?:-[\\p{L}\\p{M}]+)*(?:se|sa|yse|ysa)(?='|[\\s,;.)]|$)"
-        },
-        {
-          "name": "keyword.control.conditional.kip meta.suffix.kip",
-          "match": "(?<=se|sa|yse|ysa)'[\\p{L}\\p{M}]+"
-        }
-      ]
-    },
-    "constructors": {
-      "patterns": [
-        {
-          "name": "constant.other.constructor.kip",
-          "match": "\\b[A-ZĞÜŞÖÇI][\\p{L}\\p{M}]*(?:-[A-ZĞÜŞÖÇI][\\p{L}\\p{M}]*)*(?='|[\\s,;.)]|$)"
-        },
-        {
-          "name": "constant.other.constructor.kip meta.suffix.kip",
-          "match": "(?<=[A-ZĞÜŞÖÇI][\\p{L}\\p{M}]*)'[\\p{L}\\p{M}]+"
-        }
-      ]
-    },
-    "types": {
-      "patterns": [
-        {
-          "name": "entity.name.type.kip",
-          "match": "(?<=:\\s*)[\\p{Ll}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?='|[\\s,;.)]|$)"
-        },
-        {
-          "name": "entity.name.type.kip meta.suffix.kip",
-          "match": "(?<=:\\s*[\\p{L}\\p{M}]+)'[\\p{L}\\p{M}]+"
-        },
-        {
-          "name": "entity.name.type.kip",
-          "match": "(?<=Bir\\s+)[\\p{Ll}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*"
         }
       ]
     },
@@ -121,11 +70,7 @@
       "patterns": [
         {
           "name": "variable.other.kip",
-          "match": "\\b[\\p{Ll}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?='|[\\s,;.()]|$)"
-        },
-        {
-          "name": "variable.other.kip meta.suffix.kip",
-          "match": "(?<=[\\p{Ll}\\p{M}][\\p{L}\\p{M}]*)'[\\p{L}\\p{M}]+"
+          "match": "[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?(?:se|sa|yse|ysa)?(?='|[\\s,;.()]|$)"
         }
       ]
     }
