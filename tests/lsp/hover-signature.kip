@@ -1,0 +1,5 @@
+(* Test hover shows full function signature with parameter names and cases *)
+
+(bu tam-sayıyla) (şu tam-sayının) toplamı, (bunla şunun toplamıdır).
+
+(5'le 3'ün toplamını) yaz.

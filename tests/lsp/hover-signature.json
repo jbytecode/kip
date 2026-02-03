@@ -1,0 +1,9 @@
+{
+  "diagnosticsAtLeast": 0,
+  "formattingEdits": false,
+  "hover": true,
+  "hoverAt": { "line": 4, "character": 15 },
+  "hoverContains": ["bu", "şu", "toplamı", "tam-sayı"],
+  "completionIncludes": [],
+  "cache": false
+}

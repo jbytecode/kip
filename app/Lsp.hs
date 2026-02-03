@@ -2,6 +2,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE DisambiguateRecordFields #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
 
 -- | Language Server Protocol implementation for Kip.
@@ -12,7 +13,7 @@ import Control.Monad (void, when, forM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (runReaderT)
 import Data.List (foldl', nub, isPrefixOf, sortOn)
-import Data.Maybe (fromMaybe, mapMaybe, maybeToList, listToMaybe)
+import Data.Maybe (fromMaybe, mapMaybe, maybeToList, listToMaybe, isJust)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -22,6 +23,7 @@ import Data.Row.Records ((.!))
 import System.Directory (canonicalizePath, doesFileExist, listDirectory, doesDirectoryExist)
 import System.Environment (getExecutablePath)
 import System.FilePath (takeDirectory, takeExtension, (</>), normalise, addTrailingPathSeparator)
+import System.IO (hPutStrLn, stderr)
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar, readMVar)
 
 import Language.LSP.Server
@@ -213,6 +215,32 @@ onDidSave msg = do
       _ <- liftIO (writeCacheForDoc st uri doc)
       return ()
 
+-- | Render an identifier with spaces between parts.
+renderIdentifier :: Identifier -> Text
+renderIdentifier (parts, stem) =
+  T.unwords (parts ++ [stem | not (T.null stem)])
+
+-- | Find a function definition by name in statements.
+-- Returns the function name, arguments (if any), and return type.
+findFunctionDef :: Identifier -> [Stmt Ann] -> Maybe (Identifier, [Arg Ann], Ty Ann)
+findFunctionDef name stmts =
+  listToMaybe $
+    -- First try Function statements
+    [(n, args, retTy) | Function n args retTy _ _ <- stmts, n == name] ++
+    -- Also try Defn statements (which might be nullary functions)
+    [(n, [], ty) | Defn n ty _ <- stmts, n == name]
+
+-- | Render a function signature for hover with parameter names and return type.
+renderHoverSignature :: Identifier -> [Arg Ann] -> Ty Ann -> RenderCache -> FSM -> [Identifier] -> [(Identifier, [Identifier])] -> IO Text
+renderHoverSignature fnName args retTy cache fsm paramTyCons tyMods = do
+  -- Use the existing renderFunctionSignature from Kip.Render
+  (argsStrs, nameStr) <- renderFunctionSignature cache fsm paramTyCons tyMods fnName args
+  retTyText <- renderTyText cache fsm paramTyCons tyMods retTy
+  -- Format as: (arg1) (arg2) ... (name retType)
+  let paramTexts = [T.pack ("(" ++ arg ++ ")") | arg <- argsStrs]
+      retText = T.pack $ "(" ++ nameStr ++ " " ++ T.unpack retTyText ++ ")"
+  return $ T.intercalate " " (paramTexts ++ [retText])
+
 #if MIN_VERSION_lsp_types(2,3,0)
 onHover :: TRequestMessage 'Method_TextDocumentHover -> (Either (TResponseError 'Method_TextDocumentHover) (MessageResult 'Method_TextDocumentHover) -> LspM Config ()) -> LspM Config ()
 #else
@@ -228,19 +256,73 @@ onHover req respond = do
     Just doc -> do
       let mExp = findExpAt pos (dsStmts doc)
       case mExp of
-        Nothing -> respond (Right (InR Null))
+        Nothing -> do
+          respond (Right (InR Null))
         Just exp' -> do
-          let tcSt = dsTC doc
-          res <- liftIO (runTCM (inferType exp') tcSt)
-          case res of
-            Left _ -> respond (Right (InR Null))
-            Right (Nothing, _) -> respond (Right (InR Null))
-            Right (Just ty, _) -> do
-              let pst = dsParser doc
-                  paramTyCons = [name | (name, arity) <- parserTyCons pst, arity > 0]
-                  tyMods = parserTyMods pst
-              tyText <- liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
-              let contents = InL (MarkupContent MarkupKind_PlainText tyText)
+          let pst = dsParser doc
+              paramTyCons = [name | (name, arity) <- parserTyCons pst, arity > 0]
+              tyMods = parserTyMods pst
+          -- Try to render function signature if this is a function reference
+          let tryRenderSignature varExp = do
+                -- Use dsResolved to get the canonical identifier
+                let expSpan = annSpan (annExp varExp)
+                    mResolved = Map.lookup expSpan (dsResolved doc)
+                    mResolvedIdent = case mResolved of
+                      Just resolved -> Just resolved
+                      Nothing -> case varExp of
+                        Var _ varName candidates ->
+                          -- Fallback: try all candidate names
+                          listToMaybe (varName : map fst candidates)
+                        _ -> Nothing
+                case mResolvedIdent of
+                  Just resolvedName -> do
+                    let mFnDef = findFunctionDef resolvedName (dsStmts doc)
+                    case mFnDef of
+                      Just (fnName, args, retTy) -> do
+                        liftIO $ renderHoverSignature fnName args retTy (lsCache st) (lsFsm st) paramTyCons tyMods
+                      Nothing -> do
+                        -- Not a function, fall back to type
+                        let tcSt = dsTC doc
+                        res <- liftIO (runTCM (inferType exp') tcSt)
+                        case res of
+                          Right (Just ty, _) ->
+                            liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                          _ -> return ""
+                  Nothing -> do
+                    -- No resolved name, fall back to type
+                    let tcSt = dsTC doc
+                    res <- liftIO (runTCM (inferType exp') tcSt)
+                    case res of
+                      Right (Just ty, _) ->
+                        liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                      _ -> return ""
+
+          hoverText <- case exp' of
+            var@Var{} -> tryRenderSignature var
+            App _ fn _ ->
+              -- For App expressions, check if the function is a Var and render its signature
+              case fn of
+                var@Var{} -> tryRenderSignature var
+                _ -> do
+                  -- Fall back to type for other cases
+                  let tcSt = dsTC doc
+                  res <- liftIO (runTCM (inferType exp') tcSt)
+                  case res of
+                    Right (Just ty, _) ->
+                      liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                    _ -> return ""
+            _ -> do
+              -- For non-Var expressions, just show the type
+              let tcSt = dsTC doc
+              res <- liftIO (runTCM (inferType exp') tcSt)
+              case res of
+                Right (Just ty, _) ->
+                  liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                _ -> return ""
+          if T.null hoverText
+            then respond (Right (InR Null))
+            else do
+              let contents = InL (MarkupContent MarkupKind_PlainText hoverText)
                   hover = Hover contents Nothing
               respond (Right (InL hover))
 
@@ -270,12 +352,13 @@ onDefinition req respond = do
               respond (Right (InL (Definition (InR [loc]))))
             Nothing -> do
               -- Not a bound variable, continue with normal definition lookup
-              let mResolved =
-                    case findExpAt pos (dsStmts doc) of
+              let mExp = findExpAt pos (dsStmts doc)
+                  mResolved =
+                    case mExp of
                       Just Var{annExp = annExp'} -> Map.lookup (annSpan annExp') (dsResolved doc)
                       _ -> Nothing
                   mResolvedSig =
-                    case findExpAt pos (dsStmts doc) of
+                    case mExp of
                       Just Var{annExp = annExp'} -> Map.lookup (annSpan annExp') (dsResolvedSigs doc)
                       _ -> Nothing
                   resolvedKeys =
@@ -400,6 +483,7 @@ analyzeDocument st uri text = do
   mCached <- loadCachedDoc st uri text
   case mCached of
     Just (pstCached, tcCached, stmts) -> do
+      -- Compute these once for cached path
       let defSpans = defSpansFromParser (lsBaseParser st) stmts pstCached
           -- NOTE: Span keys do not carry file paths, so cached resolved maps
           -- can contain entries from other modules that collide on (line,col).
@@ -421,13 +505,14 @@ analyzeDocument st uri text = do
               doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty []
           return (doc, [diag])
         Right (stmts, pst') -> do
-          let defSpans = defSpansFromParser (lsBaseParser st) stmts pst'
+          -- Compute these once, early, and reuse throughout
+          let !defSpans = defSpansFromParser (lsBaseParser st) stmts pst'
+              !binderSpans = collectBinderSpans stmts
           declRes <- runTCM (registerForwardDecls stmts) baseTC
           case declRes of
             Left tcErr -> do
               diag <- tcErrorToDiagnostic st text tcErr
-              let binderSpans = collectBinderSpans stmts
-                  doc = DocState text pst' baseTC stmts [diag] defSpans Map.empty Map.empty binderSpans
+              let doc = DocState text pst' baseTC stmts [diag] defSpans Map.empty Map.empty binderSpans
               return (doc, [diag])
             Right (_, tcStWithDecls) -> do
               tcStWithDefs <- case uriToFilePath uri of
@@ -443,10 +528,10 @@ analyzeDocument st uri text = do
                     Left _ -> return tcStWithDecls
                     Right (_, tcStDefs) -> return tcStDefs
               (tcStFinal, diags) <- typecheckStmts st text tcStWithDefs stmts
-              let docSpans = docSpanSet stmts
-                  resolved = Map.fromList (filterResolved docSpans (tcResolvedNames tcStFinal))
-                  resolvedSigs = Map.fromList (filterResolved docSpans (tcResolvedSigs tcStFinal))
-                  binderSpans = collectBinderSpans stmts
+              -- Compute docSpans once and reuse for both resolved maps
+              let !docSpans = docSpanSet stmts
+                  !resolved = Map.fromList (filterResolved docSpans (tcResolvedNames tcStFinal))
+                  !resolvedSigs = Map.fromList (filterResolved docSpans (tcResolvedSigs tcStFinal))
                   doc = DocState text pst' tcStFinal stmts diags defSpans resolved resolvedSigs binderSpans
               return (doc, diags)
 
@@ -460,13 +545,18 @@ loadCachedDoc st uri text =
       if not exists
         then return Nothing
         else do
-          diskText <- TIO.readFile absPath
-          if diskText /= text
-            then return Nothing
-            else do
-              let cachePath = cacheFilePath absPath
-              mCached <- loadCachedModule cachePath
-              return (fmap cachedDocFrom mCached)
+          let cachePath = cacheFilePath absPath
+          mCached <- loadCachedModule cachePath
+          case mCached of
+            Nothing -> return Nothing
+            Just cached -> do
+              -- Compare hash of in-memory text with cached sourceHash to detect unsaved changes
+              let textBytes = encodeUtf8 text
+                  textHash = hash textBytes
+                  cachedHash = sourceHash (metadata cached)
+              if textHash == cachedHash
+                then return (Just (cachedDocFrom cached))
+                else return Nothing  -- Text in memory differs from cached version
   where
     cachedDocFrom cached =
       let pstCached = fromCachedParserState (lsFsm st) (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
