@@ -11,6 +11,7 @@ module Kip.Render
   , renderTy
   , renderTyNom
   , renderTyParts
+  , renderTyPossessive
   , renderArg
   , renderArgParts
   , renderFunctionSignature
@@ -206,106 +207,6 @@ pickDownFormWithStem mStem forms =
          take stemLen form == stem &&
          form !! stemLen == c
 
--- | Apply a minimal suffix heuristic when morphology yields no forms.
-fallbackInflect :: String -- ^ Surface form.
-                -> [Case] -- ^ Desired cases.
-                -> String -- ^ Inflected form.
-fallbackInflect s cases =
-  case cases of
-    [P3s] -> addP3sSuffix s
-    [Gen] -> addGenSuffix s
-    [Acc] -> addAccSuffix s
-    [Dat] -> addDatSuffix s
-    [Loc] -> addLocSuffix s
-    [Abl] -> addAblSuffix s
-    _ -> s
-
--- | Add the genitive suffix for a simple fallback inflection.
-addGenSuffix :: String -- ^ Surface form.
-             -> String -- ^ Inflected form.
-addGenSuffix s
-  | null s = s
-  | maybe False isDigit (lastChar s) = s ++ "'nin"
-  | otherwise =
-      case lastVowel s of
-        Nothing -> s ++ "in"
-        Just v ->
-          let suffixV = genVowel v
-              connector = if endsWithVowel s then "n" else ""
-          in s ++ connector ++ [suffixV] ++ "n"
-  where
-    genVowel v
-      | v `elem` "aı" = 'ı'
-      | v `elem` "ou" = 'u'
-      | v `elem` "ei" = 'i'
-      | v `elem` "öü" = 'ü'
-      | otherwise = 'i'
-
--- | Add the accusative suffix for a simple fallback inflection.
-addAccSuffix :: String -- ^ Surface form.
-             -> String -- ^ Inflected form.
-addAccSuffix s =
-  case lastVowel s of
-    Nothing -> s ++ "'i"
-    Just v ->
-      let suffixV = accVowel v
-          separator = if maybe False isDigit (lastChar s) then "'" else ""
-          connector = if endsWithVowel s then "y" else ""
-      in s ++ separator ++ connector ++ [suffixV]
-  where
-    accVowel v
-      | v `elem` "aı" = 'ı'
-      | v `elem` "ou" = 'u'
-      | v `elem` "ei" = 'i'
-      | v `elem` "öü" = 'ü'
-      | otherwise = 'i'
-
--- | Add the dative suffix for a simple fallback inflection.
-addDatSuffix :: String -- ^ Surface form.
-             -> String -- ^ Inflected form.
-addDatSuffix s =
-  case lastVowel s of
-    Nothing -> s ++ "'e"
-    Just v ->
-      let suffixV = if v `elem` "eiöü" then 'e' else 'a'
-          separator = if maybe False isDigit (lastChar s) then "'" else ""
-          connector = if endsWithVowel s then "y" else ""
-      in s ++ separator ++ connector ++ [suffixV]
-
--- | Add the locative suffix for a simple fallback inflection.
-addLocSuffix :: String -- ^ Surface form.
-             -> String -- ^ Inflected form.
-addLocSuffix s =
-  case lastVowel s of
-    Nothing -> s ++ "'de"
-    Just v ->
-      let suffixV = if v `elem` "eiöü" then 'e' else 'a'
-          separator = if maybe False isDigit (lastChar s) then "'" else ""
-      in s ++ separator ++ "d" ++ [suffixV]
-
--- | Add the ablative suffix for a simple fallback inflection.
-addAblSuffix :: String -- ^ Surface form.
-             -> String -- ^ Inflected form.
-addAblSuffix s =
-  case lastVowel s of
-    Nothing -> s ++ "'den"
-    Just v ->
-      let suffixV = if v `elem` "eiöü" then 'e' else 'a'
-          separator = if maybe False isDigit (lastChar s) then "'" else ""
-      in s ++ separator ++ "d" ++ [suffixV] ++ "n"
-
--- | Add the 3rd person possessive suffix for a simple fallback inflection.
-addP3sSuffix :: String -- ^ Surface form.
-             -> String -- ^ Inflected form.
-addP3sSuffix s =
-  case lastVowel s of
-    Nothing -> s
-    Just v ->
-      let suffixV = p3sVowel v
-      in if endsWithVowel s
-           then s ++ "s" ++ [suffixV]
-           else s ++ [suffixV]
-
 -- | Find the last vowel in a word.
 lastVowel :: String -- ^ Input word.
           -> Maybe Char -- ^ Last vowel when present.
@@ -343,6 +244,18 @@ p3sVowel v
   | v `elem` "öü" = 'ü'
   | otherwise = 'ı'
 
+-- | Add possessive suffix to a stem (minimal fallback for P3s case).
+addP3sSuffix :: String -- ^ Input stem.
+             -> String -- ^ Stem with P3s suffix.
+addP3sSuffix stem =
+  case lastVowel stem of
+    Nothing -> stem ++ "ı"  -- No vowel, default to ı
+    Just v ->
+      let suffixVowel = p3sVowel v
+      in if endsWithVowel stem
+           then stem ++ ['s', suffixVowel]  -- After vowel: add 's' + vowel
+           else stem ++ [suffixVowel]       -- After consonant: just add vowel
+
 -- | Render an identifier with one or more cases applied.
 renderIdentWithCases :: RenderCache -- ^ Render cache.
                      -> FSM -- ^ Morphology FSM.
@@ -356,7 +269,12 @@ renderIdentWithCases cache fsm (xs, x) cases = do
   forms' <- if null forms
     then deriveInflectedForms cache fsm stem (concatMap caseTag (filter (/= Nom) cases))
     else return forms
-  let root = fromMaybe (fallbackInflect stem cases) (pickDownFormWithStem (Just stem) forms)
+  -- Use FSM-derived forms, or minimal fallback if FSM fails.
+  -- P3s (possessive) fallback is kept since it's regular and needed for types.
+  let minimalFallback = case cases of
+        [P3s] -> addP3sSuffix stem
+        _ -> stem
+      root = fromMaybe minimalFallback (pickDownFormWithStem (Just stem) forms)
       root' = fromMaybe root (pickDownFormWithStem (Just stem) forms')
   return (T.unpack (T.intercalate (T.pack "-") (xs ++ [T.pack root'])))
 

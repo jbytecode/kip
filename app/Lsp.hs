@@ -231,6 +231,18 @@ findFunctionDef name stmts =
     -- Also try Defn statements (which might be nullary functions)
     [(n, [], ty) | Defn n ty _ <- stmts, n == name]
 
+-- | Inflect the last word of a string with a given case.
+inflectLastWord :: RenderCache -> FSM -> String -> IO String
+inflectLastWord cache fsm s =
+  case words s of
+    [] -> return s
+    ws ->
+      case reverse ws of
+        lastWord:revRest -> do
+          inflected <- renderIdentWithCases cache fsm ([], T.pack lastWord) [P3s]
+          return (unwords (reverse (inflected : revRest)))
+        [] -> return s
+
 -- | Render a function signature for hover with parameter names and return type.
 renderHoverSignature :: Identifier -> [Arg Ann] -> Ty Ann -> Bool -> RenderCache -> FSM -> [Identifier] -> [(Identifier, [Identifier])] -> IO Text
 renderHoverSignature fnName args retTy isInfinitive cache fsm paramTyCons tyMods = do
@@ -248,17 +260,21 @@ renderHoverSignature fnName args retTy isInfinitive cache fsm paramTyCons tyMods
           nameStr = case pickDownForm forms of
             Just f | '\'' `notElem` f && base `isPrefixOf` f -> f
             _ -> base ++ "mak"  -- Simple fallback
-      retTyText <- renderTyText cache fsm paramTyCons tyMods retTy
-      let paramTexts = map T.pack argsStrs
-          retText = T.pack $ "(" ++ nameStr ++ " " ++ T.unpack retTyText ++ ")"
-      return $ T.intercalate " " (paramTexts ++ [retText])
+      -- Render return type and inflect last word with P3s (following REPL approach)
+      retTyBase <- renderTy cache fsm paramTyCons tyMods retTy
+      retTyStr <- inflectLastWord cache fsm retTyBase
+      let paramTexts = argsStrs
+          retText = "(" ++ nameStr ++ " " ++ retTyStr ++ ")"
+      return $ T.pack $ unwords (paramTexts ++ [retText])
     else do
       -- Non-infinitive: use regular signature rendering
       (argsStrs, nameStr) <- renderFunctionSignature cache fsm paramTyCons tyMods fnName args
-      retTyText <- renderTyText cache fsm paramTyCons tyMods retTy
-      let paramTexts = map T.pack argsStrs
-          retText = T.pack $ "(" ++ nameStr ++ " " ++ T.unpack retTyText ++ ")"
-      return $ T.intercalate " " (paramTexts ++ [retText])
+      -- Render return type and inflect last word with P3s (following REPL approach)
+      retTyBase <- renderTy cache fsm paramTyCons tyMods retTy
+      retTyStr <- inflectLastWord cache fsm retTyBase
+      let paramTexts = argsStrs
+          retText = "(" ++ nameStr ++ " " ++ retTyStr ++ ")"
+      return $ T.pack $ unwords (paramTexts ++ [retText])
 
 #if MIN_VERSION_lsp_types(2,3,0)
 onHover :: TRequestMessage 'Method_TextDocumentHover -> (Either (TResponseError 'Method_TextDocumentHover) (MessageResult 'Method_TextDocumentHover) -> LspM Config ()) -> LspM Config ()
