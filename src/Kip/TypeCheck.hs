@@ -138,7 +138,7 @@ recordFuncSigLocations path defs =
 -- | Type checker state for names, signatures, and constructors.
 data TCState =
   MkTCState
-    { tcCtx :: [Identifier] -- ^ Names in scope.
+    { tcCtx :: Set.Set Identifier -- ^ Names in scope.
     , tcFuncs :: [(Identifier, Int)] -- ^ Known function arities.
     , tcFuncSigs :: [(Identifier, [Arg Ann])] -- ^ Function argument signatures.
     , tcFuncSigRets :: [((Identifier, [Ty Ann]), Ty Ann)] -- ^ Function return types by arg types.
@@ -174,7 +174,7 @@ instance Binary TCState where
 
 -- | Empty type checker state.
 emptyTCState :: TCState -- ^ Empty type checker state.
-emptyTCState = MkTCState [] [] [] [] [] [] [] [] [] [] [] Map.empty Map.empty
+emptyTCState = MkTCState Set.empty [] [] [] [] [] [] [] [] [] [] Map.empty Map.empty
 
 -- | Type checker errors.
 data TCError =
@@ -324,7 +324,7 @@ tcExp1With allowEffect e =
                       -- P3s + Acc (e.g. "varlığı" vs "varlık").
                       isBareAccInCtx name =
                         case stripBareAccSuffix name of
-                          Just base -> base `elem` tcCtx && name `notElem` tcCtx
+                          Just base -> Set.member base tcCtx && not (Set.member name tcCtx)
                           Nothing -> False
                       matchSig argsSig =
                         let expCases = map (annCase . annTy . snd) argsSig
@@ -459,7 +459,7 @@ resolveVar :: Ann -- ^ Annotation of the variable occurrence.
            -> TCM (Exp Ann) -- ^ Resolved variable expression.
 resolveVar annExp originalName mArity candidates = do
   MkTCState{tcCtx, tcFuncs} <- get
-  let filtered = filter (\(ident, _) -> ident `elem` tcCtx) candidates
+  let filtered = filter (\(ident, _) -> Set.member ident tcCtx) candidates
   if null filtered
     then
       case fallbackCopulaIdent tcCtx originalName of
@@ -499,7 +499,7 @@ resolveVar annExp originalName mArity candidates = do
 
 -- | Try to match copula-suffixed identifiers to context names.
 -- This is a heuristic fallback because the type checker does not have TRmorph access.
-fallbackCopulaIdent :: [Identifier] -- ^ Context identifiers.
+fallbackCopulaIdent :: Set.Set Identifier -- ^ Context identifiers.
                     -> Identifier -- ^ Identifier to normalize.
                     -> Maybe Identifier -- ^ Matching context identifier.
 fallbackCopulaIdent ctx (mods, word) = do
@@ -510,7 +510,7 @@ fallbackCopulaIdent ctx (mods, word) = do
         , stripInfinitiveSuffix stripped >>= dropTrailingVowel >>= dropTrailingSoftG
         ]
       roots = nub (baseRoots ++ infinitiveRoots)
-  find (`elem` ctx) [(mods, root) | root <- roots]
+  find (`Set.member` ctx) [(mods, root) | root <- roots]
   where
     -- | Strip common copula suffixes from a surface word.
     stripCopulaSuffix :: T.Text -- ^ Surface word.
@@ -578,7 +578,7 @@ withCtx :: [Identifier] -- ^ Identifiers to add to context.
         -> TCM a -- ^ Result of the computation.
 withCtx idents m = do
   st <- get
-  put st { tcCtx = idents ++ tcCtx st }
+  put st { tcCtx = Set.union (Set.fromList idents) (tcCtx st) }
   res <- m
   modify (\s -> s { tcCtx = tcCtx st })
   return res
@@ -624,7 +624,7 @@ tcStmt stmt =
               -- Type error: inferred type doesn't match declared type with rigid type variables
               lift (throwE (NoType NoSpan))
           Nothing -> return ()
-      modify (\s -> s { tcCtx = name : tcCtx s
+      modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
                       , tcVals = (name, e') : tcVals s
                       })
       return (Defn name ty e')
@@ -649,7 +649,7 @@ tcStmt stmt =
             unless matches $
               lift (throwE (NoType NoSpan))
           Nothing -> return ()
-      modify (\s -> s { tcCtx = name : tcCtx s
+      modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
                       , tcFuncs = (name, length args) : tcFuncs s
                       , tcFuncSigs = (name, args) : tcFuncSigs s
                       , tcFuncSigRets =
@@ -661,7 +661,7 @@ tcStmt stmt =
       return (Function name args ty body' isInfinitive)
     PrimFunc name args ty isInfinitive -> do
       modify (\s ->
-        s { tcCtx = name : tcCtx s
+        s { tcCtx = Set.insert name (tcCtx s)
           , tcFuncs = (name, length args) : tcFuncs s
           , tcFuncSigs = (name, args) : tcFuncSigs s
           , tcFuncSigRets = ((name, map snd args), normalizePrimTy ty) : tcFuncSigRets s
@@ -680,13 +680,13 @@ tcStmt stmt =
             [ (ctorName, (ctorArgs, resultTy))
             | ((ctorName, _), ctorArgs) <- ctors
             ]
-      modify (\s -> s { tcCtx = name : ctorNames ++ tcCtx s
+      modify (\s -> s { tcCtx = Set.insert name (Set.union (Set.fromList ctorNames) (tcCtx s))
                       , tcCtors = ctorSigs ++ tcCtors s
                       , tcTyCons = (name, length params) : tcTyCons s
                       })
       return (NewType name params ctors)
     PrimType name -> do
-      modify (\s -> s { tcCtx = name : tcCtx s
+      modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
                       , tcTyCons = (name, 0) : tcTyCons s
                       })
       return (PrimType name)
@@ -816,7 +816,7 @@ inferType e =
               case lookupByCandidates tcCtors varCandidates of
                 Just ([], ty) -> return (Just ty)
                 _ ->
-                  case find (\(ident, _) -> ident `elem` tcCtx) varCandidates of
+                  case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
                     Just (ident, cas) -> return (Just (TyVar (mkAnn cas NoSpan) ident))
                     Nothing -> return Nothing
     App {fn, args} ->
@@ -853,9 +853,9 @@ inferType e =
                   in case lookupFuncRet tcTyCons tcFuncSigRets varCandidates actuals of
                     Just retTy -> return (Just retTy)
                     Nothing ->
-                      let inCtx = any (\(ident, _) -> ident `elem` tcCtx) varCandidates
+                      let inCtx = any (\(ident, _) -> Set.member ident tcCtx) varCandidates
                           inSigs = any (\(ident, _) -> ident `elem` map fst tcFuncSigs) varCandidates
-                      in case find (\(ident, _) -> ident `elem` tcCtx) varCandidates of
+                      in case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
                            Just (ident, _) -> return (Just (TyVar (mkAnn (annCase annExp) NoSpan) ident))
                            Nothing ->
                              if inCtx || inSigs
@@ -1569,19 +1569,19 @@ registerForwardDecls = mapM_ registerStmt
     registerStmt stmt =
       case stmt of
         Function name args _ _ isInfinitive ->
-          modify (\s -> s { tcCtx = name : tcCtx s
+          modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
                           , tcFuncs = (name, length args) : tcFuncs s
                           , tcFuncSigs = (name, args) : tcFuncSigs s
                           , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
                           })
         PrimFunc name args _ isInfinitive ->
-          modify (\s -> s { tcCtx = name : tcCtx s
+          modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
                           , tcFuncs = (name, length args) : tcFuncs s
                           , tcFuncSigs = (name, args) : tcFuncSigs s
                           , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
                           })
         Defn name _ _ ->
-          modify (\s -> s { tcCtx = name : tcCtx s })
+          modify (\s -> s { tcCtx = Set.insert name (tcCtx s) })
         NewType name params ctors -> do
           let ctorNames = map (fst . fst) ctors
               resultTy =
@@ -1592,12 +1592,12 @@ registerForwardDecls = mapM_ registerStmt
                 [ (ctorName, (ctorArgs, resultTy))
                 | ((ctorName, _), ctorArgs) <- ctors
                 ]
-          modify (\s -> s { tcCtx = name : ctorNames ++ tcCtx s
+          modify (\s -> s { tcCtx = Set.insert name (Set.union (Set.fromList ctorNames) (tcCtx s))
                           , tcCtors = ctorSigs ++ tcCtors s
                           , tcTyCons = (name, length params) : tcTyCons s
                           })
         PrimType name ->
-          modify (\s -> s { tcCtx = name : tcCtx s
+          modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
                           , tcTyCons = (name, 0) : tcTyCons s
                           })
         _ -> return ()

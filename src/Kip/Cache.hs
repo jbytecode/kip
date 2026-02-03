@@ -16,6 +16,7 @@ import System.Environment (getExecutablePath)
 import Control.Exception (try, SomeException)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import qualified Data.Map.Strict as Map
+import qualified Data.MultiMap as MultiMap
 import System.IO.Unsafe (unsafePerformIO)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -139,11 +140,11 @@ toCachedEvalState ::
   -> CachedEvalState -- ^ Cached evaluator payload.
 toCachedEvalState es =
   CachedEvalState
-    { evals = evalVals es
-    , efuncs = evalFuncs es
-    , eselectors = evalSelectors es
-    , ectors = evalCtors es
-    , etyCons = evalTyCons es
+    { evals = Map.toList (evalVals es)
+    , efuncs = MultiMap.toList (evalFuncs es)
+    , eselectors = MultiMap.toList (evalSelectors es)
+    , ectors = Map.toList (evalCtors es)
+    , etyCons = Map.toList (evalTyCons es)
     }
 
 -- | Restore an evaluator state from a cached representation.
@@ -154,12 +155,12 @@ fromCachedEvalState ::
   -> EvalState -- ^ Rehydrated evaluator state.
 fromCachedEvalState cache fsm CachedEvalState{..} =
   MkEvalState
-    { evalVals = evals
-    , evalFuncs = efuncs
-    , evalPrimFuncs = [] -- Rebuilt at load time
-    , evalSelectors = eselectors
-    , evalCtors = ectors
-    , evalTyCons = etyCons
+    { evalVals = Map.fromList evals
+    , evalFuncs = MultiMap.fromList efuncs
+    , evalPrimFuncs = MultiMap.empty -- Rebuilt at load time
+    , evalSelectors = MultiMap.fromList eselectors
+    , evalCtors = Map.fromList ectors
+    , evalTyCons = Map.fromList etyCons
     , evalCurrentFile = Nothing
     , evalRender = renderExpValue cache fsm
     , evalRandState = Nothing

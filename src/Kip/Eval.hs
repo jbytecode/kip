@@ -29,17 +29,19 @@ import qualified Data.Text.IO as TIO
 import Text.Read (readMaybe)
 import Data.Maybe (catMaybes)
 import Data.List (find, foldl', intersect, nub)
+import qualified Data.Map.Strict as Map
+import qualified Data.MultiMap as MultiMap
 import Data.Fixed (mod')
 
 -- | Evaluator state: runtime bindings plus render function.
 data EvalState =
   MkEvalState
-    { evalVals :: [(Identifier, Exp Ann)] -- ^ Value bindings.
-    , evalFuncs :: [(Identifier, ([Arg Ann], [Clause Ann]))] -- ^ Function clauses.
-    , evalPrimFuncs :: [(Identifier, [Arg Ann], [Exp Ann] -> EvalM (Exp Ann))] -- ^ Primitive implementations.
-    , evalSelectors :: [(Identifier, Int)] -- ^ Record selector indices.
-    , evalCtors :: [(Identifier, ([Ty Ann], Ty Ann))] -- ^ Constructor signatures.
-    , evalTyCons :: [(Identifier, Int)] -- ^ Type constructor arities.
+    { evalVals :: Map.Map Identifier (Exp Ann) -- ^ Value bindings.
+    , evalFuncs :: MultiMap.MultiMap Identifier ([Arg Ann], [Clause Ann]) -- ^ Function clauses (can be overloaded).
+    , evalPrimFuncs :: MultiMap.MultiMap Identifier ([Arg Ann], [Exp Ann] -> EvalM (Exp Ann)) -- ^ Primitive implementations (can be overloaded).
+    , evalSelectors :: MultiMap.MultiMap Identifier Int -- ^ Record selector indices.
+    , evalCtors :: Map.Map Identifier ([Ty Ann], Ty Ann) -- ^ Constructor signatures.
+    , evalTyCons :: Map.Map Identifier Int -- ^ Type constructor arities.
     , evalCurrentFile :: Maybe FilePath -- ^ Current file path for relative I/O.
     , evalRender :: EvalState -> Exp Ann -> IO String -- ^ Render function for values.
     , evalRandState :: Maybe Word32 -- ^ Optional deterministic random state.
@@ -47,7 +49,7 @@ data EvalState =
 
 -- | Empty evaluator state with a simple pretty-printer.
 emptyEvalState :: EvalState -- ^ Default evaluator state.
-emptyEvalState = MkEvalState [] [] [] [] [] [] Nothing (\_ e -> return (prettyExp e)) Nothing
+emptyEvalState = MkEvalState Map.empty MultiMap.empty MultiMap.empty MultiMap.empty Map.empty Map.empty Nothing (\_ e -> return (prettyExp e)) Nothing
 
 -- | Evaluation errors (currently minimal).
 data EvalError =
@@ -83,12 +85,12 @@ isResolvableInAppContext :: [(Identifier, Case)] -- ^ Variable candidates.
                          -> Bool -- ^ True if resolvable in App context.
 isResolvableInAppContext varCandidates st =
   let fnCandidates = map fst varCandidates
-      fnExists = any (\(n, _) -> n `elem` fnCandidates) (evalFuncs st)
-      primExists = any (\(n, _, _) -> n `elem` fnCandidates) (evalPrimFuncs st)
-      selectorExists = any (\(n, _) -> n `elem` fnCandidates) (evalSelectors st)
+      fnExists = any (\n -> not (null (MultiMap.lookup n (evalFuncs st)))) fnCandidates
+      primExists = any (\n -> not (null (MultiMap.lookup n (evalPrimFuncs st)))) fnCandidates
+      selectorExists = any (\n -> not (null (MultiMap.lookup n (evalSelectors st)))) fnCandidates
       -- Type constructors use full candidate list (not just first elements)
-      tyExists = any (\(ident, _) -> ident `elem` map fst (evalTyCons st)) varCandidates
-      ctorExists = any (\(n, _) -> n `elem` fnCandidates) (evalCtors st)
+      tyExists = any (\(ident, _) -> Map.member ident (evalTyCons st)) varCandidates
+      ctorExists = any (\n -> Map.member n (evalCtors st)) fnCandidates
       randomExists = isRandomCandidate varCandidates
   in fnExists || primExists || selectorExists || tyExists || ctorExists || randomExists
 
@@ -99,10 +101,10 @@ evalExpWith :: [(Identifier, Exp Ann)] -- ^ Local environment bindings.
 evalExpWith localEnv e =
   case e of
     Var {annExp, varName, varCandidates} ->
-      case lookupByCandidates localEnv varCandidates of
+      case lookupByCandidatesList localEnv varCandidates of
         Just v -> return v
         Nothing ->
-          case lookupBySuffix localEnv varName of
+          case lookupBySuffixList localEnv varName of
             Just v -> return v
             Nothing -> do
               st@MkEvalState{evalVals} <- get
@@ -121,20 +123,21 @@ evalExpWith localEnv e =
         Var {varName, varCandidates} -> do
           MkEvalState{evalFuncs, evalPrimFuncs, evalSelectors, evalTyCons} <- get
           case args' of
-            [arg] | any (\(ident, _) -> ident `elem` map fst evalTyCons) varCandidates ->
+            [arg] | any (\(ident, _) -> Map.member ident evalTyCons) varCandidates ->
               return (applyTypeCase (annCase (annExp fn')) arg)
             _ -> do
               let fnCandidates = map fst varCandidates
-                  matches = filter (\(n, _) -> n `elem` fnCandidates) evalFuncs
-                  primMatches = filter (\(n, _, _) -> n `elem` fnCandidates) evalPrimFuncs
+                  matches = [(n, def) | n <- fnCandidates, def <- MultiMap.lookup n evalFuncs]
+                  primMatches = [(n, def) | n <- fnCandidates, def <- MultiMap.lookup n evalPrimFuncs]
               pickPrimByTypes primMatches args' >>= \case
                 Just primImpl -> primImpl args'
                 Nothing ->
                   pickFunctionByTypes matches args' >>= \case
                     Just def -> applyFunction fn' localEnv def args'
                     Nothing ->
-                      case (lookupByCandidates evalSelectors varCandidates, args') of
-                        (Just idx, [arg]) -> applySelector idx arg (App annApp fn' args')
+                      let selectorMatches = [idx | n <- map fst varCandidates, idx <- MultiMap.lookup n evalSelectors]
+                      in case (selectorMatches, args') of
+                        (idx:_, [arg]) -> applySelector idx arg (App annApp fn' args')
                         _ ->
                           if isRandomCandidate varCandidates
                             then primIntRandom args'
@@ -395,7 +398,7 @@ pickFunctionByTypes defs args = do
         | (n, def@(args', _)) <- defs
         , let tys = map snd args'
         , length tys == length args
-        , and (zipWith (typeMatches evalTyCons) argTys tys)
+        , and (zipWith (typeMatches (Map.toList evalTyCons)) argTys tys)
         ]
       fallback =
         [ def
@@ -410,7 +413,7 @@ pickFunctionByTypes defs args = do
       [] -> Nothing
 
 -- | Choose a primitive implementation based on inferred argument types.
-pickPrimByTypes :: [(Identifier, [Arg Ann], [Exp Ann] -> EvalM (Exp Ann))] -- ^ Primitive candidates.
+pickPrimByTypes :: [(Identifier, ([Arg Ann], [Exp Ann] -> EvalM (Exp Ann)))] -- ^ Primitive candidates.
                 -> [Exp Ann] -- ^ Evaluated arguments.
                 -> EvalM (Maybe ([Exp Ann] -> EvalM (Exp Ann))) -- ^ Selected primitive implementation.
 pickPrimByTypes defs args = do
@@ -418,10 +421,10 @@ pickPrimByTypes defs args = do
   argTys <- mapM inferType args
   let matches =
         [ impl
-        | (_, args', impl) <- defs
+        | (_, (args', impl)) <- defs
         , let tys = map snd args'
         , length tys == length args
-        , and (zipWith (typeMatchesAllowUnknown evalTyCons) argTys tys)
+        , and (zipWith (typeMatchesAllowUnknown (Map.toList evalTyCons)) argTys tys)
         ]
   return $ case matches of
     d:_ -> Just d
@@ -446,11 +449,12 @@ typeMatchesAllowUnknown tyCons mTy ty =
         _ -> typeMatches tyCons (Just t) ty
 
 -- | Lookup a binding by candidate identifiers.
-lookupByCandidates :: forall a.
-                      [(Identifier, a)] -- ^ Candidate bindings.
-                   -> [(Identifier, Case)] -- ^ Candidate identifiers.
-                   -> Maybe a -- ^ Matching binding when found.
-lookupByCandidates env candidates =
+-- | Lookup by candidates in a list-based environment.
+lookupByCandidatesList :: forall a.
+                          [(Identifier, a)] -- ^ Candidate bindings.
+                       -> [(Identifier, Case)] -- ^ Candidate identifiers.
+                       -> Maybe a -- ^ Matching binding when found.
+lookupByCandidatesList env candidates =
   let names = map fst candidates
   in go names
   where
@@ -463,11 +467,29 @@ lookupByCandidates env candidates =
         Just v -> Just v
         Nothing -> go ns
 
--- | Heuristic fallback for matching inflected variables in local bindings.
-lookupBySuffix :: [(Identifier, a)] -- ^ Local environment bindings.
-               -> Identifier -- ^ Surface identifier.
-               -> Maybe a -- ^ Matching binding when found.
-lookupBySuffix env (mods, word) =
+-- | Lookup by candidates in a Map-based environment.
+lookupByCandidates :: forall a.
+                      Map.Map Identifier a -- ^ Candidate bindings.
+                   -> [(Identifier, Case)] -- ^ Candidate identifiers.
+                   -> Maybe a -- ^ Matching binding when found.
+lookupByCandidates env candidates =
+  let names = map fst candidates
+  in go names
+  where
+    -- | Try candidates in order.
+    go :: [Identifier] -- ^ Remaining candidate names.
+       -> Maybe a -- ^ Matching binding.
+    go [] = Nothing
+    go (n:ns) =
+      case Map.lookup n env of
+        Just v -> Just v
+        Nothing -> go ns
+
+-- | Heuristic fallback for matching inflected variables in list-based local bindings.
+lookupBySuffixList :: [(Identifier, a)] -- ^ Local environment bindings.
+                   -> Identifier -- ^ Surface identifier.
+                   -> Maybe a -- ^ Matching binding when found.
+lookupBySuffixList env (mods, word) =
   let suffixes =
         [ "yı", "yi", "yu", "yü"
         , "ı", "i", "u", "ü"
@@ -491,8 +513,36 @@ lookupBySuffix env (mods, word) =
         Just v -> Just v
         Nothing -> findMatch rest
 
+-- | Heuristic fallback for matching inflected variables in Map-based bindings.
+lookupBySuffix :: Map.Map Identifier a -- ^ Environment bindings.
+               -> Identifier -- ^ Surface identifier.
+               -> Maybe a -- ^ Matching binding when found.
+lookupBySuffix env (mods, word) =
+  let suffixes =
+        [ "yı", "yi", "yu", "yü"
+        , "ı", "i", "u", "ü"
+        , "ya", "ye", "a", "e"
+        , "dan", "den", "tan", "ten"
+        , "da", "de", "ta", "te"
+        , "nın", "nin", "nun", "nün"
+        , "ın", "in", "un", "ün"
+        , "la", "le"
+        ]
+      stripped =
+        [ (mods, root)
+        | suf <- suffixes
+        , Just root <- [T.stripSuffix suf word]
+        ]
+  in findMatch stripped
+  where
+    findMatch [] = Nothing
+    findMatch (ident:rest) =
+      case Map.lookup ident env of
+        Just v -> Just v
+        Nothing -> findMatch rest
+
 -- | Lookup a constructor binding by candidates.
-lookupCtorByCandidates :: [(Identifier, a)] -- ^ Candidate constructors.
+lookupCtorByCandidates :: Map.Map Identifier a -- ^ Candidate constructors.
                        -> [(Identifier, Case)] -- ^ Candidate identifiers.
                        -> Maybe a -- ^ Matching constructor.
 lookupCtorByCandidates = lookupByCandidates
@@ -528,7 +578,7 @@ inferType e =
                     then return Nothing
                     else do
                       let actuals = catMaybes argTys
-                      case unifyTypes evalTyCons tys actuals of
+                      case unifyTypes (Map.toList evalTyCons) tys actuals of
                         Just subst -> return (Just (applySubst subst resTy))
                         Nothing -> return Nothing
             _ -> return Nothing
@@ -701,14 +751,14 @@ evalStmtInFile mPath stmt =
     modify (\s -> s { evalCurrentFile = mPath })
     case stmt of
       Defn name _ e ->
-        modify (\s -> s { evalVals = (name, e) : evalVals s })
+        modify (\s -> s { evalVals = Map.insert name e (evalVals s) })
       Function name args _ body _ ->
-        modify (\s -> s { evalFuncs = (name, (args, body)) : evalFuncs s })
+        modify (\s -> s { evalFuncs = MultiMap.insert name (args, body) (evalFuncs s) })
       PrimFunc name args _ _ ->
         case primImpl mPath name args of
           Nothing -> return ()
           Just impl ->
-            modify (\s -> s { evalPrimFuncs = (name, args, impl) : evalPrimFuncs s })
+            modify (\s -> s { evalPrimFuncs = MultiMap.insert name (args, impl) (evalPrimFuncs s) })
       Load _ ->
         return ()
       NewType name params ctors -> do
@@ -721,12 +771,12 @@ evalStmtInFile mPath stmt =
               [ (ctorName, (ctorArgs, resultTy))
               | ((ctorName, _), ctorArgs) <- ctors
               ]
-        modify (\s -> s { evalSelectors = selectors ++ evalSelectors s
-                        , evalCtors = ctorSigs ++ evalCtors s
-                        , evalTyCons = (name, length params) : evalTyCons s
+        modify (\s -> s { evalSelectors = foldr (uncurry MultiMap.insert) (evalSelectors s) selectors
+                        , evalCtors = Map.union (Map.fromList ctorSigs) (evalCtors s)
+                        , evalTyCons = Map.insert name (length params) (evalTyCons s)
                         })
       PrimType name ->
-        modify (\s -> s { evalTyCons = (name, 0) : evalTyCons s })
+        modify (\s -> s { evalTyCons = Map.insert name 0 (evalTyCons s) })
       ExpStmt e -> do
         _ <- evalExp e
         return ()

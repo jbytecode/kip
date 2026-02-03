@@ -1,0 +1,6 @@
+(* Test that type names can be used with P3s instead of demonstrative pronouns *)
+
+(x tam-sayısıyla) (y tam-sayısının) toplamı,
+  x'le y'nin toplamıdır.
+
+(5'le 3'ün toplamını) yazmak.

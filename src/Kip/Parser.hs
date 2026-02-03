@@ -2102,15 +2102,16 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     -- | Parse a type without requiring it to be in scope.
     parseTypeLoose :: KipParser (Ty Ann) -- ^ Parsed type.
     parseTypeLoose = do
-      (rawIdent, sp) <- withSpan identifierNotKeyword
+      (rawIdent@(mods, word), sp) <- withSpan identifierNotKeyword
       candidates <- estimateCandidates False rawIdent
-      let ann = mkAnn (pickCase False candidates) sp  -- Types are never P3s
+      let ann = mkAnn (pickCase False candidates) sp
           nameForTy =
             case candidates of
               (ident, _):_ -> ident
               [] -> rawIdent
       MkParserState{parserPrimTypes, parserTyCons} <- getP
       let tyNames = map fst parserTyCons
+      -- Check if it's a known type directly
       case candidates of
         (ident, _):_
           | ident `elem` parserPrimTypes && isIntType ident -> return (TyInt ann)
@@ -2118,10 +2119,20 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
           | ident `elem` parserPrimTypes && isFloatType ident -> return (TyFloat ann)
         (ident, _):_
           | ident `elem` parserPrimTypes && isStringType ident -> return (TyString ann)
-        _ ->
-          if nameForTy `elem` tyNames
+        _ -> do
+          -- If not a known type, try extracting base form with TRmorph for P3s support
+          let tryAsTyName name = name `elem` tyNames || name `elem` parserPrimTypes
+          if tryAsTyName nameForTy
             then return (TyInd ann nameForTy)
-            else return (TyVar ann nameForTy)
+            else do
+              -- Use TRmorph to extract base form (for P3s support)
+              analyses <- upsCached word
+              let extractBase = T.takeWhile (/= '<')
+                  bases = map extractBase analyses
+                  validBase = listToMaybe [base | base <- bases, tryAsTyName (mods, base)]
+              case validBase of
+                Just base -> return (TyInd ann (mods, base))
+                Nothing -> return (TyVar ann nameForTy)
     -- | Parse a statement starting with an expression.
     expFirst :: KipParser (Stmt Ann) -- ^ Parsed expression statement.
     expFirst = do

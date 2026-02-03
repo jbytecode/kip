@@ -721,7 +721,7 @@ renderExpWithCase cache fsm evalSt cas exp =
     Var {annExp, varName, varCandidates} ->
       renderVarWithCase cache fsm varName annExp varCandidates cas
     App {fn = Var {varCandidates}, args} ->
-      case lookupCtorSig (evalCtors evalSt) varCandidates of
+      case lookupCtorSig (M.toList (evalCtors evalSt)) varCandidates of
         Just (ctorName, (argTys, _))
           | length argTys == length args -> do
               argStrs <- sequence
@@ -766,7 +766,7 @@ renderExpNom cache fsm evalSt exp =
     Var {annExp, varName, varCandidates} ->
       renderVarWithCase cache fsm varName annExp varCandidates Nom
     App {fn = Var {varCandidates}, args} ->
-      case lookupCtorSig (evalCtors evalSt) varCandidates of
+      case lookupCtorSig (M.toList (evalCtors evalSt)) varCandidates of
         Just (ctorName, (argTys, _))
           | length argTys == length args -> do
               argStrs <- sequence
