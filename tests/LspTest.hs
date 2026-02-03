@@ -404,7 +404,7 @@ expectHover h target contains = do
 -- | Assert a hover string contains a substring.
 assertHoverContains :: T.Text -> T.Text -> IO ()
 assertHoverContains text needle =
-  unless (T.isInfixOf needle text) (assertFailure "hover missing expected text")
+  unless (T.isInfixOf needle text) (assertFailure $ "hover missing expected text '" ++ T.unpack needle ++ "' in: " ++ T.unpack text)
 
 -- | Extract hover contents text when present.
 hoverText :: A.Value -> Maybe T.Text

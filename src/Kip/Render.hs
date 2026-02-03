@@ -22,6 +22,8 @@ module Kip.Render
   , renderExpValue
   , renderExpWithCase
   , renderExpNom
+  , downsCached
+  , pickDownForm
   ) where
 
 import Data.Char (isLetter, isLower, isDigit, isSpace)

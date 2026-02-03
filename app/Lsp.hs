@@ -41,6 +41,7 @@ import Kip.Cache
 import Kip.Eval (EvalState, emptyEvalState)
 import Kip.Parser
 import Kip.Render
+import qualified Kip.Render as Render
 import Kip.Runner (RenderCtx(..), Lang(..), renderTCError, tcErrSpan, loadPreludeState)
 import Kip.TypeCheck
 import Language.Foma
@@ -231,15 +232,33 @@ findFunctionDef name stmts =
     [(n, [], ty) | Defn n ty _ <- stmts, n == name]
 
 -- | Render a function signature for hover with parameter names and return type.
-renderHoverSignature :: Identifier -> [Arg Ann] -> Ty Ann -> RenderCache -> FSM -> [Identifier] -> [(Identifier, [Identifier])] -> IO Text
-renderHoverSignature fnName args retTy cache fsm paramTyCons tyMods = do
-  -- Use the existing renderFunctionSignature from Kip.Render
-  (argsStrs, nameStr) <- renderFunctionSignature cache fsm paramTyCons tyMods fnName args
-  retTyText <- renderTyText cache fsm paramTyCons tyMods retTy
-  -- Format as: (arg1) (arg2) ... (name retType)
-  let paramTexts = [T.pack ("(" ++ arg ++ ")") | arg <- argsStrs]
-      retText = T.pack $ "(" ++ nameStr ++ " " ++ T.unpack retTyText ++ ")"
-  return $ T.intercalate " " (paramTexts ++ [retText])
+renderHoverSignature :: Identifier -> [Arg Ann] -> Ty Ann -> Bool -> RenderCache -> FSM -> [Identifier] -> [(Identifier, [Identifier])] -> IO Text
+renderHoverSignature fnName args retTy isInfinitive cache fsm paramTyCons tyMods = do
+  -- Use renderFunctionSignatureParts if infinitive, otherwise regular renderFunctionSignature
+  if isInfinitive
+    then do
+      -- For infinitives, use special rendering
+      argsStrs <- mapM (renderArg cache fsm paramTyCons tyMods) args
+      -- Render infinitive name using downs morphology
+      let (ns, stem) = fnName
+          tagged = T.pack (T.unpack stem ++ "<V><vn:inf><N>")
+      forms <- map T.unpack <$> Render.downsCached cache fsm tagged
+      let base = T.unpack stem
+          -- Pick the infinitive form, or fallback to base + "mak/mek"
+          nameStr = case pickDownForm forms of
+            Just f | '\'' `notElem` f && base `isPrefixOf` f -> f
+            _ -> base ++ "mak"  -- Simple fallback
+      retTyText <- renderTyText cache fsm paramTyCons tyMods retTy
+      let paramTexts = map T.pack argsStrs
+          retText = T.pack $ "(" ++ nameStr ++ " " ++ T.unpack retTyText ++ ")"
+      return $ T.intercalate " " (paramTexts ++ [retText])
+    else do
+      -- Non-infinitive: use regular signature rendering
+      (argsStrs, nameStr) <- renderFunctionSignature cache fsm paramTyCons tyMods fnName args
+      retTyText <- renderTyText cache fsm paramTyCons tyMods retTy
+      let paramTexts = map T.pack argsStrs
+          retText = T.pack $ "(" ++ nameStr ++ " " ++ T.unpack retTyText ++ ")"
+      return $ T.intercalate " " (paramTexts ++ [retText])
 
 #if MIN_VERSION_lsp_types(2,3,0)
 onHover :: TRequestMessage 'Method_TextDocumentHover -> (Either (TResponseError 'Method_TextDocumentHover) (MessageResult 'Method_TextDocumentHover) -> LspM Config ()) -> LspM Config ()
@@ -267,6 +286,7 @@ onHover req respond = do
                 -- Use dsResolved to get the canonical identifier
                 let expSpan = annSpan (annExp varExp)
                     mResolved = Map.lookup expSpan (dsResolved doc)
+                    mResolvedSig = Map.lookup expSpan (dsResolvedSigs doc)  -- Get overload-specific signature
                     mResolvedIdent = case mResolved of
                       Just resolved -> Just resolved
                       Nothing -> case varExp of
@@ -274,24 +294,77 @@ onHover req respond = do
                           -- Fallback: try all candidate names
                           listToMaybe (varName : map fst candidates)
                         _ -> Nothing
-                case mResolvedIdent of
-                  Just resolvedName -> do
-                    let mFnDef = findFunctionDef resolvedName (dsStmts doc)
-                    case mFnDef of
-                      Just (fnName, args, retTy) -> do
-                        liftIO $ renderHoverSignature fnName args retTy (lsCache st) (lsFsm st) paramTyCons tyMods
-                      Nothing -> do
-                        -- Not a function, fall back to type
-                        let tcSt = dsTC doc
-                        res <- liftIO (runTCM (inferType exp') tcSt)
+                case (mResolvedIdent, mResolvedSig) of
+                  (Just resolvedName, Just (sigName, argTys)) -> do
+                    -- We have the resolved signature with specific argument types (overload info)
+                    let tcSt = dsTC doc
+                        mFnDef = findFunctionDef resolvedName (dsStmts doc)
+                        mRetTy = lookup (sigName, argTys) (tcFuncSigRets tcSt)
+                        -- Find the function signature that matches the argument types
+                        matchingArgs = [(name, args) | (name, args) <- tcFuncSigs tcSt,
+                                       name == sigName,
+                                       map snd args == argTys]
+                        mArgs = listToMaybe [args | (_, args) <- matchingArgs]
+                        -- For prelude functions, check base TC state for infinitives
+                        -- (TC state clears infinitives during LSP to avoid effect errors)
+                        baseInfinitives = tcInfinitives (lsBaseTC st)
+                        isInfinitive = sigName `elem` baseInfinitives
+                    case (mFnDef, mArgs, mRetTy) of
+                      (Just (fnName, args, _), _, Just retTy) ->
+                        -- Function in current file with TC return type
+                        liftIO $ renderHoverSignature fnName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                      (Just (fnName, args, parsedRetTy), _, Nothing) ->
+                        -- Function in current file, use parsed return type
+                        liftIO $ renderHoverSignature fnName args parsedRetTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                      (Nothing, Just args, Just retTy) ->
+                        -- Prelude function with signature and return type matching the overload
+                        liftIO $ renderHoverSignature sigName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                      _ -> do
+                        -- Fall back to type inference
+                        let tcSt' = dsTC doc
+                        res <- liftIO (runTCM (inferType exp') tcSt')
                         case res of
                           Right (Just ty, _) ->
                             liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
                           _ -> return ""
-                  Nothing -> do
-                    -- No resolved name, fall back to type
+                  (Just resolvedName, Nothing) -> do
+                    -- No resolved signature, try to find function definition
                     let tcSt = dsTC doc
-                    res <- liftIO (runTCM (inferType exp') tcSt)
+                        mFnDef = findFunctionDef resolvedName (dsStmts doc)
+                        mTCFuncSig = lookup resolvedName (tcFuncSigs tcSt)
+                        -- Check base TC state for infinitives
+                        baseInfinitives = tcInfinitives (lsBaseTC st)
+                        isInfinitive = resolvedName `elem` baseInfinitives
+                    case (mFnDef, mTCFuncSig) of
+                      (Just (fnName, args, _parsedRetTy), _) -> do
+                        let argTys = map snd args
+                            mInferredRetTy = lookup (fnName, argTys) (tcFuncSigRets tcSt)
+                            retTy = fromMaybe _parsedRetTy mInferredRetTy
+                        liftIO $ renderHoverSignature fnName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                      (Nothing, Just args) -> do
+                        let argTys = map snd args
+                            mInferredRetTy = lookup (resolvedName, argTys) (tcFuncSigRets tcSt)
+                        case mInferredRetTy of
+                          Just retTy ->
+                            liftIO $ renderHoverSignature resolvedName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                          Nothing -> do
+                            let tcSt' = dsTC doc
+                            res <- liftIO (runTCM (inferType exp') tcSt')
+                            case res of
+                              Right (Just ty, _) ->
+                                liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                              _ -> return ""
+                      (Nothing, Nothing) -> do
+                        let tcSt' = dsTC doc
+                        res <- liftIO (runTCM (inferType exp') tcSt')
+                        case res of
+                          Right (Just ty, _) ->
+                            liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                          _ -> return ""
+                  (Nothing, _) -> do
+                    -- No resolved name, fall back to type
+                    let tcSt' = dsTC doc
+                    res <- liftIO (runTCM (inferType exp') tcSt')
                     case res of
                       Right (Just ty, _) ->
                         liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
