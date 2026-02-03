@@ -79,7 +79,7 @@ Given: @(bu tam-sayının) faktöriyeli@
 module Kip.Parser where
 
 import Data.List
-import Data.Maybe (maybeToList, mapMaybe, isJust, isNothing, fromMaybe)
+import Data.Maybe (maybeToList, mapMaybe, listToMaybe, isJust, isNothing, fromMaybe)
 import qualified Data.Map.Strict as M
 import Control.Applicative (optional)
 import Control.Monad (forM, forM_, guard, unless, when)
@@ -1984,12 +1984,29 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
               _ -> tryStripSuffix rest
       case tryStripSuffix turkishCaseSuffixes of
         Just (base, cas) ->
-          -- Found a case suffix, use base identifier with detected case
+          -- Found apostrophe case suffix, use base identifier with detected case
           return (TyVar (mkAnn cas sp) (mods, base))
         Nothing -> do
-          -- No case suffix found, try regular resolution
-          (ident, cas) <- resolveCandidatePreferNom rawIdent
-          return (TyVar (mkAnn cas sp) ident)
+          -- Try morphological analysis to get base form and case
+          analyses <- upsCached word
+          let -- Extract base form and case from morphological analysis
+              extractBaseAndCase analysis =
+                let base = T.takeWhile (/= '<') analysis
+                    -- Try to extract case from analysis tags
+                    mCase = getPossibleCase analysis
+                in case mCase of
+                     Just (_, cas) -> Just (base, cas)
+                     Nothing -> Nothing
+              -- Try all analyses, prefer the first successful extraction
+              baseAndCase = listToMaybe (mapMaybe extractBaseAndCase analyses)
+          case baseAndCase of
+            Just (base, cas) | base /= word ->
+              -- Found a base form different from surface form
+              return (TyVar (mkAnn cas sp) (mods, base))
+            _ -> do
+              -- Fallback to regular resolution
+              (ident, cas) <- resolveCandidatePreferNom rawIdent
+              return (TyVar (mkAnn cas sp) ident)
 
     -- | Parse a parenthesized type head.
     typeHeadParens :: KipParser (Identifier, Span, [Ty Ann], [Identifier]) -- ^ Parsed type head.
