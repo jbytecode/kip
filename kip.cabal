@@ -96,6 +96,7 @@ executable kip
     , optparse-applicative
     , transformers
     , megaparsec
+    , multimap
     , kip
     , chalk
     , text
@@ -159,6 +160,7 @@ executable kip-lsp
     , lsp
     , lsp-types
     , megaparsec
+    , multimap
     , row-types
     , text
     , transformers

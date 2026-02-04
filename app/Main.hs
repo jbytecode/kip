@@ -28,6 +28,7 @@ import Data.Maybe (fromMaybe, isJust, maybeToList)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Map.Strict as Map
+import qualified Data.MultiMap as MultiMap
 import Text.Megaparsec (ParseErrorBundle(..), errorBundlePretty)
 import Text.Megaparsec.Error (ParseError(..), ErrorFancy(..), ShowErrorComponent(..))
 import qualified Data.List.NonEmpty as NE
@@ -973,8 +974,7 @@ main = do
                       sigs =
                         [ (name, args)
                         | name <- candidateNames
-                        , argsList <- maybeToList (Map.lookup name (tcFuncSigs (replTCState rs)))
-                        , args <- argsList
+                        , args <- MultiMap.lookup name (tcFuncSigs (replTCState rs))
                         ]
                   if null sigs
                     then inferExprType ctx paramTyCons parsed expr

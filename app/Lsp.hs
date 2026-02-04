@@ -15,6 +15,7 @@ import Control.Monad.Reader (runReaderT)
 import Data.List (foldl', nub, isPrefixOf, sortOn)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList, listToMaybe, isJust)
 import qualified Data.Map.Strict as Map
+import qualified Data.MultiMap as MultiMap
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -317,9 +318,7 @@ onHover req respond = do
                         mFnDef = findFunctionDef resolvedName (dsStmts doc)
                         mRetTy = Map.lookup (sigName, argTys) (tcFuncSigRets tcSt)
                         -- Find the function signature that matches the argument types
-                        matchingArgs = case Map.lookup sigName (tcFuncSigs tcSt) of
-                                         Just argsList -> [(sigName, args) | args <- argsList, map snd args == argTys]
-                                         Nothing -> []
+                        matchingArgs = [(sigName, args) | args <- MultiMap.lookup sigName (tcFuncSigs tcSt), map snd args == argTys]
                         mArgs = listToMaybe [args | (_, args) <- matchingArgs]
                         -- For prelude functions, check base TC state for infinitives
                         -- (TC state clears infinitives during LSP to avoid effect errors)
@@ -347,9 +346,8 @@ onHover req respond = do
                     -- No resolved signature, try to find function definition
                     let tcSt = dsTC doc
                         mFnDef = findFunctionDef resolvedName (dsStmts doc)
-                        mTCFuncSigs = Map.lookup resolvedName (tcFuncSigs tcSt)
                         -- Get first signature from MultiMap (for hover, we show the first overload)
-                        mTCFuncSig = mTCFuncSigs >>= listToMaybe
+                        mTCFuncSig = listToMaybe (MultiMap.lookup resolvedName (tcFuncSigs tcSt))
                         -- Check base TC state for infinitives
                         baseInfinitives = tcInfinitives (lsBaseTC st)
                         isInfinitive = Set.member resolvedName baseInfinitives
@@ -494,7 +492,7 @@ onCompletion req respond = do
       let pst = dsParser doc
           ctxIdents = parserCtx pst
           typeNames = map fst (parserTyCons pst) ++ parserPrimTypes pst
-          funcNames = Map.keys (tcFuncSigs (dsTC doc))
+          funcNames = MultiMap.keys (tcFuncSigs (dsTC doc))
           candidates = Set.toList (Set.fromList (ctxIdents ++ typeNames ++ funcNames))
           items = map completionItem candidates
       respond (Right (InL items))
