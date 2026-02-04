@@ -690,7 +690,11 @@ tcStmt stmt =
     Load name ->
       return (Load name)
     NewType name params ctors -> do
+      MkTCState{tcTyCons = existingTyCons} <- get
       let ctorNames = map (fst . fst) ctors
+          paramNames = Set.fromList [n | TyVar _ n <- params]
+          -- Include the type being defined for recursive type support
+          tyConsWithSelf = Map.insert name (length params) existingTyCons
           resultTy =
             case params of
               [] -> TyInd (mkAnn Nom NoSpan) name
@@ -699,6 +703,22 @@ tcStmt stmt =
             [ (ctorName, (ctorArgs, resultTy))
             | ((ctorName, _), ctorArgs) <- ctors
             ]
+      -- Validate that all type variables in constructor arguments are either
+      -- defined types or declared type parameters (including self-reference)
+      let checkTyVar n sp =
+            when (not (Map.member n tyConsWithSelf) && not (Set.member n paramNames)) $
+              lift (throwE (UnknownName n sp))
+          validateTy ty = case ty of
+            TyVar ann n -> checkTyVar n (annSpan ann)
+            TyInd ann n -> checkTyVar n (annSpan ann)
+            TyApp _ ctor args -> do
+              validateTy ctor
+              mapM_ validateTy args
+            Arr _ d i -> do
+              validateTy d
+              validateTy i
+            _ -> return ()
+      mapM_ (\((_, _), ctorArgs) -> mapM_ validateTy ctorArgs) ctors
       modify (\s -> s { tcCtx = Set.insert name (Set.union (Set.fromList ctorNames) (tcCtx s))
                       , tcCtors = Map.union (Map.fromList ctorSigs) (tcCtors s)
                       , tcTyCons = Map.insert name (length params) (tcTyCons s)
@@ -1693,7 +1713,11 @@ registerForwardDecls = mapM_ registerStmt
         Defn name _ _ ->
           modify (\s -> s { tcCtx = Set.insert name (tcCtx s) })
         NewType name params ctors -> do
+          MkTCState{tcTyCons = existingTyCons} <- get
           let ctorNames = map (fst . fst) ctors
+              paramNames = Set.fromList [n | TyVar _ n <- params]
+              -- Include the type being defined for recursive type support
+              tyConsWithSelf = Map.insert name (length params) existingTyCons
               resultTy =
                 case params of
                   [] -> TyInd (mkAnn Nom NoSpan) name
@@ -1702,6 +1726,22 @@ registerForwardDecls = mapM_ registerStmt
                 [ (ctorName, (ctorArgs, resultTy))
                 | ((ctorName, _), ctorArgs) <- ctors
                 ]
+          -- Validate that all type variables in constructor arguments are either
+          -- defined types or declared type parameters (including self-reference)
+          let checkTyVar n sp =
+                when (not (Map.member n tyConsWithSelf) && not (Set.member n paramNames)) $
+                  lift (throwE (UnknownName n sp))
+              validateTy ty = case ty of
+                TyVar ann n -> checkTyVar n (annSpan ann)
+                TyInd ann n -> checkTyVar n (annSpan ann)
+                TyApp _ ctor args -> do
+                  validateTy ctor
+                  mapM_ validateTy args
+                Arr _ d i -> do
+                  validateTy d
+                  validateTy i
+                _ -> return ()
+          mapM_ (\((_, _), ctorArgs) -> mapM_ validateTy ctorArgs) ctors
           modify (\s -> s { tcCtx = Set.insert name (Set.union (Set.fromList ctorNames) (tcCtx s))
                           , tcCtors = Map.union (Map.fromList ctorSigs) (tcCtors s)
                           , tcTyCons = Map.insert name (length params) (tcTyCons s)
