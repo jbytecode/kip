@@ -15,6 +15,10 @@ const libFiles = [
   ...libSources.map((name) => `${name}.iz`),
 ];
 
+// Cache for library files to avoid repeated fetches
+const libFileCache = new Map();
+const encoder = new TextEncoder();
+
 async function loadText(path) {
   const res = await fetch(path);
   if (!res.ok) {
@@ -29,6 +33,28 @@ async function loadBinary(path) {
     throw new Error(`Failed to load ${path}`);
   }
   return new Uint8Array(await res.arrayBuffer());
+}
+
+async function loadLibFile(file) {
+  if (libFileCache.has(file)) {
+    return libFileCache.get(file);
+  }
+
+  let fileObj;
+  if (file.endsWith(".iz")) {
+    try {
+      const data = await loadBinary(`./assets/lib/${file}`);
+      fileObj = new File(data, { readonly: true });
+    } catch (err) {
+      return null;
+    }
+  } else {
+    const text = await loadText(`./assets/lib/${file}`);
+    fileObj = new File(encoder.encode(text), { readonly: true });
+  }
+
+  libFileCache.set(file, fileObj);
+  return fileObj;
 }
 
 class InteractiveStdin extends Fd {
@@ -122,26 +148,26 @@ async function loadWasmModule() {
 }
 
 async function runWasm({ args, source, signal, buffer }) {
-  const encoder = new TextEncoder();
   const rootContents = new Map();
   const libContents = new Map();
   const vendorContents = new Map();
 
+  // Use cached library files
   for (const file of libFiles) {
-    if (file.endsWith(".iz")) {
-      try {
-        const data = await loadBinary(`./assets/lib/${file}`);
-        libContents.set(file, new File(data, { readonly: true }));
-      } catch (err) {
-        continue;
-      }
-    } else {
-      const text = await loadText(`./assets/lib/${file}`);
-      libContents.set(file, new File(encoder.encode(text), { readonly: true }));
+    const fileObj = await loadLibFile(file);
+    if (fileObj) {
+      libContents.set(file, fileObj);
     }
   }
 
-  const fst = await loadBinary("./assets/vendor/trmorph.fst");
+  // Cache vendor files as well
+  let fst;
+  if (libFileCache.has("trmorph.fst")) {
+    fst = libFileCache.get("trmorph.fst").data;
+  } else {
+    fst = await loadBinary("./assets/vendor/trmorph.fst");
+    libFileCache.set("trmorph.fst", new File(fst, { readonly: true }));
+  }
   vendorContents.set("trmorph.fst", new File(fst, { readonly: true }));
 
   rootContents.set("lib", new Directory(libContents));

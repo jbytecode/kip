@@ -541,6 +541,7 @@ let activeMode = null;
 let codegenLines = [];
 let isFullscreen = false;
 let activeAction = null;
+let workerInitialized = false;
 
 function setRunState(isRunning) {
   runBtn.disabled = isRunning;
@@ -593,10 +594,34 @@ function terminateWorker() {
   if (activeWorker) {
     activeWorker.terminate();
     activeWorker = null;
+    workerInitialized = false;
   }
   inputSignalView = null;
   inputBufferView = null;
   pendingInput = false;
+}
+
+function ensureWorker() {
+  if (!activeWorker) {
+    const worker = new Worker(workerUrl, { type: "module" });
+    activeWorker = worker;
+    worker.addEventListener("message", handleWorkerMessage);
+    worker.addEventListener("error", (event) => {
+      setBusyCursor(false);
+      if (activeMode === "codegen") {
+        codegenLines.push(String(event.message || event.error || event));
+        if (codegenOutputEl) {
+          codegenOutputEl.innerHTML = highlightJs(codegenLines.join("\n"));
+        }
+      } else {
+        appendTerminalLine(String(event.message || event.error || event));
+      }
+      setRunState(false);
+      setActiveAction(null);
+    });
+    workerInitialized = true;
+  }
+  return activeWorker;
 }
 
 function createInputBuffers() {
@@ -695,7 +720,6 @@ async function runKip() {
   setRunState(true);
   setActiveAction("run");
   clearTerminal();
-  terminateWorker();
   activeMode = "run";
   interactiveSupported = true;
 
@@ -705,16 +729,8 @@ async function runKip() {
     appendTerminalLine("Interactive input requires cross-origin isolation (COOP/COEP).");
     appendTerminalLine("Running without stdin support.");
   }
-  const worker = new Worker(workerUrl, { type: "module" });
-  activeWorker = worker;
-  worker.addEventListener("message", handleWorkerMessage);
-  worker.addEventListener("error", (event) => {
-    setBusyCursor(false);
-    appendTerminalLine(String(event.message || event.error || event));
-    setRunState(false);
-    setActiveAction(null);
-  });
 
+  const worker = ensureWorker();
   const args = ["kip-playground", "--exec", "/main.kip", "--lang", langEl.value];
   worker.postMessage({
     type: "run",
@@ -731,7 +747,6 @@ function runCodegen() {
   }
   if (!codegenPanelEl.classList.contains("hidden")) {
     setBusyCursor(false);
-    terminateWorker();
     pendingInput = false;
     hideTerminalInput();
     activeMode = null;
@@ -743,23 +758,12 @@ function runCodegen() {
   setBusyCursor(true);
   setRunState(true);
   setActiveAction("codegen");
-  terminateWorker();
   activeMode = "codegen";
   codegenLines = [];
   codegenOutputEl.textContent = "";
   setCodegenVisible(true);
 
-  const worker = new Worker(workerUrl, { type: "module" });
-  activeWorker = worker;
-  worker.addEventListener("message", handleWorkerMessage);
-  worker.addEventListener("error", (event) => {
-    setBusyCursor(false);
-    codegenLines.push(String(event.message || event.error || event));
-    codegenOutputEl.innerHTML = highlightJs(codegenLines.join("\n"));
-    setRunState(false);
-    setActiveAction(null);
-  });
-
+  const worker = ensureWorker();
   const args = ["kip-playground", "--codegen", "js", "/main.kip", "--lang", langEl.value];
   worker.postMessage({
     type: "run",
