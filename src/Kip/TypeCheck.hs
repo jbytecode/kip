@@ -3,6 +3,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
 -- | Type checker and type inference for Kip.
 -- |
 -- | This module performs a single-pass, syntax-directed check over the AST while
@@ -111,7 +112,7 @@ import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Except
 import Control.Monad.IO.Class
 import Data.List (find, foldl', intersect, nub)
-import Data.Maybe (fromMaybe, catMaybes, mapMaybe, isJust)
+import Data.Maybe (fromMaybe, catMaybes, mapMaybe, isJust, maybeToList)
 import qualified Data.Map.Strict as Map
 import System.FilePath (FilePath)
 import qualified Data.Set as Set
@@ -139,14 +140,14 @@ recordFuncSigLocations path defs =
 data TCState =
   MkTCState
     { tcCtx :: Set.Set Identifier -- ^ Names in scope.
-    , tcFuncs :: [(Identifier, Int)] -- ^ Known function arities.
-    , tcFuncSigs :: [(Identifier, [Arg Ann])] -- ^ Function argument signatures.
-    , tcFuncSigRets :: [((Identifier, [Ty Ann]), Ty Ann)] -- ^ Function return types by arg types.
-    , tcVarTys :: [(Identifier, Ty Ann)] -- ^ Variable type bindings.
-    , tcVals :: [(Identifier, Exp Ann)] -- ^ Value bindings for inlining.
-    , tcCtors :: [(Identifier, ([Ty Ann], Ty Ann))] -- ^ Constructor signatures.
-    , tcTyCons :: [(Identifier, Int)] -- ^ Type constructor arities.
-    , tcInfinitives :: [Identifier] -- ^ Infinitive (effectful) functions.
+    , tcFuncs :: Map.Map Identifier [Int] -- ^ Known function arities (MultiMap for overloading).
+    , tcFuncSigs :: Map.Map Identifier [[Arg Ann]] -- ^ Function argument signatures (MultiMap for overloading).
+    , tcFuncSigRets :: Map.Map (Identifier, [Ty Ann]) (Ty Ann) -- ^ Function return types by arg types.
+    , tcVarTys :: [(Identifier, Ty Ann)] -- ^ Variable type bindings (list for shadowing).
+    , tcVals :: Map.Map Identifier (Exp Ann) -- ^ Value bindings for inlining.
+    , tcCtors :: Map.Map Identifier ([Ty Ann], Ty Ann) -- ^ Constructor signatures.
+    , tcTyCons :: Map.Map Identifier Int -- ^ Type constructor arities.
+    , tcInfinitives :: Set.Set Identifier -- ^ Infinitive (effectful) functions.
     , tcResolvedNames :: [(Span, Identifier)] -- ^ Resolved variable names by span.
     , tcResolvedSigs :: [(Span, (Identifier, [Ty Ann]))] -- ^ Resolved function signatures by span.
     , tcDefLocations :: Map.Map Identifier (FilePath, Span) -- ^ Definition locations by identifier.
@@ -158,23 +159,36 @@ data TCState =
 instance Binary TCState where
   put MkTCState{..} = do
     B.put tcCtx
-    B.put tcFuncs
-    B.put tcFuncSigs
-    B.put tcFuncSigRets
+    B.put (Map.toList tcFuncs)
+    B.put (Map.toList tcFuncSigs)
+    B.put (Map.toList tcFuncSigRets)
     B.put tcVarTys
-    B.put tcVals
-    B.put tcCtors
-    B.put tcTyCons
+    B.put (Map.toList tcVals)
+    B.put (Map.toList tcCtors)
+    B.put (Map.toList tcTyCons)
     B.put tcInfinitives
     B.put tcResolvedNames
     B.put tcResolvedSigs
     B.put tcDefLocations
     B.put tcFuncSigLocs
-  get = MkTCState <$> B.get <*> B.get <*> B.get <*> B.get <*> B.get <*> B.get <*> B.get <*> B.get <*> B.get <*> B.get <*> B.get <*> B.get <*> B.get
+  get = do
+    ctx <- B.get
+    funcs <- Map.fromList <$> B.get
+    funcSigs <- Map.fromList <$> B.get
+    funcSigRets <- Map.fromList <$> B.get
+    varTys <- B.get
+    vals <- Map.fromList <$> B.get
+    ctors <- Map.fromList <$> B.get
+    tyCons <- Map.fromList <$> B.get
+    infinitives <- B.get
+    resolvedNames <- B.get
+    resolvedSigs <- B.get
+    defLocs <- B.get
+    MkTCState ctx funcs funcSigs funcSigRets varTys vals ctors tyCons infinitives resolvedNames resolvedSigs defLocs <$> B.get
 
 -- | Empty type checker state.
 emptyTCState :: TCState -- ^ Empty type checker state.
-emptyTCState = MkTCState Set.empty [] [] [] [] [] [] [] [] [] [] Map.empty Map.empty
+emptyTCState = MkTCState Set.empty Map.empty Map.empty Map.empty [] Map.empty Map.empty Map.empty Set.empty [] [] Map.empty Map.empty
 
 -- | Type checker errors.
 data TCError =
@@ -240,7 +254,7 @@ tcExp1With allowEffect e =
           recordResolvedName (annSpan annRes) ident
           unless allowEffect (rejectReadEffect annExp ident)
           MkTCState{tcFuncs} <- get
-          if (ident, 0) `elem` tcFuncs
+          if maybe False (0 `elem`) (Map.lookup ident tcFuncs)
             then do
               recordResolvedSig (annSpan annRes) ident []
               return (App annExp resolved [])
@@ -258,8 +272,8 @@ tcExp1With allowEffect e =
             (ident, _) : _ -> unless allowEffect (rejectReadEffect annFn ident)
             _ -> return ()
           MkTCState{tcFuncSigs, tcTyCons, tcCtors} <- get
-          let tyNames = map fst tcTyCons
-              funcNames = map fst tcFuncSigs
+          let tyNames = Map.keys tcTyCons
+              funcNames = Map.keys tcFuncSigs
           case args' of
             [arg] | any (\(ident, _) -> ident `elem` tyNames) varCandidates
                   , not (any (\(ident, _) -> ident `elem` funcNames) varCandidates) ->
@@ -270,11 +284,11 @@ tcExp1With allowEffect e =
                       (ident, _):_ -> ident
                       [] -> varName
               let fnNames = map fst varCandidates
-                  allSigs = filter (\(n, _) -> n `elem` fnNames) tcFuncSigs
-                  sigs = filter (\(n, argsSig) -> n `elem` fnNames && length argsSig == length args') tcFuncSigs
+                  allSigs = [(n, sig) | n <- fnNames, sigs <- maybeToList (Map.lookup n tcFuncSigs), sig <- sigs]
+                  sigs = [(n, sig) | n <- fnNames, sigList <- maybeToList (Map.lookup n tcFuncSigs), sig <- sigList, length sig == length args']
               if null sigs
                 then do
-                  case lookupByCandidates tcCtors varCandidates of
+                  case lookupByCandidatesMap tcCtors varCandidates of
                     Just (tys, _) -> do
                       argTys <- mapM inferType args'
                       if length tys /= length args'
@@ -302,7 +316,7 @@ tcExp1With allowEffect e =
                         App {fn} -> case fn of
                           -- If calling a constructor, enforce strict case
                           Var {varCandidates} ->
-                            case lookupByCandidates tcCtors varCandidates of
+                            case lookupByCandidatesMap tcCtors varCandidates of
                               Just _ -> False  -- Constructor application - strict case
                               Nothing -> True  -- Function call - flexible case
                           _ -> True  -- Other function calls - flexible case
@@ -365,7 +379,7 @@ tcExp1With allowEffect e =
                         , Just (argsForSig, tysForSig) <- [matchSig argsSig]
                         ]
                   if null matches
-                    then
+                    then do
                       if Nothing `elem` argTys
                         then return (App annApp fn' args')
                         else lift (throwE (NoMatchingOverload nameForErr argTys allSigs (annSpan annApp)))
@@ -421,7 +435,7 @@ tcExp1With allowEffect e =
       MkTCState{tcTyCons} <- get
       case mExpTy of
         Just expTy -> do
-          case unifyTypes tcTyCons [ascType] [expTy] of
+          case unifyTypes (Map.toList tcTyCons) [ascType] [expTy] of
             Just _ -> return (Ascribe annExp ascType exp')
             Nothing -> lift (throwE (PatternTypeMismatch ([], T.pack "ascribe") ascType expTy (annSpan annExp)))
         Nothing -> return (Ascribe annExp ascType exp')
@@ -432,7 +446,7 @@ rejectReadEffect :: Ann -- ^ Expression annotation.
                  -> TCM () -- ^ No result.
 rejectReadEffect ann ident = do
   MkTCState{tcInfinitives} <- get
-  when (ident == ([], T.pack "oku") || ident `elem` tcInfinitives) $
+  when (ident == ([], T.pack "oku") || Set.member ident tcInfinitives) $
     lift (throwE (NoType (annSpan ann)))
 
 -- | Apply a grammatical case to a value expression.
@@ -471,7 +485,7 @@ resolveVar annExp originalName mArity candidates = do
             case mArity of
               Nothing -> filtered
               Just arity ->
-                let names = nub [name | (name, n) <- tcFuncs, n == arity]
+                let names = [name | (name, arities) <- Map.toList tcFuncs, arity `elem` arities]
                     narrowed = filter (\(ident, _) -> ident `elem` names) filtered
                 in if null names || null narrowed
                      then filtered
@@ -593,6 +607,11 @@ normalizePrimTy ty =
       | isFloatIdent name -> TyFloat ann
       | isStringIdent name -> TyString ann
       | otherwise -> TyInd ann name
+    TyVar ann name
+      | isIntIdent name -> TyInt ann
+      | isFloatIdent name -> TyFloat ann
+      | isStringIdent name -> TyString ann
+      | otherwise -> TyVar ann name  -- Keep TyVar for polymorphic types
     TyApp ann ctor args ->
       TyApp ann (normalizePrimTy ctor) (map normalizePrimTy args)
     Arr ann d i ->
@@ -625,7 +644,7 @@ tcStmt stmt =
               lift (throwE (NoType NoSpan))
           Nothing -> return ()
       modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
-                      , tcVals = (name, e') : tcVals s
+                      , tcVals = Map.insert name e' (tcVals s)
                       })
       return (Defn name ty e')
     Function name args ty body isInfinitive -> do
@@ -650,22 +669,22 @@ tcStmt stmt =
               lift (throwE (NoType NoSpan))
           Nothing -> return ()
       modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
-                      , tcFuncs = (name, length args) : tcFuncs s
-                      , tcFuncSigs = (name, args) : tcFuncSigs s
+                      , tcFuncs = Map.insertWith (++) name [length args] (tcFuncs s)
+                      , tcFuncSigs = Map.insertWith (++) name [map (Bifunctor.second normalizePrimTy) args] (tcFuncSigs s)
                       , tcFuncSigRets =
                           let explicit = annSpan (annTy ty) /= NoSpan
                               retTy = if explicit then ty else fromMaybe ty mRet
-                          in ((name, map snd args), normalizePrimTy retTy) : tcFuncSigRets s
-                      , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
+                          in Map.insert (name, map (normalizePrimTy . snd) args) (normalizePrimTy retTy) (tcFuncSigRets s)
+                      , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
                       })
       return (Function name args ty body' isInfinitive)
     PrimFunc name args ty isInfinitive -> do
       modify (\s ->
         s { tcCtx = Set.insert name (tcCtx s)
-          , tcFuncs = (name, length args) : tcFuncs s
-          , tcFuncSigs = (name, args) : tcFuncSigs s
-          , tcFuncSigRets = ((name, map snd args), normalizePrimTy ty) : tcFuncSigRets s
-          , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
+          , tcFuncs = Map.insertWith (++) name [length args] (tcFuncs s)
+          , tcFuncSigs = Map.insertWith (++) name [map (Bifunctor.second normalizePrimTy) args] (tcFuncSigs s)
+          , tcFuncSigRets = Map.insert (name, map (normalizePrimTy . snd) args) (normalizePrimTy ty) (tcFuncSigRets s)
+          , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
           })
       return (PrimFunc name args ty isInfinitive)
     Load name ->
@@ -681,13 +700,13 @@ tcStmt stmt =
             | ((ctorName, _), ctorArgs) <- ctors
             ]
       modify (\s -> s { tcCtx = Set.insert name (Set.union (Set.fromList ctorNames) (tcCtx s))
-                      , tcCtors = ctorSigs ++ tcCtors s
-                      , tcTyCons = (name, length params) : tcTyCons s
+                      , tcCtors = Map.union (Map.fromList ctorSigs) (tcCtors s)
+                      , tcTyCons = Map.insert name (length params) (tcTyCons s)
                       })
       return (NewType name params ctors)
     PrimType name -> do
       modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
-                      , tcTyCons = (name, 0) : tcTyCons s
+                      , tcTyCons = Map.insert name 0 (tcTyCons s)
                       })
       return (PrimType name)
     ExpStmt e -> do
@@ -774,6 +793,24 @@ lookupByCandidates env candidates =
         Just v -> Just v
         Nothing -> go ns
 
+-- | Lookup a binding by candidate identifiers (Map version).
+lookupByCandidatesMap :: forall a.
+                        Map.Map Identifier a -- ^ Candidate bindings.
+                      -> [(Identifier, Case)] -- ^ Candidate identifiers.
+                      -> Maybe a -- ^ Matching binding when found.
+lookupByCandidatesMap env candidates =
+  let names = map fst candidates
+  in go names
+  where
+    -- | Try candidates in order.
+    go :: [Identifier] -- ^ Remaining candidate names.
+       -> Maybe a -- ^ Matching binding.
+    go [] = Nothing
+    go (n:ns) =
+      case Map.lookup n env of
+        Just v -> Just v
+        Nothing -> go ns
+
 -- | Lookup a function return type by candidates and argument types.
 lookupFuncRet :: [(Identifier, Int)] -- ^ Type constructor arities for type comparison.
               -> [((Identifier, [Ty Ann]), Ty Ann)] -- ^ Return types by identifier and arg types.
@@ -795,6 +832,29 @@ lookupFuncRet tyCons env candidates argTys =
       length sigArgTys == length argTys &&
       and (zipWith (tyEq tyCons) argTys sigArgTys)
 
+-- | Lookup a function return type by candidates and argument types (Map version).
+lookupFuncRetMap :: Map.Map Identifier Int -- ^ Type constructor arities for type comparison.
+                 -> Map.Map (Identifier, [Ty Ann]) (Ty Ann) -- ^ Return types by identifier and arg types.
+                 -> [(Identifier, Case)] -- ^ Candidate identifiers.
+                 -> [Ty Ann] -- ^ Argument types to match.
+                 -> Maybe (Ty Ann) -- ^ Matching return type.
+lookupFuncRetMap tyCons env candidates argTys =
+  let names = map fst candidates
+      tyConsList = Map.toList tyCons
+  in go names tyConsList
+  where
+    go :: [Identifier] -- ^ Remaining candidate names.
+       -> [(Identifier, Int)] -- ^ Type constructor arities as list.
+       -> Maybe (Ty Ann) -- ^ Matching return type.
+    go [] _ = Nothing
+    go (n:ns) tcList =
+      case find (\((name, sigArgTys), _) -> name == n && matchArgTypes tcList sigArgTys) (Map.toList env) of
+        Just (_, retTy) -> Just retTy
+        Nothing -> go ns tcList
+    matchArgTypes tcList sigArgTys =
+      length sigArgTys == length argTys &&
+      and (zipWith (tyEq tcList) argTys sigArgTys)
+
 -- | Infer a type for an expression when possible.
 inferType :: Exp Ann -- ^ Expression to infer.
           -> TCM (Maybe (Ty Ann)) -- ^ Inferred type.
@@ -810,10 +870,10 @@ inferType e =
       case lookupByCandidates tcVarTys varCandidates of
         Just ty -> return (Just ty)
         Nothing ->
-          case lookupByCandidates tcVals varCandidates of
+          case lookupByCandidatesMap tcVals varCandidates of
             Just v -> inferType v
             Nothing ->
-              case lookupByCandidates tcCtors varCandidates of
+              case lookupByCandidatesMap tcCtors varCandidates of
                 Just ([], ty) -> return (Just ty)
                 _ ->
                   case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
@@ -823,7 +883,7 @@ inferType e =
       case fn of
         Var {annExp, varCandidates} -> do
           MkTCState{tcCtors, tcTyCons, tcFuncSigRets, tcCtx, tcFuncSigs} <- get
-          case lookupByCandidates tcCtors varCandidates of
+          case lookupByCandidatesMap tcCtors varCandidates of
             Just (tys, resTy)
               | length tys == length args -> do
                   argTys <- mapM inferType args
@@ -831,18 +891,18 @@ inferType e =
                     then return Nothing
                     else do
                       let actuals = catMaybes argTys
-                      case unifyTypes tcTyCons tys actuals of
+                      case unifyTypes (Map.toList tcTyCons) tys actuals of
                         Just subst -> return (Just (applySubst subst resTy))
                         Nothing -> return Nothing
             _ -> do
               -- Find matching overload by argument types and return its return type
               argTys <- mapM inferType args
               let fnNames = map fst varCandidates
-                  sigs = filter (\(n, argsSig) -> n `elem` fnNames && length argsSig == length args) tcFuncSigs
+                  sigs = [(n, sig) | n <- fnNames, sigList <- maybeToList (Map.lookup n tcFuncSigs), sig <- sigList, length sig == length args]
                   matchSig (name, argsSig) =
                     let tys = map snd argsSig
                     in if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys tys)
-                         then lookup (name, tys) tcFuncSigRets
+                         then Map.lookup (name, tys) tcFuncSigRets
                          else Nothing
                   matches = mapMaybe matchSig sigs
               case matches of
@@ -850,11 +910,11 @@ inferType e =
                 [] ->
                   -- Fallback: try to find any matching return type
                   let actuals = catMaybes argTys
-                  in case lookupFuncRet tcTyCons tcFuncSigRets varCandidates actuals of
+                  in case lookupFuncRetMap tcTyCons tcFuncSigRets varCandidates actuals of
                     Just retTy -> return (Just retTy)
                     Nothing ->
                       let inCtx = any (\(ident, _) -> Set.member ident tcCtx) varCandidates
-                          inSigs = any (\(ident, _) -> ident `elem` map fst tcFuncSigs) varCandidates
+                          inSigs = any (\(ident, _) -> Map.member ident tcFuncSigs) varCandidates
                       in case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
                            Just (ident, _) -> return (Just (TyVar (mkAnn (annCase annExp) NoSpan) ident))
                            Nothing ->
@@ -894,7 +954,7 @@ withFuncRet :: Identifier -- ^ Function name.
 withFuncRet _ _ Nothing m = m
 withFuncRet name argTys (Just ty) m = do
   st <- get
-  put st { tcFuncSigRets = ((name, argTys), ty) : tcFuncSigRets st }
+  put st { tcFuncSigRets = Map.insert (name, argTys) ty (tcFuncSigRets st) }
   res <- m
   modify (\s -> s { tcFuncSigRets = tcFuncSigRets st })
   return res
@@ -906,8 +966,8 @@ withFuncSig :: Identifier -- ^ Function name.
             -> TCM a -- ^ Result of the computation.
 withFuncSig name args m = do
   st <- get
-  put st { tcFuncs = (name, length args) : tcFuncs st
-         , tcFuncSigs = (name, args) : tcFuncSigs st
+  put st { tcFuncs = Map.insertWith (++) name [length args] (tcFuncs st)
+         , tcFuncSigs = Map.insertWith (++) name [map (Bifunctor.second normalizePrimTy) args] (tcFuncSigs st)
          }
   res <- m
   modify (\s -> s { tcFuncs = tcFuncs st, tcFuncSigs = tcFuncSigs st })
@@ -941,13 +1001,13 @@ inferPatTypes pat args =
       -- For list patterns, infer the element type from the scrutinee type
       -- List type is represented as nested applications of eki constructor
       -- We need to extract the element type and apply it to each pattern
-      let elemTy = extractListElemType tcTyCons scrutTy
+      let elemTy = extractListElemTypeMap tcTyCons scrutTy
       concat <$> mapM (\p -> inferPatTypes p [(undefined, elemTy)]) pats
     (PCtor ctor pats, (_, scrutTy):_) -> do
       MkTCState{tcCtors, tcTyCons} <- get
-      case lookup ctor tcCtors of
+      case Map.lookup ctor tcCtors of
         Just (argTys, resTy) ->
-          case unifyTypes tcTyCons [resTy] [scrutTy] of
+          case unifyTypes (Map.toList tcTyCons) [resTy] [scrutTy] of
             Just subst -> do
               let argTys' = map (applySubst subst) argTys
                   -- Nested patterns match from the right, so we align argument
@@ -980,6 +1040,15 @@ extractListElemType :: [(Identifier, Int)] -- ^ Type constructor arities.
                     -> Ty Ann -- ^ List type.
                     -> Ty Ann -- ^ Element type.
 extractListElemType tcTyCons ty =
+  case ty of
+    TyApp _ _ (elemTy:_) -> elemTy
+    _ -> TyVar (mkAnn Nom NoSpan) ([], T.pack "a")
+
+-- | Extract the element type from a list type (Map version).
+extractListElemTypeMap :: Map.Map Identifier Int -- ^ Type constructor arities.
+                       -> Ty Ann -- ^ List type.
+                       -> Ty Ann -- ^ Element type.
+extractListElemTypeMap tcTyCons ty =
   case ty of
     TyApp _ _ (elemTy:_) -> elemTy
     _ -> TyVar (mkAnn Nom NoSpan) ([], T.pack "a")
@@ -1025,10 +1094,10 @@ ctorsForType ty =
     _ -> do
       MkTCState{tcCtors, tcTyCons} <- get
       let pickCtor (ctor, (argTys, resTy)) =
-            case unifyTypes tcTyCons [resTy] [ty] of
+            case unifyTypes (Map.toList tcTyCons) [resTy] [ty] of
               Just subst -> Just (CtorInfo ctor (map (applySubst subst) argTys))
               Nothing -> Nothing
-          ctors = mapMaybe pickCtor tcCtors
+          ctors = mapMaybe pickCtor (Map.toList tcCtors)
       return $
         if null ctors
           then Nothing
@@ -1048,7 +1117,7 @@ missingPatternsForType :: Ty Ann -- ^ Scrutinee type.
                        -> TCM [Pat Ann]
 missingPatternsForType scrutTy pats = do
   vectors <- missingVectors [scrutTy] (map (: []) pats)
-  annotated <- mapM (\v -> case v of
+  annotated <- mapM (\case
                             [] -> error "missingPatternsForType: unexpected empty vector"
                             (p:_) -> annotateMissingPattern scrutTy p) vectors
   return (nub annotated)
@@ -1082,7 +1151,7 @@ missingVectors (t:ts) matrix = do
           -- Some rows may be empty due to earlier drops; filter them out
           -- before inspecting heads to avoid partial pattern matches.
           let nonEmptyRows = filter (not . null) matrix
-              wildRows = filter (\row -> case row of
+              wildRows = filter (\case
                                           [] -> False
                                           (p:_) -> isWildcardHead p) nonEmptyRows
           if not (null wildRows)
@@ -1111,7 +1180,7 @@ missingVectors (t:ts) matrix = do
         PVar {} -> True
         _ -> False
 
-    defaultMatrix = mapMaybe (\row -> case row of
+    defaultMatrix = mapMaybe (\case
                                         [] -> Nothing
                                         (p:ps) -> if isWildcardHead p then Just ps else Nothing)
 
@@ -1287,7 +1356,7 @@ isUseful tys matrix vec =
     findCtor ctors name =
       find (\ctorInfo -> identMatchesCtor (ctorName ctorInfo) name) ctors
 
-    defaultMatrix = mapMaybe (\row -> case row of
+    defaultMatrix = mapMaybe (\case
                                         [] -> Nothing
                                         (p:ps) -> if isWildcardHead p then Just ps else Nothing)
     isWildcardHead pat =
@@ -1348,28 +1417,29 @@ typeMatches tyCons mTy ty =
     Just t -> tyEq tyCons t ty
 
 -- | Compare types while allowing unknown inferred types.
-typeMatchesAllowUnknown :: [(Identifier, Int)] -- ^ Type constructor arities.
+typeMatchesAllowUnknown :: Map.Map Identifier Int -- ^ Type constructor arities.
                         -> Maybe (Ty Ann) -- ^ Possibly unknown type.
                         -> Ty Ann -- ^ Expected type.
                         -> Bool -- ^ True when the types match.
 typeMatchesAllowUnknown tyCons mTy ty =
-  case mTy of
+  let tyCons' = Map.toList tyCons
+  in case mTy of
     Nothing -> True
     Just t ->
-      tyEq tyCons t ty
-      || isJust (unifyTypes tyCons [ty] [t])
-      || isJust (unifyTypes tyCons [t] [ty])
+      tyEq tyCons' t ty
+      || isJust (unifyTypes tyCons' [ty] [t])
+      || isJust (unifyTypes tyCons' [t] [ty])
 
 -- | Check if a type contains any type variables or undefined type identifiers.
 -- In Kip, undefined type identifiers are treated as implicitly quantified type variables.
-containsTyVars :: [(Identifier, Int)] -- ^ Type constructor arities (defined types).
+containsTyVars :: Map.Map Identifier Int -- ^ Type constructor arities (defined types).
                -> Ty Ann -- ^ Type to check.
                -> Bool -- ^ True if the type contains type variables or undefined types.
 containsTyVars tyCons ty =
   case ty of
     TyVar {} -> True
     TySkolem {} -> True
-    TyInd _ name -> name `notElem` map fst tyCons  -- Undefined type = type variable
+    TyInd _ name -> not (Map.member name tyCons)  -- Undefined type = type variable
     Arr _ d i -> containsTyVars tyCons d || containsTyVars tyCons i
     TyApp _ c args -> containsTyVars tyCons c || any (containsTyVars tyCons) args
     _ -> False
@@ -1378,14 +1448,14 @@ containsTyVars tyCons ty =
 -- Type variables in the declared (right) type are treated as universally quantified
 -- and can only match themselves, not concrete types.
 -- Undefined type identifiers (TyInd not in tyCons) are treated as rigid type variables.
-tyMatchesRigid :: [(Identifier, Int)] -- ^ Type constructor arities.
+tyMatchesRigid :: Map.Map Identifier Int -- ^ Type constructor arities.
                -> Ty Ann -- ^ Inferred type.
                -> Ty Ann -- ^ Declared type (with rigid type variables).
                -> Bool -- ^ True when the inferred type matches the declared type.
 tyMatchesRigid tyCons inferred declared =
-  let n1 = normalizeTy tyCons inferred
-      n2 = normalizeTy tyCons declared
-      isDefinedType name = name `elem` map fst tyCons
+  let n1 = normalizeTyMap tyCons inferred
+      n2 = normalizeTyMap tyCons declared
+      isDefinedType name = Map.member name tyCons
   in case (n1, n2) of
     (TyString _, TyString _) -> True
     (TyInt _, TyInt _) -> True
@@ -1456,6 +1526,30 @@ normalizeTy tyCons ty =
       TyApp ann (normalizeTy tyCons ctor) (map (normalizeTy tyCons) args)
     Arr ann d i ->
       Arr ann (normalizeTy tyCons d) (normalizeTy tyCons i)
+    _ -> ty
+
+-- | Normalize type applications by constructor arity and primitive types (Map version).
+normalizeTyMap :: Map.Map Identifier Int -- ^ Type constructor arities.
+               -> Ty Ann -- ^ Type to normalize.
+               -> Ty Ann -- ^ Normalized type.
+normalizeTyMap tyCons ty =
+  case ty of
+    TyInd ann name
+      | isIntIdent name -> TyInt ann
+      | isFloatIdent name -> TyFloat ann
+      | isStringIdent name -> TyString ann
+      | otherwise -> TyInd ann name
+    TySkolem ann name ->
+      TySkolem ann name
+    TyApp ann (TyInd _ name) args ->
+      case Map.lookup name tyCons of
+        Just arity | arity > 0 ->
+          TyApp ann (TyInd (mkAnn Nom NoSpan) name) (map (normalizeTyMap tyCons) args)
+        _ -> TyInd ann name
+    TyApp ann ctor args ->
+      TyApp ann (normalizeTyMap tyCons ctor) (map (normalizeTyMap tyCons) args)
+    Arr ann d i ->
+      Arr ann (normalizeTyMap tyCons d) (normalizeTyMap tyCons i)
     _ -> ty
 
 -- | Compare identifiers, allowing missing namespaces.
@@ -1586,15 +1680,15 @@ registerForwardDecls = mapM_ registerStmt
       case stmt of
         Function name args _ _ isInfinitive ->
           modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
-                          , tcFuncs = (name, length args) : tcFuncs s
-                          , tcFuncSigs = (name, args) : tcFuncSigs s
-                          , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
+                          , tcFuncs = Map.insertWith (++) name [length args] (tcFuncs s)
+                          , tcFuncSigs = Map.insertWith (++) name [map (Bifunctor.second normalizePrimTy) args] (tcFuncSigs s)
+                          , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
                           })
         PrimFunc name args _ isInfinitive ->
           modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
-                          , tcFuncs = (name, length args) : tcFuncs s
-                          , tcFuncSigs = (name, args) : tcFuncSigs s
-                          , tcInfinitives = if isInfinitive then name : tcInfinitives s else tcInfinitives s
+                          , tcFuncs = Map.insertWith (++) name [length args] (tcFuncs s)
+                          , tcFuncSigs = Map.insertWith (++) name [map (Bifunctor.second normalizePrimTy) args] (tcFuncSigs s)
+                          , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
                           })
         Defn name _ _ ->
           modify (\s -> s { tcCtx = Set.insert name (tcCtx s) })
@@ -1609,11 +1703,11 @@ registerForwardDecls = mapM_ registerStmt
                 | ((ctorName, _), ctorArgs) <- ctors
                 ]
           modify (\s -> s { tcCtx = Set.insert name (Set.union (Set.fromList ctorNames) (tcCtx s))
-                          , tcCtors = ctorSigs ++ tcCtors s
-                          , tcTyCons = (name, length params) : tcTyCons s
+                          , tcCtors = Map.union (Map.fromList ctorSigs) (tcCtors s)
+                          , tcTyCons = Map.insert name (length params) (tcTyCons s)
                           })
         PrimType name ->
           modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
-                          , tcTyCons = (name, 0) : tcTyCons s
+                          , tcTyCons = Map.insert name 0 (tcTyCons s)
                           })
         _ -> return ()

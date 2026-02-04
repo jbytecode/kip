@@ -315,11 +315,11 @@ onHover req respond = do
                     -- We have the resolved signature with specific argument types (overload info)
                     let tcSt = dsTC doc
                         mFnDef = findFunctionDef resolvedName (dsStmts doc)
-                        mRetTy = lookup (sigName, argTys) (tcFuncSigRets tcSt)
+                        mRetTy = Map.lookup (sigName, argTys) (tcFuncSigRets tcSt)
                         -- Find the function signature that matches the argument types
-                        matchingArgs = [(name, args) | (name, args) <- tcFuncSigs tcSt,
-                                       name == sigName,
-                                       map snd args == argTys]
+                        matchingArgs = case Map.lookup sigName (tcFuncSigs tcSt) of
+                                         Just argsList -> [(sigName, args) | args <- argsList, map snd args == argTys]
+                                         Nothing -> []
                         mArgs = listToMaybe [args | (_, args) <- matchingArgs]
                         -- For prelude functions, check base TC state for infinitives
                         -- (TC state clears infinitives during LSP to avoid effect errors)
@@ -347,19 +347,21 @@ onHover req respond = do
                     -- No resolved signature, try to find function definition
                     let tcSt = dsTC doc
                         mFnDef = findFunctionDef resolvedName (dsStmts doc)
-                        mTCFuncSig = lookup resolvedName (tcFuncSigs tcSt)
+                        mTCFuncSigs = Map.lookup resolvedName (tcFuncSigs tcSt)
+                        -- Get first signature from MultiMap (for hover, we show the first overload)
+                        mTCFuncSig = mTCFuncSigs >>= listToMaybe
                         -- Check base TC state for infinitives
                         baseInfinitives = tcInfinitives (lsBaseTC st)
-                        isInfinitive = resolvedName `elem` baseInfinitives
+                        isInfinitive = Set.member resolvedName baseInfinitives
                     case (mFnDef, mTCFuncSig) of
                       (Just (fnName, args, _parsedRetTy), _) -> do
                         let argTys = map snd args
-                            mInferredRetTy = lookup (fnName, argTys) (tcFuncSigRets tcSt)
+                            mInferredRetTy = Map.lookup (fnName, argTys) (tcFuncSigRets tcSt)
                             retTy = fromMaybe _parsedRetTy mInferredRetTy
                         liftIO $ renderHoverSignature fnName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
                       (Nothing, Just args) -> do
                         let argTys = map snd args
-                            mInferredRetTy = lookup (resolvedName, argTys) (tcFuncSigRets tcSt)
+                            mInferredRetTy = Map.lookup (resolvedName, argTys) (tcFuncSigRets tcSt)
                         case mInferredRetTy of
                           Just retTy ->
                             liftIO $ renderHoverSignature resolvedName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
@@ -492,7 +494,7 @@ onCompletion req respond = do
       let pst = dsParser doc
           ctxIdents = parserCtx pst
           typeNames = map fst (parserTyCons pst) ++ parserPrimTypes pst
-          funcNames = map fst (tcFuncSigs (dsTC doc))
+          funcNames = Map.keys (tcFuncSigs (dsTC doc))
           candidates = Set.toList (Set.fromList (ctxIdents ++ typeNames ++ funcNames))
           items = map completionItem candidates
       respond (Right (InL items))
@@ -663,7 +665,7 @@ typecheckStmts st source tcSt stmts = do
   -- *continuously* clear the infinitive table during LSP-only typechecking
   -- so `rejectReadEffect` never aborts the pass and we can still collect
   -- resolved symbols and overload information.
-  let tcStLsp = tcSt { tcInfinitives = [] }
+  let tcStLsp = tcSt { tcInfinitives = Set.empty }
   let go acc stt =
         case acc of
           Left diags -> return (Left diags)
@@ -672,7 +674,7 @@ typecheckStmts st source tcSt stmts = do
               -- Reset infinitives before each statement to avoid effect
               -- rejection inside that statement (previous definitions
               -- may have populated tcInfinitives).
-              let currentLsp = current { tcInfinitives = [] }
+              let currentLsp = current { tcInfinitives = Set.empty }
               res <- runTCM (tcStmt stt) currentLsp
               case res of
                 Left tcErr -> do
@@ -681,7 +683,7 @@ typecheckStmts st source tcSt stmts = do
                 Right (_, next) ->
                   -- Clear again after the statement so later statements
                   -- also run without effect rejections.
-                  return (Right next { tcInfinitives = [] })
+                  return (Right next { tcInfinitives = Set.empty })
   res <- foldl' (\ioAcc stt -> ioAcc >>= \acc -> go acc stt) (return (Right tcStLsp)) stmts
   case res of
     Left diags -> return (tcStLsp, diags)

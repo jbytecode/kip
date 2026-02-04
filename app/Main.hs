@@ -24,7 +24,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Text.Encoding (encodeUtf8)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, maybeToList)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Map.Strict as Map
@@ -972,8 +972,9 @@ main = do
                   let candidateNames = map fst varCandidates
                       sigs =
                         [ (name, args)
-                        | (name, args) <- tcFuncSigs (replTCState rs)
-                        , name `elem` candidateNames
+                        | name <- candidateNames
+                        , argsList <- maybeToList (Map.lookup name (tcFuncSigs (replTCState rs)))
+                        , args <- argsList
                         ]
                   if null sigs
                     then inferExprType ctx paramTyCons parsed expr
@@ -983,7 +984,7 @@ main = do
                           sigs'' = nubBy (\(n1, a1) (n2, a2) -> n1 == n2 && a1 == a2) sigs'
                           isInfinitive = isJust (infinitiveRoot varName)
                       forM_ sigs'' $ \(name, args) -> do
-                        let mRet = lookup (name, map snd args) (tcFuncSigRets (replTCState rs))
+                        let mRet = Map.lookup (name, map snd args) (tcFuncSigRets (replTCState rs))
                         line <- liftIO (renderReplSig ctx cache fsm paramTyCons (replTyMods rs) isInfinitive varName name args mRet)
                         lift (outputStrLn (T.unpack line))
                       loop rs
