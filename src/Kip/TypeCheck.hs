@@ -104,6 +104,7 @@ import qualified Data.Bifunctor as Bifunctor
 import qualified Data.Binary as B
 import Data.Word (Word8)
 import Kip.AST
+import qualified Kip.Primitive as Prim
 
 import Control.Monad (unless, when)
 import Control.Applicative ((<|>))
@@ -1602,34 +1603,6 @@ isStringIdent :: Identifier -- ^ Identifier to inspect.
               -> Bool -- ^ True when identifier matches string type.
 isStringIdent (mods, name) = null mods && name == T.pack "dizge"
 
--- | Check if a primitive function signature is implemented.
-isImplementedPrimitive :: Identifier -> [Arg Ann] -> Bool
-isImplementedPrimitive (mods, name) args =
-  let numArgs = length args
-      matches nm = name == T.pack nm
-      matchesMods [] = null mods
-      matchesMods ms = mods == map T.pack ms
-  in (matchesMods [] && matches "yaz" && (numArgs == 1 || numArgs == 2))
-    || (matchesMods [] && matches "oku" && (numArgs == 0 || numArgs == 1))
-    || (matchesMods [] && matches "uzunluk" && numArgs == 1)
-    || (matchesMods [] && matches "birleşim" && numArgs == 2)
-    || (matchesMods ["tam", "sayı"] && matches "hal" && numArgs == 1)
-    || (matchesMods ["ondalık", "sayı"] && matches "hal" && numArgs == 1)
-    || (matchesMods [] && matches "ters" && numArgs == 1)
-    || (matchesMods [] && matches "toplam" && numArgs == 2)
-    || (matchesMods [] && matches "çarpım" && numArgs == 2)
-    || (matchesMods [] && matches "fark" && numArgs == 2)
-    || (matchesMods [] && matches "bölüm" && numArgs == 2)
-    || (matchesMods [] && matches "kalan" && numArgs == 2)
-    || (matchesMods ["dizge"] && matches "hal" && numArgs == 1)
-    || (matchesMods [] && matches "eşitlik" && numArgs == 2)
-    || (matchesMods [] && matches "küçüklük" && numArgs == 2)
-    || (matchesMods ["küçük"] && matches "eşitlik" && numArgs == 2)
-    || (matchesMods [] && matches "büyüklük" && numArgs == 2)
-    || (matchesMods ["büyük"] && matches "eşitlik" && numArgs == 2)
-    || (matchesMods ["sayı"] && matches "çek" && numArgs == 2)
-    || (matchesMods [] && matches "dur" && numArgs == 0)
-
 -- | Unify expected and actual types to produce substitutions.
 unifyTypes :: [(Identifier, Int)] -- ^ Type constructor arities.
            -> [Ty Ann] -- ^ Expected types.
@@ -1741,7 +1714,7 @@ registerForwardDecls = mapM_ registerStmt
                           , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
                           })
         PrimFunc name args _ isInfinitive -> do
-          unless (isImplementedPrimitive name args) $
+          unless (Prim.isImplementedPrimitive name args) $
             lift (throwE (UnimplementedPrimitive name args NoSpan))
           modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
                           , tcFuncs = MultiMap.insert name (length args) (tcFuncs s)

@@ -10,6 +10,7 @@ module Kip.Eval where
 import GHC.Generics (Generic)
 import Data.Binary (Binary)
 import Kip.AST
+import qualified Kip.Primitive as Prim
 
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
@@ -917,29 +918,7 @@ primFileMatches mPath ident =
 -- | Map a primitive identifier to the files that define it.
 primFiles :: Identifier -- ^ Primitive identifier.
           -> [FilePath] -- ^ Source file paths when present.
-primFiles ident =
-  case ident of
-    ([], "yaz") -> ["temel-etki.kip"]
-    ([], "oku") -> ["temel-etki.kip"]
-    ([], "uzunluk") -> ["temel-dizge.kip"]
-    ([], "birleşim") -> ["temel-dizge.kip"]
-    (["tam", "sayı"], "hal") -> ["temel-dizge.kip"]
-    (["ondalık", "sayı"], "hal") -> ["temel-dizge.kip"]
-    ([], "ters") -> ["temel-dizge.kip"]
-    ([], "toplam") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    ([], "çarpım") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    ([], "fark") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    ([], "bölüm") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    ([], "kalan") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    (["dizge"], "hal") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    ([], "eşitlik") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    ([], "küçüklük") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    (["küçük"], "eşitlik") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    ([], "büyüklük") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    (["büyük"], "eşitlik") -> ["temel-tam-sayı.kip", "temel-ondalık-sayı.kip"]
-    (["sayı"], "çek") -> ["temel-etki.kip"]
-    ([], "sayı-çek") -> ["temel-etki.kip"]
-    _ -> []
+primFiles = Prim.primFiles
 
 -- | Primitive print for integers and strings.
 primWrite :: [Exp Ann] -- ^ Arguments.

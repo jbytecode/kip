@@ -35,6 +35,7 @@ library
       Kip.Cache
       Kip.Eval
       Kip.Parser
+      Kip.Primitive
       Kip.Render
       Kip.Runner
       Kip.Codegen.JS
