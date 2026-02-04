@@ -1048,7 +1048,9 @@ missingPatternsForType :: Ty Ann -- ^ Scrutinee type.
                        -> TCM [Pat Ann]
 missingPatternsForType scrutTy pats = do
   vectors <- missingVectors [scrutTy] (map (: []) pats)
-  annotated <- mapM (annotateMissingPattern scrutTy . head) vectors
+  annotated <- mapM (\v -> case v of
+                            [] -> error "missingPatternsForType: unexpected empty vector"
+                            (p:_) -> annotateMissingPattern scrutTy p) vectors
   return (nub annotated)
 
 -- | Compute missing pattern vectors for a pattern matrix.
@@ -1074,13 +1076,15 @@ missingVectors (t:ts) matrix = do
       mCtors <- ctorsForType t
       case mCtors of
         Nothing -> do
-          rest <- missingVectors ts (map tail matrix)
+          rest <- missingVectors ts (mapMaybe safeTail matrix)
           return (map (PWildcard (mkAnn Nom NoSpan) :) rest)
         Just ctors -> do
           -- Some rows may be empty due to earlier drops; filter them out
           -- before inspecting heads to avoid partial pattern matches.
           let nonEmptyRows = filter (not . null) matrix
-              wildRows = filter (isWildcardHead . head) nonEmptyRows
+              wildRows = filter (\row -> case row of
+                                          [] -> False
+                                          (p:_) -> isWildcardHead p) nonEmptyRows
           if not (null wildRows)
             then do
               rest <- missingVectors ts (defaultMatrix matrix)
@@ -1097,13 +1101,19 @@ missingVectors (t:ts) matrix = do
               misses <- mapM ctorMiss ctors
               return (concat misses)
   where
+    safeTail row = case row of
+      [] -> Nothing
+      (_:xs) -> Just xs
+
     isWildcardHead pat =
       case pat of
         PWildcard {} -> True
         PVar {} -> True
         _ -> False
 
-    defaultMatrix = map tail . filter (isWildcardHead . head)
+    defaultMatrix = mapMaybe (\row -> case row of
+                                        [] -> Nothing
+                                        (p:ps) -> if isWildcardHead p then Just ps else Nothing)
 
     specializeMatrix ctorInfo =
       mapMaybe (specializeRow ctorInfo)
@@ -1237,7 +1247,7 @@ isUseful tys matrix vec =
       mCtors <- ctorsForType t
       case mCtors of
         Nothing ->
-          isUseful ts (map tail matrix) ps
+          isUseful ts (mapMaybe safeTail matrix) ps
         Just ctors ->
           case p of
             PWildcard {} -> usefulWildcard ctors ts matrix ps
@@ -1250,6 +1260,10 @@ isUseful tys matrix vec =
                   in isUseful (ctorArgs ctorInfo ++ ts) matrix' (subPats ++ ps)
     _ -> return False
   where
+    safeTail row = case row of
+      [] -> Nothing
+      (_:xs) -> Just xs
+
     usefulWildcard ctors ts matrix ps = do
       let present = constructorsInColumn matrix
           complete = constructorsComplete ctors present
@@ -1273,7 +1287,9 @@ isUseful tys matrix vec =
     findCtor ctors name =
       find (\ctorInfo -> identMatchesCtor (ctorName ctorInfo) name) ctors
 
-    defaultMatrix = map tail . filter (isWildcardHead . head)
+    defaultMatrix = mapMaybe (\row -> case row of
+                                        [] -> Nothing
+                                        (p:ps) -> if isWildcardHead p then Just ps else Nothing)
     isWildcardHead pat =
       case pat of
         PWildcard {} -> True
