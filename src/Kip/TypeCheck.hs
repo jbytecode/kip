@@ -201,6 +201,7 @@ data TCError =
  | NoMatchingCtor Identifier [Maybe (Ty Ann)] [Ty Ann] Span
  | PatternTypeMismatch Identifier (Ty Ann) (Ty Ann) Span  -- ctor, expected (ctor result), actual (scrutinee)
  | NonExhaustivePattern [Pat Ann] Span
+ | UnimplementedPrimitive Identifier [Arg Ann] Span
   deriving (Show, Ord, Eq, Generic)
 
 -- | Binary instance for type checker errors.
@@ -213,6 +214,7 @@ instance Binary TCError where
   put (NoMatchingCtor ident mty tys sp) = B.put (5 :: Word8) >> B.put ident >> B.put mty >> B.put tys >> B.put sp
   put (PatternTypeMismatch ctor expTy actTy sp) = B.put (6 :: Word8) >> B.put ctor >> B.put expTy >> B.put actTy >> B.put sp
   put (NonExhaustivePattern pats sp) = B.put (7 :: Word8) >> B.put pats >> B.put sp
+  put (UnimplementedPrimitive ident args sp) = B.put (8 :: Word8) >> B.put ident >> B.put args >> B.put sp
 
   get = do
     tag <- B.get :: Get Word8
@@ -225,6 +227,7 @@ instance Binary TCError where
       5 -> NoMatchingCtor <$> B.get <*> B.get <*> B.get <*> B.get
       6 -> PatternTypeMismatch <$> B.get <*> B.get <*> B.get <*> B.get
       7 -> NonExhaustivePattern <$> B.get <*> B.get
+      8 -> UnimplementedPrimitive <$> B.get <*> B.get <*> B.get
       _ -> fail "Invalid TCError tag"
 
 -- | Type checker monad stack.
@@ -680,6 +683,10 @@ tcStmt stmt =
                       })
       return (Function name args ty body' isInfinitive)
     PrimFunc name args ty isInfinitive -> do
+      -- Validate that the primitive function is actually implemented
+      -- TEMPORARILY DISABLED FOR DEBUGGING
+      -- unless (isImplementedPrimitive name args) $
+      --   lift (throwE (UnimplementedPrimitive name args NoSpan))
       modify (\s ->
         s { tcCtx = Set.insert name (tcCtx s)
           , tcFuncs = MultiMap.insert name (length args) (tcFuncs s)
@@ -1595,6 +1602,34 @@ isStringIdent :: Identifier -- ^ Identifier to inspect.
               -> Bool -- ^ True when identifier matches string type.
 isStringIdent (mods, name) = null mods && name == T.pack "dizge"
 
+-- | Check if a primitive function signature is implemented.
+isImplementedPrimitive :: Identifier -> [Arg Ann] -> Bool
+isImplementedPrimitive (mods, name) args =
+  let numArgs = length args
+      matches nm = name == T.pack nm
+      matchesMods [] = null mods
+      matchesMods ms = mods == map T.pack ms
+  in (matchesMods [] && matches "yaz" && (numArgs == 1 || numArgs == 2))
+    || (matchesMods [] && matches "oku" && (numArgs == 0 || numArgs == 1))
+    || (matchesMods [] && matches "uzunluk" && numArgs == 1)
+    || (matchesMods [] && matches "birleşim" && numArgs == 2)
+    || (matchesMods ["tam", "sayı"] && matches "hal" && numArgs == 1)
+    || (matchesMods ["ondalık", "sayı"] && matches "hal" && numArgs == 1)
+    || (matchesMods [] && matches "ters" && numArgs == 1)
+    || (matchesMods [] && matches "toplam" && numArgs == 2)
+    || (matchesMods [] && matches "çarpım" && numArgs == 2)
+    || (matchesMods [] && matches "fark" && numArgs == 2)
+    || (matchesMods [] && matches "bölüm" && numArgs == 2)
+    || (matchesMods [] && matches "kalan" && numArgs == 2)
+    || (matchesMods ["dizge"] && matches "hal" && numArgs == 1)
+    || (matchesMods [] && matches "eşitlik" && numArgs == 2)
+    || (matchesMods [] && matches "küçüklük" && numArgs == 2)
+    || (matchesMods ["küçük"] && matches "eşitlik" && numArgs == 2)
+    || (matchesMods [] && matches "büyüklük" && numArgs == 2)
+    || (matchesMods ["büyük"] && matches "eşitlik" && numArgs == 2)
+    || (matchesMods ["sayı"] && matches "çek" && numArgs == 2)
+    || (matchesMods [] && matches "dur" && numArgs == 0)
+
 -- | Unify expected and actual types to produce substitutions.
 unifyTypes :: [(Identifier, Int)] -- ^ Type constructor arities.
            -> [Ty Ann] -- ^ Expected types.
@@ -1705,7 +1740,9 @@ registerForwardDecls = mapM_ registerStmt
                           , tcFuncSigs = MultiMap.insert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
                           , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
                           })
-        PrimFunc name args _ isInfinitive ->
+        PrimFunc name args _ isInfinitive -> do
+          unless (isImplementedPrimitive name args) $
+            lift (throwE (UnimplementedPrimitive name args NoSpan))
           modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
                           , tcFuncs = MultiMap.insert name (length args) (tcFuncs s)
                           , tcFuncSigs = MultiMap.insert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)

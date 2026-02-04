@@ -328,6 +328,8 @@ renderTCError paramTyCons tyMods tcErr = do
           missing <- renderMissingPatterns LangTr pats
           let header = "Tip hatası: örüntü eksik." <> renderSpan (rcLang ctx) sp
           return (T.intercalate "\n" [header, missing])
+        UnimplementedPrimitive name args sp ->
+          return ("Tip hatası: yerleşik fonksiyon uygulanmamış." <> renderSpan (rcLang ctx) sp)
     LangEn ->
       case tcErr of
         TC.Unknown ->
@@ -371,6 +373,8 @@ renderTCError paramTyCons tyMods tcErr = do
           missing <- renderMissingPatterns LangEn pats
           let header = "Type error: non-exhaustive pattern match." <> renderSpan (rcLang ctx) sp
           return (T.intercalate "\n" [header, missing])
+        UnimplementedPrimitive name args sp ->
+          return ("Type error: unimplemented primitive function." <> renderSpan (rcLang ctx) sp)
 
 -- | Render a type checker error with a source snippet.
 renderTCErrorWithSource :: [Identifier] -> [(Identifier, [Identifier])] -> Text -> TCError -> RenderM Text
@@ -393,6 +397,7 @@ tcErrSpan tcErr =
     NoMatchingCtor _ _ _ sp -> Just sp
     PatternTypeMismatch _ _ _ sp -> Just sp
     NonExhaustivePattern _ sp -> Just sp
+    UnimplementedPrimitive _ _ sp -> Just sp
     TC.Unknown -> Nothing
 
 -- | Render missing patterns for error messages.

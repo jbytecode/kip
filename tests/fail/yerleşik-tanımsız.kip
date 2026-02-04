@@ -1,0 +1,5 @@
+(* Test that declaring a primitive function that doesn't exist is an error *)
+
+(bu tam-sayıyı) işlem, yerleşiktir.
+
+(5'i) işlem.
