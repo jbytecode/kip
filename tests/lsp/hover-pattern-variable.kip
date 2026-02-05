@@ -1,0 +1,14 @@
+Bir (a olasılığı)
+ya yokluk
+ya da bir a'nın varlığı
+olabilir.
+
+sayı-bulmak, 42.
+
+(bu tam-sayı olasılığının) test-etmek,
+  bu yokluksa,
+    0;
+  sayının varlığıysa,
+    sayının.
+
+(5 varlığının) test-et.

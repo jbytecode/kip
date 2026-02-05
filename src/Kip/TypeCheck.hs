@@ -106,7 +106,7 @@ import Data.Word (Word8)
 import Kip.AST
 import qualified Kip.Primitive as Prim
 
-import Control.Monad (unless, when)
+import Control.Monad (unless, when, forM_)
 import Control.Applicative ((<|>))
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
@@ -128,6 +128,10 @@ recordResolvedName sp ident =
 recordResolvedSig :: Span -> Identifier -> [Ty Ann] -> TCM ()
 recordResolvedSig sp ident tys =
   modify (\s -> s { tcResolvedSigs = (sp, (ident, tys)) : tcResolvedSigs s })
+
+recordResolvedType :: Span -> Ty Ann -> TCM ()
+recordResolvedType sp ty =
+  modify (\s -> s { tcResolvedTypes = (sp, ty) : tcResolvedTypes s })
 
 -- | Merge definition locations from a file (latest wins).
 recordDefLocations :: FilePath -> Map.Map Identifier Span -> TCM ()
@@ -152,6 +156,7 @@ data TCState =
     , tcInfinitives :: Set.Set Identifier -- ^ Infinitive (effectful) functions.
     , tcResolvedNames :: [(Span, Identifier)] -- ^ Resolved variable names by span.
     , tcResolvedSigs :: [(Span, (Identifier, [Ty Ann]))] -- ^ Resolved function signatures by span.
+    , tcResolvedTypes :: [(Span, Ty Ann)] -- ^ Resolved variable types by span.
     , tcDefLocations :: Map.Map Identifier (FilePath, Span) -- ^ Definition locations by identifier.
     , tcFuncSigLocs :: Map.Map (Identifier, [Ty Ann]) (FilePath, Span) -- ^ Definition locations by signature.
     }
@@ -171,6 +176,7 @@ instance Binary TCState where
     B.put tcInfinitives
     B.put tcResolvedNames
     B.put tcResolvedSigs
+    B.put tcResolvedTypes
     B.put tcDefLocations
     B.put tcFuncSigLocs
   get = do
@@ -185,12 +191,13 @@ instance Binary TCState where
     infinitives <- B.get
     resolvedNames <- B.get
     resolvedSigs <- B.get
+    resolvedTypes <- B.get
     defLocs <- B.get
-    MkTCState ctx funcs funcSigs funcSigRets varTys vals ctors tyCons infinitives resolvedNames resolvedSigs defLocs <$> B.get
+    MkTCState ctx funcs funcSigs funcSigRets varTys vals ctors tyCons infinitives resolvedNames resolvedSigs resolvedTypes defLocs <$> B.get
 
 -- | Empty type checker state.
 emptyTCState :: TCState -- ^ Empty type checker state.
-emptyTCState = MkTCState Set.empty MultiMap.empty MultiMap.empty Map.empty [] Map.empty Map.empty Map.empty Set.empty [] [] Map.empty Map.empty
+emptyTCState = MkTCState Set.empty MultiMap.empty MultiMap.empty Map.empty [] Map.empty Map.empty Map.empty Set.empty [] [] [] Map.empty Map.empty
 
 -- | Type checker errors.
 data TCError =
@@ -257,6 +264,9 @@ tcExp1With allowEffect e =
       case resolved of
         Var {annExp = annRes, varCandidates = [(ident, _)]} -> do
           recordResolvedName (annSpan annRes) ident
+          -- Record variable type for LSP hover
+          mTy <- inferType resolved
+          forM_ mTy (recordResolvedType (annSpan annRes))
           unless allowEffect (rejectReadEffect annExp ident)
           MkTCState{tcFuncs} <- get
           if 0 `elem` MultiMap.lookup ident tcFuncs
@@ -679,7 +689,12 @@ tcStmt stmt =
                       , tcFuncSigs = MultiMap.insert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
                       , tcFuncSigRets =
                           let explicit = annSpan (annTy ty) /= NoSpan
-                              retTy = if explicit then ty else fromMaybe ty mRet
+                              defaultInfRet = TyInd (mkAnn Nom NoSpan) ([], T.pack "bitim")
+                              inferredRet =
+                                case mRet of
+                                  Just (TyVar _ n) | isInfinitive && n == name -> defaultInfRet
+                                  _ -> fromMaybe ty mRet
+                              retTy = if explicit then ty else inferredRet
                           in Map.insert (name, map (normalizePrimTy . snd) args) (normalizePrimTy retTy) (tcFuncSigRets s)
                       , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
                       })

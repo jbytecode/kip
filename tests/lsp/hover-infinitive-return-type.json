@@ -1,0 +1,5 @@
+{
+  "hover": true,
+  "hoverAt": { "line": 5, "character": 0 },
+  "hoverContains": ["test-etmek", "bitim"]
+}

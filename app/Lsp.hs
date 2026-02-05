@@ -83,6 +83,7 @@ data DocState = DocState
   , dsDefSpans :: Map.Map Identifier Range
   , dsResolved :: Map.Map Span Identifier
   , dsResolvedSigs :: Map.Map Span (Identifier, [Ty Ann])
+  , dsResolvedTypes :: Map.Map Span (Ty Ann)
   , dsBinderSpans :: [BinderInfo]
   }
 
@@ -222,6 +223,21 @@ renderIdentifier :: Identifier -> Text
 renderIdentifier (parts, stem) =
   T.unwords (parts ++ [stem | not (T.null stem)])
 
+stripTrailingVowel :: Identifier -> Maybe Identifier
+stripTrailingVowel (mods, word) =
+  case T.unsnoc word of
+    Just (pref, c) | c `elem` ['i', 'ı', 'u', 'ü'] -> Just (mods, pref)
+    _ -> Nothing
+
+infinitiveCandidates :: [Identifier] -> [Identifier]
+infinitiveCandidates candidates =
+  nub (candidates ++ mapMaybe stripTrailingVowel candidates)
+
+findInfinitiveDef :: [Identifier] -> [Stmt Ann] -> Maybe Identifier
+findInfinitiveDef names stmts =
+  listToMaybe [n | Function n _ _ _ True <- stmts, n `elem` names]
+    <|> listToMaybe [n | PrimFunc n _ _ True <- stmts, n `elem` names]
+
 -- | Find a function definition by name in statements.
 -- Returns the function name, arguments (if any), and return type.
 findFunctionDef :: Identifier -> [Stmt Ann] -> Maybe (Identifier, [Arg Ann], Ty Ann)
@@ -252,15 +268,7 @@ renderHoverSignature fnName args retTy isInfinitive cache fsm paramTyCons tyMods
     then do
       -- For infinitives, use special rendering
       argsStrs <- mapM (renderArg cache fsm paramTyCons tyMods) args
-      -- Render infinitive name using downs morphology
-      let (ns, stem) = fnName
-          tagged = T.pack (T.unpack stem ++ "<V><vn:inf><N>")
-      forms <- map T.unpack <$> Render.downsCached cache fsm tagged
-      let base = T.unpack stem
-          -- Pick the infinitive form, or fallback to base + "mak/mek"
-          nameStr = case pickDownForm forms of
-            Just f | '\'' `notElem` f && base `isPrefixOf` f -> f
-            _ -> base ++ "mak"  -- Simple fallback
+      nameStr <- Render.renderInfinitiveName cache fsm fnName
       -- Render return type and inflect last word with P3s (following REPL approach)
       retTyBase <- renderTy cache fsm paramTyCons tyMods retTy
       retTyStr <- inflectLastWord cache fsm retTyBase
@@ -320,20 +328,43 @@ onHover req respond = do
                         -- Find the function signature that matches the argument types
                         matchingArgs = [(sigName, args) | args <- MultiMap.lookup sigName (tcFuncSigs tcSt), map snd args == argTys]
                         mArgs = listToMaybe [args | (_, args) <- matchingArgs]
-                        -- For prelude functions, check base TC state for infinitives
-                        -- (TC state clears infinitives during LSP to avoid effect errors)
+                        -- Check both base TC state (prelude) and document TC state (current file) for infinitives
                         baseInfinitives = tcInfinitives (lsBaseTC st)
-                        isInfinitive = sigName `elem` baseInfinitives
+                        docInfinitives = tcInfinitives tcSt
+                        allInfinitives = Set.union baseInfinitives docInfinitives
+                        -- Check if any morphological candidate is an infinitive
+                        candidates = case varExp of
+                          Var _ _ cs -> sigName : map fst cs
+                          _ -> [sigName]
+                        candidatePool = infinitiveCandidates candidates
+                        defInf = findInfinitiveDef candidatePool (dsStmts doc)
+                        isInfinitive =
+                          case defInf of
+                            Just _ -> True
+                            Nothing -> any (`Set.member` allInfinitives) candidatePool
+                        -- Find the infinitive form from candidates
+                        infinitiveName =
+                          case defInf of
+                            Just inf -> inf
+                            Nothing ->
+                              case filter (`Set.member` allInfinitives) candidatePool of
+                                (inf:_) -> inf
+                                [] -> sigName
                     case (mFnDef, mArgs, mRetTy) of
-                      (Just (fnName, args, _), _, Just retTy) ->
+                      (Just (fnName, args, _), _, Just retTy) -> do
                         -- Function in current file with TC return type
-                        liftIO $ renderHoverSignature fnName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
-                      (Just (fnName, args, parsedRetTy), _, Nothing) ->
+                        -- Use infinitive form if this is an infinitive function
+                        let displayName = if isInfinitive then infinitiveName else fnName
+                        liftIO $ renderHoverSignature displayName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                      (Just (fnName, args, parsedRetTy), _, Nothing) -> do
                         -- Function in current file, use parsed return type
-                        liftIO $ renderHoverSignature fnName args parsedRetTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                        -- Use infinitive form if this is an infinitive function
+                        let displayName = if isInfinitive then infinitiveName else fnName
+                        liftIO $ renderHoverSignature displayName args parsedRetTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
                       (Nothing, Just args, Just retTy) ->
                         -- Prelude function with signature and return type matching the overload
-                        liftIO $ renderHoverSignature sigName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                        -- Use infinitiveName for correct infinitive form
+                        liftIO $ renderHoverSignature infinitiveName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
                       _ -> do
                         -- Fall back to type inference
                         let tcSt' = dsTC doc
@@ -348,9 +379,28 @@ onHover req respond = do
                         mFnDef = findFunctionDef resolvedName (dsStmts doc)
                         -- Get first signature from MultiMap (for hover, we show the first overload)
                         mTCFuncSig = listToMaybe (MultiMap.lookup resolvedName (tcFuncSigs tcSt))
-                        -- Check base TC state for infinitives
+                        -- Check both base TC state (prelude) and document TC state (current file) for infinitives
                         baseInfinitives = tcInfinitives (lsBaseTC st)
-                        isInfinitive = Set.member resolvedName baseInfinitives
+                        docInfinitives = tcInfinitives tcSt
+                        allInfinitives = Set.union baseInfinitives docInfinitives
+                        -- Check if any morphological candidate is an infinitive
+                        candidates = case varExp of
+                          Var _ _ cs -> resolvedName : map fst cs
+                          _ -> [resolvedName]
+                        candidatePool = infinitiveCandidates candidates
+                        defInf = findInfinitiveDef candidatePool (dsStmts doc)
+                        isInfinitive =
+                          case defInf of
+                            Just _ -> True
+                            Nothing -> any (`Set.member` allInfinitives) candidatePool
+                        -- Find the infinitive form from candidates
+                        infinitiveName =
+                          case defInf of
+                            Just inf -> inf
+                            Nothing ->
+                              case filter (`Set.member` allInfinitives) candidatePool of
+                                (inf:_) -> inf
+                                [] -> resolvedName
                     case (mFnDef, mTCFuncSig) of
                       (Just (fnName, args, _parsedRetTy), _) -> do
                         let argTys = map snd args
@@ -359,10 +409,31 @@ onHover req respond = do
                         liftIO $ renderHoverSignature fnName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
                       (Nothing, Just args) -> do
                         let argTys = map snd args
-                            mInferredRetTy = Map.lookup (resolvedName, argTys) (tcFuncSigRets tcSt)
+                            mInferredRetTy = Map.lookup (infinitiveName, argTys) (tcFuncSigRets tcSt)
                         case mInferredRetTy of
                           Just retTy ->
-                            liftIO $ renderHoverSignature resolvedName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                            liftIO $ renderHoverSignature infinitiveName args retTy isInfinitive (lsCache st) (lsFsm st) paramTyCons tyMods
+                          Nothing -> do
+                            -- Check if we have a resolved type first
+                            let expSpan = annSpan (annExp varExp)
+                                mResolvedType = Map.lookup expSpan (dsResolvedTypes doc)
+                            case mResolvedType of
+                              Just ty ->
+                                liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                              Nothing -> do
+                                let tcSt' = dsTC doc
+                                res <- liftIO (runTCM (inferType exp') tcSt')
+                                case res of
+                                  Right (Just ty, _) ->
+                                    liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                                  _ -> return ""
+                      (Nothing, Nothing) -> do
+                        -- Check if we have a resolved type first
+                        let expSpan = annSpan (annExp varExp)
+                            mResolvedType = Map.lookup expSpan (dsResolvedTypes doc)
+                        case mResolvedType of
+                          Just ty ->
+                            liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
                           Nothing -> do
                             let tcSt' = dsTC doc
                             res <- liftIO (runTCM (inferType exp') tcSt')
@@ -370,21 +441,21 @@ onHover req respond = do
                               Right (Just ty, _) ->
                                 liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
                               _ -> return ""
-                      (Nothing, Nothing) -> do
+                  (Nothing, _) -> do
+                    -- No resolved name, check if we have a resolved type
+                    let expSpan = annSpan (annExp varExp)
+                        mResolvedType = Map.lookup expSpan (dsResolvedTypes doc)
+                    case mResolvedType of
+                      Just ty ->
+                        liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                      Nothing -> do
+                        -- Fall back to inferring the type
                         let tcSt' = dsTC doc
                         res <- liftIO (runTCM (inferType exp') tcSt')
                         case res of
                           Right (Just ty, _) ->
                             liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
                           _ -> return ""
-                  (Nothing, _) -> do
-                    -- No resolved name, fall back to type
-                    let tcSt' = dsTC doc
-                    res <- liftIO (runTCM (inferType exp') tcSt')
-                    case res of
-                      Right (Just ty, _) ->
-                        liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
-                      _ -> return ""
 
           hoverText <- case exp' of
             var@Var{} -> tryRenderSignature var
@@ -394,20 +465,32 @@ onHover req respond = do
                 var@Var{} -> tryRenderSignature var
                 _ -> do
                   -- Fall back to type for other cases
+                  let expSpan = annSpan (annExp exp')
+                      mResolvedType = Map.lookup expSpan (dsResolvedTypes doc)
+                  case mResolvedType of
+                    Just ty ->
+                      liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                    Nothing -> do
+                      let tcSt = dsTC doc
+                      res <- liftIO (runTCM (inferType exp') tcSt)
+                      case res of
+                        Right (Just ty, _) ->
+                          liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                        _ -> return ""
+            _ -> do
+              -- For non-Var expressions, just show the type
+              let expSpan = annSpan (annExp exp')
+                  mResolvedType = Map.lookup expSpan (dsResolvedTypes doc)
+              case mResolvedType of
+                Just ty ->
+                  liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                Nothing -> do
                   let tcSt = dsTC doc
                   res <- liftIO (runTCM (inferType exp') tcSt)
                   case res of
                     Right (Just ty, _) ->
                       liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
                     _ -> return ""
-            _ -> do
-              -- For non-Var expressions, just show the type
-              let tcSt = dsTC doc
-              res <- liftIO (runTCM (inferType exp') tcSt)
-              case res of
-                Right (Just ty, _) ->
-                  liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
-                _ -> return ""
           if T.null hoverText
             then respond (Right (InR Null))
             else do
@@ -581,8 +664,9 @@ analyzeDocument st uri text = do
           docSpans = docSpanSet stmts
           resolved = Map.fromList (filterResolved docSpans (tcResolvedNames tcCached))
           resolvedSigs = Map.fromList (filterResolved docSpans (tcResolvedSigs tcCached))
+          resolvedTypes = Map.fromList (filterResolved docSpans (tcResolvedTypes tcCached))
           binderSpans = collectBinderSpans stmts
-          doc = DocState text pstCached tcCached stmts [] defSpans resolved resolvedSigs binderSpans
+          doc = DocState text pstCached tcCached stmts [] defSpans resolved resolvedSigs resolvedTypes binderSpans
       return (doc, [])
     Nothing -> do
       let basePst = lsBaseParser st
@@ -591,7 +675,7 @@ analyzeDocument st uri text = do
       case parseRes of
         Left err -> do
           let diag = parseErrorToDiagnostic text err
-              doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty []
+              doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty Map.empty []
           return (doc, [diag])
         Right (stmts, pst') -> do
           -- Compute these once, early, and reuse throughout
@@ -601,7 +685,7 @@ analyzeDocument st uri text = do
           case declRes of
             Left tcErr -> do
               diag <- tcErrorToDiagnostic st text tcErr
-              let doc = DocState text pst' baseTC stmts [diag] defSpans Map.empty Map.empty binderSpans
+              let doc = DocState text pst' baseTC stmts [diag] defSpans Map.empty Map.empty Map.empty binderSpans
               return (doc, [diag])
             Right (_, tcStWithDecls) -> do
               tcStWithDefs <- case uriToFilePath uri of
@@ -621,7 +705,8 @@ analyzeDocument st uri text = do
               let !docSpans = docSpanSet stmts
                   !resolved = Map.fromList (filterResolved docSpans (tcResolvedNames tcStFinal))
                   !resolvedSigs = Map.fromList (filterResolved docSpans (tcResolvedSigs tcStFinal))
-                  doc = DocState text pst' tcStFinal stmts diags defSpans resolved resolvedSigs binderSpans
+                  !resolvedTypes = Map.fromList (filterResolved docSpans (tcResolvedTypes tcStFinal))
+                  doc = DocState text pst' tcStFinal stmts diags defSpans resolved resolvedSigs resolvedTypes binderSpans
               return (doc, diags)
 
 loadCachedDoc :: LspState -> Uri -> Text -> IO (Maybe (ParserState, TCState, [Stmt Ann]))
@@ -1335,4 +1420,3 @@ collectBinderSpans = concatMap stmtBinders
         Match _ scr clauses ->
           expBinders scope scr ++ concatMap (clauseBinders scope) clauses
         _ -> []
-

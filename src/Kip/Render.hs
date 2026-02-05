@@ -16,6 +16,7 @@ module Kip.Render
   , renderArgParts
   , renderFunctionSignature
   , renderFunctionSignatureParts
+  , renderInfinitiveName
   , renderSig
   , renderTyText
   , renderTyNomText
@@ -635,10 +636,16 @@ renderInfinitiveName cache fsm (xs, x) = do
   let tagged = T.pack (T.unpack x ++ "<V><vn:inf><N>")
   forms <- map T.unpack <$> downsCached cache fsm tagged
   let base = T.unpack x
-      root = case pickDownForm forms of
-        Just f | '\'' `notElem` f && base `isPrefixOf` f -> f
-        _ -> fallbackInfinitive base
+      preferred = filter isInfinitiveForm forms
+      pickFrom candidates =
+        case pickDownForm candidates of
+          Just f | '\'' `notElem` f && base `isPrefixOf` f -> Just f
+          _ -> Nothing
+      root = fromMaybe (fallbackInfinitive base) (pickFrom preferred)
   return (T.unpack (T.intercalate (T.pack "-") (xs ++ [T.pack root])))
+  where
+    isInfinitiveForm :: String -> Bool
+    isInfinitiveForm f = "mek" `isSuffixOf` f || "mak" `isSuffixOf` f
 
 -- | Fallback infinitive formation without morphology.
 fallbackInfinitive :: String -- ^ Base verb stem.
