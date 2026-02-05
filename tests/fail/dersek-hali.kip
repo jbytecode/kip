@@ -1,0 +1,4 @@
+(* dersek için ifade dative ("-e") olmalı; burada accusative kullanılıyor. *)
+çalıştırmak,
+  (5'le 1'in toplamını) n dersek,
+  (n'yle 1'in toplamını) yazmaktır.

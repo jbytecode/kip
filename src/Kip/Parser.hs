@@ -1473,7 +1473,10 @@ parseExpWithCtx' useCtx allowMatch =
           val <- buildAppFrom exprItems
           let bindSpan = mergeSpan (annSpan (annExp val)) nameSpan
               bindAnn = mkAnn (annCase (annExp val)) bindSpan
-              nameAnn = mkAnn Nom nameSpan
+              -- Mark "dersek" binds with Dat on the binder annotation so the
+              -- typechecker can enforce the dative requirement without
+              -- affecting regular "için" bindings.
+              nameAnn = mkAnn Dat nameSpan
               bindExp = Bind bindAnn name nameAnn val
           lexeme (string "dersek")
           lexeme (char ',')

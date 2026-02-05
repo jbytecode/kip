@@ -429,14 +429,23 @@ tcExp1With allowEffect e =
     FloatLit {annExp, floatVal} -> do
       recordResolvedType (annSpan annExp) (TyFloat (mkAnn Nom (annSpan annExp)))
       return (FloatLit annExp floatVal)
-    Bind {annExp, bindName, bindNameAnn, bindExp} -> do
+    Bind {annExp = annBind, bindName, bindNameAnn, bindExp} -> do
+      -- Enforce the dative case requirement for "dersek" bindings.
+      -- The parser marks such binds by setting the binder annotation case to Dat.
+      -- This keeps normal "için" bindings unrestricted while ensuring
+      -- "(...-e) n dersek" uses dative on the bound expression.
+      when (annCase bindNameAnn == Dat && annCase (annExp bindExp) /= Dat) $
+        lift (throwE (NoType (annSpan (annExp bindExp))))
       exp' <- tcExp1With allowEffect bindExp
       mTy <- inferType exp'
       forM_ mTy (recordResolvedType (annSpan bindNameAnn))
-      return (Bind annExp bindName bindNameAnn exp')
+      return (Bind annBind bindName bindNameAnn exp')
     Seq {annExp = annSeq, first, second} -> do
       case first of
         Bind {bindName, bindNameAnn, bindExp} -> do
+          -- Same "dersek" dative check for binds in sequences.
+          when (annCase bindNameAnn == Dat && annCase (annExp bindExp) /= Dat) $
+            lift (throwE (NoType (annSpan (annExp bindExp))))
           bindExp' <- tcExp1With True bindExp
           mTy <- inferType bindExp'
           let tys = maybe [] (\t -> [(bindName, t)]) mTy
