@@ -312,37 +312,48 @@ onHover req respond = do
           pst = dsParser doc
           paramTyCons = [name | (name, arity) <- parserTyCons pst, arity > 0]
           tyMods = parserTyMods pst
-      case mExp of
-        Nothing -> do
-          let mCtor = findCtorInPattern pos (dsStmts doc)
-          case mCtor of
-            Just (ctorIdent, _) -> do
-              let tcSt = dsTC doc
-              case Map.lookup ctorIdent (tcCtors tcSt) of
-                Just (argTys, retTy) -> do
-                  hoverText <- liftIO $ renderConstructorSignature ctorIdent argTys retTy (lsCache st) (lsFsm st) paramTyCons tyMods
-                  if T.null hoverText
-                    then respond (Right (InR Null))
-                    else do
-                      let contents = InL (MarkupContent MarkupKind_PlainText hoverText)
-                          hover = Hover contents Nothing
-                      respond (Right (InL hover))
-                Nothing -> respond (Right (InR Null))
+      let mCtor = findCtorInPattern pos (dsStmts doc)
+      case mCtor of
+        Just (ctorIdent, _, mScrutinee) -> do
+          let tcSt = dsTC doc
+          case Map.lookup ctorIdent (tcCtors tcSt) of
+            Just (argTys, retTy) -> do
+              (argTys', retTy') <- case mScrutinee of
+                Nothing -> return (argTys, retTy)
+                Just scrutExp -> do
+                  res <- liftIO (runTCM (inferType scrutExp) tcSt)
+                  case res of
+                    Right (Just scrutTy, _) ->
+                      case unifyTypes (Map.toList (tcTyCons tcSt)) [retTy] [scrutTy] of
+                        Just subst ->
+                          return (map (applySubst subst) argTys, applySubst subst retTy)
+                        Nothing -> return (argTys, retTy)
+                    _ -> return (argTys, retTy)
+              hoverText <- liftIO $ renderConstructorSignature ctorIdent argTys' retTy' (lsCache st) (lsFsm st) paramTyCons tyMods
+              if T.null hoverText
+                then respond (Right (InR Null))
+                else do
+                  let contents = InL (MarkupContent MarkupKind_PlainText hoverText)
+                      hover = Hover contents Nothing
+                  respond (Right (InL hover))
             Nothing -> respond (Right (InR Null))
-        Just exp' -> do
-          -- Try to render function signature if this is a function reference
-          let tryRenderSignature varExp = do
+        Nothing -> case mExp of
+          Nothing -> respond (Right (InR Null))
+          Just exp' -> do
+            -- Try to render function signature if this is a function reference
+            let { tryRenderSignature varExp = do
                 -- Use dsResolved to get the canonical identifier
-                let expSpan = annSpan (annExp varExp)
-                    mResolved = Map.lookup expSpan (dsResolved doc)
-                    mResolvedSig = Map.lookup expSpan (dsResolvedSigs doc)  -- Get overload-specific signature
-                    mResolvedIdent = case mResolved of
-                      Just resolved -> Just resolved
-                      Nothing -> case varExp of
-                        Var _ varName candidates ->
-                          -- Fallback: try all candidate names
-                          listToMaybe (varName : map fst candidates)
-                        _ -> Nothing
+                let { expSpan = annSpan (annExp varExp)
+                    ; mResolved = Map.lookup expSpan (dsResolved doc)
+                    ; mResolvedSig = Map.lookup expSpan (dsResolvedSigs doc)  -- Get overload-specific signature
+                    ; mResolvedIdent = case mResolved of
+                        Just resolved -> Just resolved
+                        Nothing -> case varExp of
+                          Var _ varName candidates ->
+                            -- Fallback: try all candidate names
+                            listToMaybe (varName : map fst candidates)
+                          _ -> Nothing
+                    }
                 case (mResolvedIdent, mResolvedSig) of
                   (Just resolvedName, Just (sigName, argTys)) -> do
                     -- We have the resolved signature with specific argument types (overload info)
@@ -480,47 +491,48 @@ onHover req respond = do
                           Right (Just ty, _) ->
                             liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
                           _ -> return ""
+            }
 
-          hoverText <- case exp' of
-            var@Var{} -> tryRenderSignature var
-            App _ fn _ ->
-              -- For App expressions, check if the function is a Var and render its signature
-              case fn of
-                var@Var{} -> tryRenderSignature var
-                _ -> do
-                  -- Fall back to type for other cases
-                  let expSpan = annSpan (annExp exp')
-                      mResolvedType = Map.lookup expSpan (dsResolvedTypes doc)
-                  case mResolvedType of
-                    Just ty ->
-                      liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
-                    Nothing -> do
-                      let tcSt = dsTC doc
-                      res <- liftIO (runTCM (inferType exp') tcSt)
-                      case res of
-                        Right (Just ty, _) ->
-                          liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
-                        _ -> return ""
-            _ -> do
-              -- For non-Var expressions, just show the type
-              let expSpan = annSpan (annExp exp')
-                  mResolvedType = Map.lookup expSpan (dsResolvedTypes doc)
-              case mResolvedType of
-                Just ty ->
-                  liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
-                Nothing -> do
-                  let tcSt = dsTC doc
-                  res <- liftIO (runTCM (inferType exp') tcSt)
-                  case res of
-                    Right (Just ty, _) ->
-                      liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
-                    _ -> return ""
-          if T.null hoverText
-            then respond (Right (InR Null))
-            else do
-              let contents = InL (MarkupContent MarkupKind_PlainText hoverText)
-                  hover = Hover contents Nothing
-              respond (Right (InL hover))
+            hoverText <- case exp' of
+              var@Var{} -> tryRenderSignature var
+              App _ fn _ ->
+                -- For App expressions, check if the function is a Var and render its signature
+                case fn of
+                  var@Var{} -> tryRenderSignature var
+                  _ -> do
+                    -- Fall back to type for other cases
+                    let expSpan = annSpan (annExp exp')
+                        mResolvedType = Map.lookup expSpan (dsResolvedTypes doc)
+                    case mResolvedType of
+                      Just ty ->
+                        liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                      Nothing -> do
+                        let tcSt = dsTC doc
+                        res <- liftIO (runTCM (inferType exp') tcSt)
+                        case res of
+                          Right (Just ty, _) ->
+                            liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                          _ -> return ""
+              _ -> do
+                -- For non-Var expressions, just show the type
+                let expSpan = annSpan (annExp exp')
+                    mResolvedType = Map.lookup expSpan (dsResolvedTypes doc)
+                case mResolvedType of
+                  Just ty ->
+                    liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                  Nothing -> do
+                    let tcSt = dsTC doc
+                    res <- liftIO (runTCM (inferType exp') tcSt)
+                    case res of
+                      Right (Just ty, _) ->
+                        liftIO $ renderTyText (lsCache st) (lsFsm st) paramTyCons tyMods ty
+                      _ -> return ""
+            if T.null hoverText
+              then respond (Right (InR Null))
+              else do
+                let contents = InL (MarkupContent MarkupKind_PlainText hoverText)
+                    hover = Hover contents Nothing
+                respond (Right (InL hover))
 
 #if MIN_VERSION_lsp_types(2,3,0)
 onDefinition :: TRequestMessage 'Method_TextDocumentDefinition -> (Either (TResponseError 'Method_TextDocumentDefinition) (MessageResult 'Method_TextDocumentDefinition) -> LspM Config ()) -> LspM Config ()
@@ -539,13 +551,22 @@ onDefinition req respond = do
       case mIdent of
         Nothing ->
           case findCtorInPattern pos (dsStmts doc) of
-            Just (ctorIdent, _) -> do
+            Just (ctorIdent, _, _) -> do
               let keys = dedupeIdents [ctorIdent]
               case lookupDefRange keys (dsDefSpans doc) of
                 Just range -> do
                   let loc = Location uri range
                   respond (Right (InL (Definition (InR [loc]))))
-                Nothing -> respond (Right (InL (Definition (InR []))))
+                Nothing -> do
+                  case lookupDefLocPreferExternal uri keys (lsDefIndex st) of
+                    Just loc -> respond (Right (InL (Definition (InR [loc]))))
+                    Nothing -> do
+                      let currentDefs = defLocationsForUri uri (dsDefSpans doc)
+                      idx <- liftIO (buildDefinitionIndex st uri currentDefs)
+                      withState $ \s -> return (s { lsDefIndex = idx }, ())
+                      case lookupDefLocPreferExternal uri keys idx of
+                        Nothing -> respond (Right (InL (Definition (InR []))))
+                        Just loc -> respond (Right (InL (Definition (InR [loc]))))
             Nothing -> respond (Right (InL (Definition (InR []))))
         Just (ident, candidates) -> do
           -- First check if this is a bound variable (pattern variable or let/bind binding)
@@ -932,7 +953,7 @@ findVarAt pos stmts =
        Just Var{varName = name, varCandidates = candidates} -> Just (name, candidates)
        _ -> Nothing
 
-findCtorInPattern :: Position -> [Stmt Ann] -> Maybe (Identifier, Ann)
+findCtorInPattern :: Position -> [Stmt Ann] -> Maybe (Identifier, Ann, Maybe (Exp Ann))
 findCtorInPattern pos = foldl' (<|>) Nothing . map (stmtCtorAt pos)
   where
     stmtCtorAt p stt =
@@ -943,7 +964,7 @@ findCtorInPattern pos = foldl' (<|>) Nothing . map (stmtCtorAt pos)
         _ -> Nothing
 
     clauseCtorAt p (Clause pat body) =
-      patCtorAt p pat <|> expCtorAt p body
+      patCtorAt p pat Nothing <|> expCtorAt p body
 
     expCtorAt p e =
       case e of
@@ -951,16 +972,19 @@ findCtorInPattern pos = foldl' (<|>) Nothing . map (stmtCtorAt pos)
         Bind _ _ _ b -> expCtorAt p b
         Seq _ a b -> expCtorAt p a <|> expCtorAt p b
         Match _ scr clauses ->
-          expCtorAt p scr <|> foldl' (<|>) Nothing (map (clauseCtorAt p) clauses)
+          expCtorAt p scr <|> foldl' (<|>) Nothing (map (clauseCtorAtScr p scr) clauses)
         Let _ _ body -> expCtorAt p body
         _ -> Nothing
 
-    patCtorAt p pat =
+    clauseCtorAtScr p scr (Clause pat body) =
+      patCtorAt p pat (Just scr) <|> expCtorAt p body
+
+    patCtorAt p pat mScrutinee =
       case pat of
         PCtor (ctor, ann) pats ->
-          let here = if posInSpan p (annSpan ann) then Just (ctor, ann) else Nothing
-          in here <|> foldl' (<|>) Nothing (map (patCtorAt p) pats)
-        PListLit pats -> foldl' (<|>) Nothing (map (patCtorAt p) pats)
+          let here = if posInSpan p (annSpan ann) then Just (ctor, ann, mScrutinee) else Nothing
+          in here <|> foldl' (<|>) Nothing (map (\pt -> patCtorAt p pt mScrutinee) pats)
+        PListLit pats -> foldl' (<|>) Nothing (map (\pt -> patCtorAt p pt mScrutinee) pats)
         _ -> Nothing
 
 -- | Find if the cursor is on a definition and collect morphological candidates from AST
@@ -1185,23 +1209,13 @@ defSpansFromParser base stmts pst =
 defSpansFromParserRaw :: ParserState -> [Stmt Ann] -> ParserState -> Map.Map Identifier Span
 defSpansFromParserRaw base stmts pst =
   let baseDefs = latestDefSpans (parserDefSpans base)
-      allowed = Set.fromList (stmtNames stmts)
+      allowed = Set.fromList (stmtNamesFromStmts stmts)
       localDefs =
         Map.filterWithKey
           (\ident sp ->
             Set.member ident allowed && Map.lookup ident baseDefs /= Just sp)
           (latestDefSpans (parserDefSpans pst))
   in localDefs
-  where
-    stmtNames = concatMap stmtNames'
-    stmtNames' stt =
-      case stt of
-        Defn name _ _ -> [name]
-        Function name _ _ _ _ -> [name]
-        PrimFunc name _ _ _ -> [name]
-        NewType name _ ctors -> name : map (fst . fst) ctors
-        PrimType name -> [name]
-        _ -> []
 
 -- | Collect per-identifier definition span *lists* for the current document only.
 -- We must exclude spans inherited from the base parser (prelude), otherwise
@@ -1209,7 +1223,7 @@ defSpansFromParserRaw base stmts pst =
 defSpanListsFromParser :: ParserState -> [Stmt Ann] -> ParserState -> Map.Map Identifier [Span]
 defSpanListsFromParser base stmts pst =
   let baseLists = parserDefSpans base
-      allowed = Set.fromList (stmtNames stmts)
+      allowed = Set.fromList (stmtNamesFromStmts stmts)
       stripBase ident spans =
         let baseSpans = Map.findWithDefault [] ident baseLists
             -- Keep only spans that do not appear in the base list.
@@ -1221,8 +1235,10 @@ defSpanListsFromParser base stmts pst =
       filtered =
         Map.filterWithKey (\ident spans -> Set.member ident allowed && not (null spans)) localLists
   in filtered
+-- | Collect names defined by statements.
+stmtNamesFromStmts :: [Stmt Ann] -> [Identifier]
+stmtNamesFromStmts = concatMap stmtNames'
   where
-    stmtNames = concatMap stmtNames'
     stmtNames' stt =
       case stt of
         Defn name _ _ -> [name]
@@ -1231,6 +1247,13 @@ defSpanListsFromParser base stmts pst =
         NewType name _ ctors -> name : map (fst . fst) ctors
         PrimType name -> [name]
         _ -> []
+
+-- | Build definition spans without stripping base definitions.
+defSpansFromParserIncludeBase :: [Stmt Ann] -> ParserState -> Map.Map Identifier Range
+defSpansFromParserIncludeBase stmts pst =
+  let allowed = Set.fromList (stmtNamesFromStmts stmts)
+      spans = Map.filterWithKey (\ident _ -> Set.member ident allowed) (latestDefSpans (parserDefSpans pst))
+  in Map.map spanToRange spans
 
 latestDefSpans :: Map.Map Identifier [Span] -> Map.Map Identifier Span
 latestDefSpans =
@@ -1339,20 +1362,31 @@ listKipFilesRecursive root = do
 loadDefsForFile :: LspState -> FilePath -> IO (Map.Map Identifier Location)
 loadDefsForFile st path = do
   absPath <- canonicalizePath path
+  let normalized = addTrailingPathSeparator (normalise absPath)
+      moduleRoots = map (addTrailingPathSeparator . normalise) (lsModuleDirs st)
+      isStdlib = any (`isPrefixOf` normalized) moduleRoots
   let cachePath = cacheFilePath absPath
   mCached <- loadCachedModule cachePath
   case mCached of
     Just cached -> do
       let pst = fromCachedParserState (lsFsm st) (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
           stmts = cachedStmts cached
-      return (defLocationsForUri (filePathToUri absPath) (defSpansFromParser (lsBaseParser st) stmts pst))
+          defSpans =
+            if isStdlib
+              then defSpansFromParserIncludeBase stmts pst
+              else defSpansFromParser (lsBaseParser st) stmts pst
+      return (defLocationsForUri (filePathToUri absPath) defSpans)
     Nothing -> do
       src <- TIO.readFile absPath
       parseRes <- parseFromFile (lsBaseParser st) src
       case parseRes of
         Left _ -> return Map.empty
         Right (stmts, pst) ->
-          return (defLocationsForUri (filePathToUri absPath) (defSpansFromParser (lsBaseParser st) stmts pst))
+          let defSpans =
+                if isStdlib
+                  then defSpansFromParserIncludeBase stmts pst
+                  else defSpansFromParser (lsBaseParser st) stmts pst
+          in return (defLocationsForUri (filePathToUri absPath) defSpans)
 
 preferByScore :: Int -> Location -> Location -> Location
 preferByScore newScore newLoc oldLoc =
