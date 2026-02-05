@@ -38,7 +38,6 @@ import Control.Monad.Reader (runReaderT)
 import Data.List (foldl', nub, isPrefixOf, sortOn)
 import Data.Char (isAlphaNum)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList, listToMaybe, isJust)
-import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import qualified Data.Map.Strict as Map
 import qualified Data.MultiMap as MultiMap
 import qualified Data.Set as Set
@@ -140,7 +139,7 @@ data DocState = DocState
   , dsCtorIndex :: CtorIndex
   , dsMatchClauseIndex :: MatchClauseIndex
   , dsFuncClauseIndex :: FuncClauseIndex
-  , dsTyRenderCache :: IORef (Map.Map (Ty Ann) Text)
+  , dsTyRenderCache :: HT.BasicHashTable Text Text
   }
 
 -- | LSP server configuration wrapper.
@@ -662,15 +661,22 @@ normalizeTyForRender ty =
 -- This is a hot path during hover. We normalize annotations to eliminate
 -- span noise and cache the rendered text for the lifetime of the document
 -- version.
+-- | Render cache key for a type.
+--
+-- We normalize spans and then use the 'Show' instance as a stable key.
+tyCacheKey :: Ty Ann -> Text
+tyCacheKey =
+  T.pack . show . normalizeTyForRender
+
 renderTyNomTextCached :: DocState -> RenderCache -> FSM -> [Identifier] -> [(Identifier, [Identifier])] -> Ty Ann -> IO Text
 renderTyNomTextCached doc cache fsm paramTyCons tyMods ty = do
-  let key = normalizeTyForRender ty
-  existing <- readIORef (dsTyRenderCache doc)
-  case Map.lookup key existing of
+  let key = tyCacheKey ty
+  existing <- HT.lookup (dsTyRenderCache doc) key
+  case existing of
     Just t -> return t
     Nothing -> do
       t <- renderTyNomText cache fsm paramTyCons tyMods ty
-      modifyIORef' (dsTyRenderCache doc) (Map.insert key t)
+      HT.insert (dsTyRenderCache doc) key t
       return t
 
 #if MIN_VERSION_lsp_types(2,3,0)
@@ -1313,7 +1319,7 @@ analyzeDocument st uri text = do
           binderSpans = collectBinderSpans stmts
           spanIndex = buildSpanIndex resolved resolvedSigs resolvedTypes binderSpans
           (expIndex, varIndex, patVarIndex, ctorIndex, matchClauseIndex, funcClauseIndex) = buildDocIndices stmts
-      tyRenderCache <- newIORef Map.empty
+      tyRenderCache <- HT.new
       let doc = DocState text pstCached tcCached stmts [] defSpans resolved resolvedSigs resolvedTypes binderSpans spanIndex expIndex varIndex patVarIndex ctorIndex matchClauseIndex funcClauseIndex tyRenderCache
       return (doc, [])
     Nothing -> do
@@ -1323,7 +1329,7 @@ analyzeDocument st uri text = do
       case parseRes of
         Left err -> do
           let diag = parseErrorToDiagnostic text err
-          tyRenderCache <- newIORef Map.empty
+          tyRenderCache <- HT.new
           let doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty Map.empty [] Map.empty Map.empty Map.empty Map.empty Map.empty Map.empty Map.empty tyRenderCache
           return (doc, [diag])
         Right (stmts, pst') -> do
@@ -1336,7 +1342,7 @@ analyzeDocument st uri text = do
             Left tcErr -> do
               diag <- tcErrorToDiagnostic st text tcErr
               let spanIndex = buildSpanIndex Map.empty Map.empty Map.empty binderSpans
-              tyRenderCache <- newIORef Map.empty
+              tyRenderCache <- HT.new
               let doc = DocState text pst' baseTC stmts [diag] defSpans Map.empty Map.empty Map.empty binderSpans spanIndex expIndex varIndex patVarIndex ctorIndex matchClauseIndex funcClauseIndex tyRenderCache
               return (doc, [diag])
             Right (_, tcStWithDecls) -> do
@@ -1359,7 +1365,7 @@ analyzeDocument st uri text = do
                   !resolvedSigs = Map.fromList (filterResolved docSpans (tcResolvedSigs tcStFinal))
                   !resolvedTypes = Map.fromList (filterResolved docSpans (tcResolvedTypes tcStFinal))
                   !spanIndex = buildSpanIndex resolved resolvedSigs resolvedTypes binderSpans
-              tyRenderCache <- newIORef Map.empty
+              tyRenderCache <- HT.new
               let doc = DocState text pst' tcStFinal stmts diags defSpans resolved resolvedSigs resolvedTypes binderSpans spanIndex expIndex varIndex patVarIndex ctorIndex matchClauseIndex funcClauseIndex tyRenderCache
               return (doc, diags)
 
