@@ -478,7 +478,7 @@ renderPatMatchCond scrutinee pat =
   case pat of
     PWildcard _ -> ("", [])
     PVar n _ -> ("", ["const " <> toJsIdent n <> " = " <> scrutinee <> ";"])
-    PCtor ctor pats ->
+    PCtor (ctor, _) pats ->
       let cond = renderPatCond scrutinee pat
           (binds, _) = renderPatternBindings scrutinee pats 0
       in (cond, binds)
@@ -493,7 +493,7 @@ renderPatCond scrutinee pat =
   case pat of
     PWildcard _ -> "true"
     PVar _ _ -> "true"
-    PCtor ctor pats ->
+    PCtor (ctor, _) pats ->
       -- When matching constructor patterns we need to:
       -- 1) check the tag, 2) ensure args are long enough, and
       -- 3) evaluate subpattern guards using right-aligned indexing.

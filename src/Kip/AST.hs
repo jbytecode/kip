@@ -143,7 +143,7 @@ type Ctor ann = ((Identifier, ann), [Ty ann])
 data Pat ann =
     PWildcard ann -- ^ Wildcard pattern with annotation.
   | PVar Identifier ann -- ^ Variable pattern (binds a name).
-  | PCtor Identifier [Pat ann] -- ^ Constructor pattern with nested sub-patterns.
+  | PCtor (Identifier, ann) [Pat ann] -- ^ Constructor pattern with nested sub-patterns.
   | PIntLit Integer ann -- ^ Integer literal pattern.
   | PFloatLit Double ann -- ^ Float literal pattern.
   | PStrLit Text ann -- ^ String literal pattern.
@@ -154,7 +154,7 @@ data Pat ann =
 instance Functor Pat where
   fmap f (PWildcard ann) = PWildcard (f ann)
   fmap f (PVar ident ann) = PVar ident (f ann)
-  fmap f (PCtor ident pats) = PCtor ident (map (fmap f) pats)
+  fmap f (PCtor (ident, ann) pats) = PCtor (ident, f ann) (map (fmap f) pats)
   fmap f (PIntLit n ann) = PIntLit n (f ann)
   fmap f (PFloatLit n ann) = PFloatLit n (f ann)
   fmap f (PStrLit s ann) = PStrLit s (f ann)
@@ -325,7 +325,7 @@ prettyExp (Match _ scrut clauses) =
       case pat of
         PWildcard _ -> "değilse"
         PVar n _ -> prettyIdent' n
-        PCtor ctor pats ->
+        PCtor (ctor, _) pats ->
           let argStrs = scr : map (prettyPat "") pats
           in unwords (argStrs ++ [prettyIdent' ctor])
 prettyExp (Let _ name body) =

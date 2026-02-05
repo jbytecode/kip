@@ -1048,7 +1048,7 @@ inferPatTypes pat args =
       -- We need to extract the element type and apply it to each pattern
       let elemTy = extractListElemTypeMap tcTyCons scrutTy
       concat <$> mapM (\p -> inferPatTypes p [(undefined, elemTy)]) pats
-    (PCtor ctor pats, (_, scrutTy):_) -> do
+    (PCtor (ctor, _) pats, (_, scrutTy):_) -> do
       MkTCState{tcCtors, tcTyCons} <- get
       case Map.lookup ctor tcCtors of
         Just (argTys, resTy) ->
@@ -1182,7 +1182,7 @@ missingVectors (t:ts) matrix = do
           return [PWildcard (mkAnn Nom NoSpan) : replicate (length ts) (PWildcard (mkAnn Nom NoSpan))]
         Just ctors ->
           return
-            [ PCtor (ctorName ctorInfo) (replicate (length (ctorArgs ctorInfo)) (PWildcard (mkAnn Nom NoSpan)))
+            [ PCtor (ctorName ctorInfo, mkAnn Nom NoSpan) (replicate (length (ctorArgs ctorInfo)) (PWildcard (mkAnn Nom NoSpan)))
               : replicate (length ts) (PWildcard (mkAnn Nom NoSpan))
             | ctorInfo <- ctors
             ]
@@ -1208,7 +1208,7 @@ missingVectors (t:ts) matrix = do
                     let matrix' = specializeMatrix ctorInfo matrix
                     missingArgs <- missingVectors (ctorArgs ctorInfo ++ ts) matrix'
                     return
-                      [ PCtor (ctorName ctorInfo) argPats : restPats
+                      [ PCtor (ctorName ctorInfo, mkAnn Nom NoSpan) argPats : restPats
                       | vec <- missingArgs
                       , let (argPats, restPats) = splitAt (length (ctorArgs ctorInfo)) vec
                       ]
@@ -1236,7 +1236,7 @@ missingVectors (t:ts) matrix = do
         [] -> Nothing
         (p:ps) ->
           case p of
-            PCtor name subPats | identMatchesCtor (ctorName ctorInfo) name ->
+            PCtor (name, _) subPats | identMatchesCtor (ctorName ctorInfo) name ->
               Just (subPats ++ ps)
             PWildcard {} ->
               Just (replicate (length (ctorArgs ctorInfo)) (PWildcard (mkAnn Nom NoSpan)) ++ ps)
@@ -1281,7 +1281,7 @@ annotateMissingPattern scrutTy pat = do
               ann = mkAnn (annCase (annTy ty)) NoSpan
           return (PVar name ann, idx')
         PVar n ann -> return (PVar n ann, idx)
-        PCtor ctor subPats -> do
+        PCtor (ctor, ann) subPats -> do
           mCtor <- ctorInfoFor ty ctor
           case mCtor of
             Nothing ->
@@ -1290,7 +1290,7 @@ annotateMissingPattern scrutTy pat = do
                   let (name, idx') = freshIdent idx
                       ann = mkAnn (annCase (annTy ty)) NoSpan
                   return (PVar name ann, idx')
-                else return (PCtor ctor subPats, idx)
+                else return (PCtor (ctor, ann) subPats, idx)
             Just ctorInfo ->
               if null (ctorArgs ctorInfo)
                 then do
@@ -1300,7 +1300,7 @@ annotateMissingPattern scrutTy pat = do
                   let argTys = ctorArgs ctorInfo
                       subPats' = take (length argTys) (subPats ++ repeat (PWildcard (mkAnn Nom NoSpan)))
                   (subPatsAnn, idx') <- goList idx (zip subPats' argTys)
-                  return (PCtor ctor subPatsAnn, idx')
+                  return (PCtor (ctor, ann) subPatsAnn, idx')
 
     goList :: Int -> [(Pat Ann, Ty Ann)] -> TCM ([Pat Ann], Int)
     goList idx [] = return ([], idx)
@@ -1366,7 +1366,7 @@ isUseful tys matrix vec =
           case p of
             PWildcard {} -> usefulWildcard ctors ts matrix ps
             PVar {} -> usefulWildcard ctors ts matrix ps
-            PCtor ctorName subPats ->
+            PCtor (ctorName, _) subPats ->
               case findCtor ctors ctorName of
                 Nothing -> return True
                 Just ctorInfo ->
@@ -1392,7 +1392,7 @@ isUseful tys matrix vec =
     constructorsInColumn = mapMaybe firstCtor
     firstCtor row =
       case row of
-        (PCtor name _ : _) -> Just name
+        (PCtor (name, _) _ : _) -> Just name
         _ -> Nothing
 
     constructorsComplete ctors present =
@@ -1417,7 +1417,7 @@ isUseful tys matrix vec =
         [] -> Nothing
         (p:ps) ->
           case p of
-            PCtor name subPats | identMatchesCtor (ctorName ctorInfo) name ->
+            PCtor (name, _) subPats | identMatchesCtor (ctorName ctorInfo) name ->
               Just (subPats ++ ps)
             PWildcard {} ->
               Just (replicate (length (ctorArgs ctorInfo)) (PWildcard (mkAnn Nom NoSpan)) ++ ps)

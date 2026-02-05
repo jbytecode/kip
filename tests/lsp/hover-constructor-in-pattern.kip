@@ -1,0 +1,12 @@
+Bir (a olasılığı)
+ya yokluk
+ya da bir a'nın varlığı
+olabilir.
+
+(bu tam-sayı olasılığının) test-etmek,
+  bu yokluksa,
+    0;
+  sayının varlığıysa,
+    sayıdır.
+
+(5 değerini) test-et.

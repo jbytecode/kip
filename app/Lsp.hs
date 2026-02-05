@@ -285,6 +285,16 @@ renderHoverSignature fnName args retTy isInfinitive cache fsm paramTyCons tyMods
           retText = "(" ++ nameStr ++ " " ++ retTyStr ++ ")"
       return $ T.pack $ unwords (paramTexts ++ [retText])
 
+-- | Render a constructor signature for hover.
+renderConstructorSignature :: Identifier -> [Ty Ann] -> Ty Ann -> RenderCache -> FSM -> [Identifier] -> [(Identifier, [Identifier])] -> IO Text
+renderConstructorSignature ctorName argTys retTy cache fsm paramTyCons tyMods = do
+  argStrs <- mapM (renderTy cache fsm paramTyCons tyMods) argTys
+  ctorStr <- renderIdentWithCase cache fsm ctorName (if null argTys then Nom else P3s)
+  retTyStr <- renderTyNom cache fsm [] tyMods retTy
+  let paramTexts = map (\t -> "(" ++ t ++ ")") argStrs
+      retText = "(" ++ ctorStr ++ " " ++ retTyStr ++ ")"
+  return $ T.pack $ unwords (paramTexts ++ [retText])
+
 #if MIN_VERSION_lsp_types(2,3,0)
 onHover :: TRequestMessage 'Method_TextDocumentHover -> (Either (TResponseError 'Method_TextDocumentHover) (MessageResult 'Method_TextDocumentHover) -> LspM Config ()) -> LspM Config ()
 #else
@@ -299,13 +309,27 @@ onHover req respond = do
     Nothing -> respond (Right (InR Null))
     Just doc -> do
       let mExp = findExpAt pos (dsStmts doc)
+          pst = dsParser doc
+          paramTyCons = [name | (name, arity) <- parserTyCons pst, arity > 0]
+          tyMods = parserTyMods pst
       case mExp of
         Nothing -> do
-          respond (Right (InR Null))
+          let mCtor = findCtorInPattern pos (dsStmts doc)
+          case mCtor of
+            Just (ctorIdent, _) -> do
+              let tcSt = dsTC doc
+              case Map.lookup ctorIdent (tcCtors tcSt) of
+                Just (argTys, retTy) -> do
+                  hoverText <- liftIO $ renderConstructorSignature ctorIdent argTys retTy (lsCache st) (lsFsm st) paramTyCons tyMods
+                  if T.null hoverText
+                    then respond (Right (InR Null))
+                    else do
+                      let contents = InL (MarkupContent MarkupKind_PlainText hoverText)
+                          hover = Hover contents Nothing
+                      respond (Right (InL hover))
+                Nothing -> respond (Right (InR Null))
+            Nothing -> respond (Right (InR Null))
         Just exp' -> do
-          let pst = dsParser doc
-              paramTyCons = [name | (name, arity) <- parserTyCons pst, arity > 0]
-              tyMods = parserTyMods pst
           -- Try to render function signature if this is a function reference
           let tryRenderSignature varExp = do
                 -- Use dsResolved to get the canonical identifier
@@ -513,7 +537,16 @@ onDefinition req respond = do
     Just doc -> do
       let mIdent = findVarAt pos (dsStmts doc)
       case mIdent of
-        Nothing -> respond (Right (InL (Definition (InR []))))
+        Nothing ->
+          case findCtorInPattern pos (dsStmts doc) of
+            Just (ctorIdent, _) -> do
+              let keys = dedupeIdents [ctorIdent]
+              case lookupDefRange keys (dsDefSpans doc) of
+                Just range -> do
+                  let loc = Location uri range
+                  respond (Right (InL (Definition (InR [loc]))))
+                Nothing -> respond (Right (InL (Definition (InR []))))
+            Nothing -> respond (Right (InL (Definition (InR []))))
         Just (ident, candidates) -> do
           -- First check if this is a bound variable (pattern variable or let/bind binding)
           let keys = dedupeIdents (ident : map fst candidates)
@@ -898,6 +931,37 @@ findVarAt pos stmts =
   in case mExp of
        Just Var{varName = name, varCandidates = candidates} -> Just (name, candidates)
        _ -> Nothing
+
+findCtorInPattern :: Position -> [Stmt Ann] -> Maybe (Identifier, Ann)
+findCtorInPattern pos = foldl' (<|>) Nothing . map (stmtCtorAt pos)
+  where
+    stmtCtorAt p stt =
+      case stt of
+        Defn _ _ e -> expCtorAt p e
+        Function _ _ _ clauses _ -> foldl' (<|>) Nothing (map (clauseCtorAt p) clauses)
+        ExpStmt e -> expCtorAt p e
+        _ -> Nothing
+
+    clauseCtorAt p (Clause pat body) =
+      patCtorAt p pat <|> expCtorAt p body
+
+    expCtorAt p e =
+      case e of
+        App _ f args -> foldl' (<|>) Nothing (map (expCtorAt p) (f:args))
+        Bind _ _ _ b -> expCtorAt p b
+        Seq _ a b -> expCtorAt p a <|> expCtorAt p b
+        Match _ scr clauses ->
+          expCtorAt p scr <|> foldl' (<|>) Nothing (map (clauseCtorAt p) clauses)
+        Let _ _ body -> expCtorAt p body
+        _ -> Nothing
+
+    patCtorAt p pat =
+      case pat of
+        PCtor (ctor, ann) pats ->
+          let here = if posInSpan p (annSpan ann) then Just (ctor, ann) else Nothing
+          in here <|> foldl' (<|>) Nothing (map (patCtorAt p) pats)
+        PListLit pats -> foldl' (<|>) Nothing (map (patCtorAt p) pats)
+        _ -> Nothing
 
 -- | Find if the cursor is on a definition and collect morphological candidates from AST
 findDefinitionAt :: Position -> Map.Map Identifier Range -> Maybe (Identifier, [(Identifier, Case)])

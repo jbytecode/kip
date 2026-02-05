@@ -419,7 +419,7 @@ renderMissingPatterns lang pats = do
       case pat of
         PWildcard _ -> return "değilse"
         PVar n ann -> renderIdent (annCase ann) n
-        PCtor ctor args -> do
+        PCtor (ctor, _) args -> do
           argTexts <- mapM (renderPatText True) args
           ctorTxt <- renderIdent (if null args then Nom else P3s) ctor
           let txt = T.unwords (argTexts ++ [ctorTxt])

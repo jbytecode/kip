@@ -1,0 +1,5 @@
+{
+  "hover": true,
+  "hoverAt": { "line": 8, "character": 10 },
+  "hoverContains": ["olasılık", "varlığı"]
+}

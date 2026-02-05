@@ -1557,7 +1557,7 @@ parseExpWithCtx' useCtx allowMatch =
                   (scrutVar, scrutName) <- inferScrutineeFromExp scrutExp
                   let argNames = [scrutName]
                   pats <- mapM expToPatArg patArgs
-                  let pat = PCtor (dropCondSuffixName fnExp base) pats
+                  let pat = PCtor (dropCondSuffixName fnExp base, annFromExp fnExp) pats
                   lexeme (char ',')
                   let patVarNames = extractPatVars pat
                   body <- withPatVars patVarNames (parseExpWithCtx' useCtx allowMatch)
@@ -1593,6 +1593,11 @@ parseExpWithCtx' useCtx allowMatch =
               case expF of
                 Var _ (mods, _) _ -> (mods, base)
                 _ -> ([], base)
+            annFromExp :: Exp Ann -> Ann
+            annFromExp expF =
+              case expF of
+                Var ann _ _ -> ann
+                _ -> mkAnn Nom NoSpan
     -- | Parse additional clauses for a match continuation.
     parseMoreClausesCont :: [Identifier] -- ^ Bound pattern names.
                          -> KipParser [Clause Ann] -- ^ Parsed clauses.
@@ -3041,14 +3046,14 @@ expToPat allowScrutinee argNames e = do
             Nothing -> do
               mCondCtor <- condCtorFallback parserCtors candidates
               case mCondCtor of
-                Just ctorName -> return (PCtor ctorName [])
+                Just ctorName -> return (PCtor (ctorName, ann) [])
                 Nothing ->
                   -- Not a constructor, treat as variable pattern
                   case preferInflected candidates of
                     (n, c):_ -> return (PVar n (mkAnn (preferSurfaceCase name c) (annSpan ann)))
                     _ -> return (PVar name (mkAnn (annCase ann) (annSpan ann)))
-            Just ctorName -> return (PCtor ctorName [])
-        App _ (Var _ _ candidates) es -> do
+            Just ctorName -> return (PCtor (ctorName, ann) [])
+        App _ (Var ann _ candidates) es -> do
           ctorName <- case selectCondNameInCtors parserCtors candidates of
             Just n -> return n
             Nothing -> do
@@ -3060,7 +3065,7 @@ expToPat allowScrutinee argNames e = do
           es' <- if allowScrutinee then dropScrutineeExp allowScrutinee argNames es else return es
           pats <- mapM expToPatArg es'
           pats' <- dropScrutineePat allowScrutinee argNames pats
-          return (PCtor ctorName pats')
+          return (PCtor (ctorName, ann) pats')
         IntLit ann n -> return (PIntLit n ann)
         FloatLit ann n -> return (PFloatLit n ann)
         StrLit ann s -> return (PStrLit s ann)
@@ -3074,17 +3079,17 @@ expToPat allowScrutinee argNames e = do
     condSurfaceToPat :: Bool -> [Identifier] -> Exp Ann -> KipParser (Maybe (Pat Ann))
     condSurfaceToPat allowScrutinee' argNames' expItem =
       case expItem of
-        Var _ (mods, name) _ ->
+        Var ann (mods, name) _ ->
           case stripCondSuffix name of
-            Just base -> return (Just (PCtor (mods, base) []))
+            Just base -> return (Just (PCtor ((mods, base), ann) []))
             Nothing -> return Nothing
-        App _ (Var _ (mods, name) _) es ->
+        App _ (Var ann (mods, name) _) es ->
           case stripCondSuffix name of
             Just base -> do
               es' <- if allowScrutinee' then dropScrutineeExp allowScrutinee' argNames' es else return es
               pats <- mapM expToPatArg es'
               pats' <- dropScrutineePat allowScrutinee' argNames' pats
-              return (Just (PCtor (mods, base) pats'))
+              return (Just (PCtor ((mods, base), ann) pats'))
             Nothing -> return Nothing
         IntLit ann n ->
           if annCase ann == Cond
@@ -3189,17 +3194,17 @@ expToPatArg e = do
   case e of
     Var ann name candidates ->
       case selectCondNameInCtors parserCtors candidates of
-        Just ctorName -> return (PCtor ctorName [])
+        Just ctorName -> return (PCtor (ctorName, ann) [])
         Nothing ->
           case preferInflected candidates of
             (n, c):_ -> return (PVar n (mkAnn (preferSurfaceCase name c) (annSpan ann)))
             _ -> return (PVar name (mkAnn (annCase ann) (annSpan ann)))
-    App _ (Var _ _ candidates) es -> do
+    App _ (Var ann _ candidates) es -> do
       -- Nested constructor pattern - check if the function is a constructor
       case selectCondNameInCtors parserCtors candidates of
         Just ctorName -> do
           pats <- mapM expToPatArg es
-          return (PCtor ctorName pats)
+          return (PCtor (ctorName, ann) pats)
         Nothing ->
           -- Treat non-constructor applications as annotated variables (e.g., x öğe listesi)
           case es of

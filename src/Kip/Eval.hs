@@ -236,7 +236,7 @@ matchPat pat mval =
       case mval of
         Nothing -> Nothing
         Just v -> Just [(n, v)]
-    PCtor ctor pats ->
+    PCtor (ctor, _) pats ->
       case mval of
         Nothing -> Nothing
         Just v -> matchCtor ctor pats v
