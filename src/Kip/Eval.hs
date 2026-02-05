@@ -110,8 +110,7 @@ data EvalStep
 evalExpWith :: [(Identifier, Exp Ann)] -- ^ Local environment bindings.
             -> Exp Ann -- ^ Expression to evaluate.
             -> EvalM (Exp Ann) -- ^ Evaluated expression.
-evalExpWith localEnv e =
-  evalExpLoop localEnv e
+evalExpWith = evalExpLoop 
 
 -- | Main trampoline loop.
 -- |
@@ -135,6 +134,34 @@ evalExpLoop localEnv e = do
 -- | - Variable evaluation that expands to another expression
 -- |
 -- | Everything else returns a 'Done' value (possibly after non-tail recursion).
+-- |
+-- | Optimization notes:
+-- | 1) Overload resolution is the hottest path for most programs. It performs
+-- |    'inferType' on every argument to select a definition. That is correct,
+-- |    but wasteful when no candidate functions/primops/selectors exist for the
+-- |    name. In that case, the semantics are: leave the application untouched
+-- |    (constructor application or unevaluated call). We therefore short-circuit
+-- |    before calling 'pickPrimByTypes'/'pickFunctionByTypes'. This avoids all
+-- |    type inference work for obviously non-callable identifiers.
+-- |
+-- |    Safety: We only skip resolution when there are no candidates in any of
+-- |    the relevant namespaces (functions, primops, selectors, random). If a
+-- |    candidate exists, we fall back to the full resolution logic.
+-- |
+-- | 2) Selector and random lookups are *name-based* and do not depend on
+-- |    argument types. If there are no function/primitive candidates, we can
+-- |    resolve selectors (single-arg) and the random primitive without calling
+-- |    'inferType'. This removes a full round of type inference in a common
+-- |    case for record access and random number generation.
+-- |
+-- | 3) We keep 'fn' and 'args' evaluation strict (non-tail) so evaluation order
+-- |    and effects are unchanged. The only change is *what happens after* the
+-- |    arguments are evaluated: we build a 'Done' or 'Continue' step rather than
+-- |    performing another recursive call in Haskell.
+-- |
+-- | 4) The trampoline structure is intentionally minimal: we only introduce
+-- |    iteration for tail positions, leaving non-tail recursion untouched. This
+-- |    preserves current behavior while eliminating stack growth for tail calls.
 evalStep :: [(Identifier, Exp Ann)] -- ^ Local environment bindings.
          -> Exp Ann -- ^ Expression to evaluate.
          -> EvalM EvalStep -- ^ Trampoline step.
@@ -164,6 +191,7 @@ evalStep localEnv e =
       args' <- mapM (evalExpLoop localEnv) args
       case fn' of
         Var {varName, varCandidates} -> do
+          -- Pull state once for all resolution steps.
           MkEvalState{evalFuncs, evalPrimFuncs, evalSelectors, evalTyCons} <- get
           case args' of
             [arg] | any (\(ident, _) -> Map.member ident evalTyCons) varCandidates ->
@@ -172,20 +200,34 @@ evalStep localEnv e =
               let fnCandidates = map fst varCandidates
                   matches = [(n, def) | n <- fnCandidates, def <- MultiMap.lookup n evalFuncs]
                   primMatches = [(n, def) | n <- fnCandidates, def <- MultiMap.lookup n evalPrimFuncs]
-              pickPrimByTypes primMatches args' >>= \case
-                Just primImpl -> Done <$> primImpl args'
-                Nothing ->
-                  pickFunctionByTypes matches args' >>= \case
-                    Just def -> applyFunctionStep fn' localEnv def args'
+                  selectorMatches = [idx | n <- fnCandidates, idx <- MultiMap.lookup n evalSelectors]
+              -- Optimization: if there are no function/primitive candidates, we can
+              -- decide selector/random/constructor outcomes without type inference.
+              if null matches && null primMatches
+                then
+                  case (selectorMatches, args') of
+                    -- Fast-path selectors when the only possible resolution is a selector.
+                    (idx:_, [arg]) ->
+                      Done <$> applySelector idx arg (App annApp fn' args')
+                    _ ->
+                      if isRandomCandidate varCandidates
+                        -- Fast-path random primitive: no type inference needed.
+                        then Done <$> primIntRandom args'
+                        else return (Done (App annApp fn' args')) -- Constructor application or unevaluated call.
+                else
+                  pickPrimByTypes primMatches args' >>= \case
+                    Just primImpl -> Done <$> primImpl args'
                     Nothing ->
-                      let selectorMatches = [idx | n <- map fst varCandidates, idx <- MultiMap.lookup n evalSelectors]
-                      in case (selectorMatches, args') of
-                        (idx:_, [arg]) ->
-                          Done <$> applySelector idx arg (App annApp fn' args')
-                        _ ->
-                          if isRandomCandidate varCandidates
-                            then Done <$> primIntRandom args'
-                            else return (Done (App annApp fn' args')) -- Constructor application or unevaluated call
+                      pickFunctionByTypes matches args' >>= \case
+                        Just def -> applyFunctionStep fn' localEnv def args'
+                        Nothing ->
+                          case (selectorMatches, args') of
+                            (idx:_, [arg]) ->
+                              Done <$> applySelector idx arg (App annApp fn' args')
+                            _ ->
+                              if isRandomCandidate varCandidates
+                                then Done <$> primIntRandom args'
+                                else return (Done (App annApp fn' args')) -- Constructor application or unevaluated call
         _ -> return (Done (App annApp fn' args'))
     StrLit {annExp, lit} ->
       return (Done (StrLit annExp lit))
