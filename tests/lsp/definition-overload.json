@@ -3,6 +3,7 @@
     "line": 4,
     "character": 6,
     "atLeast": 1,
-    "expectedLine": 0
+    "expectedLine": 0,
+    "expectedCharacter": 16
   }
 }

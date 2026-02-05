@@ -770,7 +770,7 @@ docSpanSet = foldl' Set.union Set.empty . map stmtSpans
           children =
             case e of
               App _ f args -> foldl' Set.union Set.empty (map expSpans (f:args))
-              Bind _ _ b -> expSpans b
+              Bind _ _ _ b -> expSpans b
               Seq _ a b -> expSpans a `Set.union` expSpans b
               Match _ scr clauses ->
                 expSpans scr `Set.union` foldl' Set.union Set.empty (map clauseSpans clauses)
@@ -800,7 +800,7 @@ expAt p e =
   let inside = posInSpan p (annSpan (annExp e))
       sub = case e of
         App _ f args -> foldl' (<|>) Nothing (map (expAt p) (f:args))
-        Bind _ _ b -> expAt p b
+        Bind _ _ _ b -> expAt p b
         Seq _ a b -> expAt p a <|> expAt p b
         Match _ scr clauses -> expAt p scr <|> foldl' (<|>) Nothing (map (\(Clause _ body) -> expAt p body) clauses)
         Let _ _ body -> expAt p body
@@ -908,7 +908,7 @@ collectAllVars = concatMap collectVarsInStmt
     collectVarsInExp e =
       let sub = case e of
             App _ fn args -> collectVarsInExp fn ++ concatMap collectVarsInExp args
-            Bind _ _ body -> collectVarsInExp body
+            Bind _ _ _ body -> collectVarsInExp body
             Seq _ a b -> collectVarsInExp a ++ collectVarsInExp b
             Match _ scrut clauses -> collectVarsInExp scrut ++ concatMap collectVarsInClause clauses
             Let _ _ body -> collectVarsInExp body
@@ -950,7 +950,7 @@ findHighlightsInExp targets e =
         _ -> []
       children = case e of
         App _ f args -> concatMap (findHighlightsInExp targets) (f:args)
-        Bind _ _ b -> findHighlightsInExp targets b
+        Bind _ _ _ b -> findHighlightsInExp targets b
         Seq _ a b -> findHighlightsInExp targets a ++ findHighlightsInExp targets b
         Match _ scr clauses ->
           findHighlightsInExp targets scr ++ concatMap (findHighlightsInClause targets) clauses
@@ -1300,8 +1300,8 @@ collectBinderSpans = concatMap stmtBinders
           in expBinders scope e
         _ -> []
 
-    argBinder scope (ident, ty) =
-      [BinderInfo ident (spanToRange (annSpan (annTy ty))) scope]
+    argBinder scope ((ident, ann), _ty) =
+      [BinderInfo ident (spanToRange (annSpan ann)) scope]
 
     clauseBindersWithOwnScope (Clause pat body) =
       -- Each clause uses its own body as the scope for pattern variables
@@ -1327,9 +1327,9 @@ collectBinderSpans = concatMap stmtBinders
           -- For Let, the variable is bound in the body
           let letScope = annSpan (annExp body)
           in BinderInfo name (spanToRange (annSpan ann)) letScope : expBinders letScope body
-        Bind ann name b ->
+        Bind _ name nameAnn b ->
           -- For Bind, use the provided scope (from the enclosing context)
-          BinderInfo name (spanToRange (annSpan ann)) scope : expBinders scope b
+          BinderInfo name (spanToRange (annSpan nameAnn)) scope : expBinders scope b
         App _ f args -> concatMap (expBinders scope) (f:args)
         Seq _ a b -> expBinders scope a ++ expBinders scope b
         Match _ scr clauses ->

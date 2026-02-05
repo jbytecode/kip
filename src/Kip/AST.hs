@@ -105,7 +105,7 @@ data Exp a =
   | StrLit { annExp :: a , lit :: Text } -- ^ String literal.
   | IntLit { annExp :: a , intVal :: Integer } -- ^ Integer literal.
   | FloatLit { annExp :: a , floatVal :: Double } -- ^ Floating-point literal.
-  | Bind   { annExp :: a , bindName :: Identifier , bindExp :: Exp a } -- ^ Binding expression.
+  | Bind   { annExp :: a , bindName :: Identifier , bindNameAnn :: a , bindExp :: Exp a } -- ^ Binding expression.
   | Seq    { annExp :: a , first :: Exp a , second :: Exp a } -- ^ Sequential composition.
   | Match  { annExp :: a , scrutinee :: Exp a , clauses :: [Clause a] } -- ^ Pattern match.
   | Let    { annExp :: a , varName :: Identifier , body :: Exp a } -- ^ Let binding.
@@ -113,7 +113,20 @@ data Exp a =
   deriving (Show, Eq, Generic, Functor, Binary)
 
 -- | Typed argument of a function.
-type Arg ann = (Identifier, Ty ann)
+-- The annotation on the identifier captures the span of the parameter name for LSP.
+type Arg ann = ((Identifier, ann), Ty ann)
+
+-- | Extract the identifier from an argument.
+argIdent :: Arg ann -> Identifier
+argIdent ((ident, _), _) = ident
+
+-- | Extract the identifier annotation (span) from an argument.
+argIdentAnn :: Arg ann -> ann
+argIdentAnn ((_, ann), _) = ann
+
+-- | Extract the type from an argument.
+argType :: Arg ann -> Ty ann
+argType (_, ty) = ty
 {- | Constructor with its argument types and case annotation.
 
 The constructor identifier includes a case annotation to track whether
@@ -285,7 +298,7 @@ prettyExp (Var _ name _) = T.unpack (T.intercalate "-" (fst name ++ [snd name]))
 prettyExp (StrLit _ s) = show (T.unpack s)
 prettyExp (IntLit _ n) = show n
 prettyExp (FloatLit _ n) = show n
-prettyExp (Bind _ name e) =
+prettyExp (Bind _ name _ e) =
   T.unpack (T.intercalate "-" (fst name ++ [snd name])) ++ " için " ++ prettyExp e
 prettyExp (Seq _ a b) =
   prettyExp a ++ ", " ++ prettyExp b

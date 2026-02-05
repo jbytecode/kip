@@ -7,6 +7,8 @@
   "definitionAt": {
     "line": 7,
     "character": 27,
-    "atLeast": 1
+    "atLeast": 1,
+    "expectedLine": 7,
+    "expectedCharacter": 5
   }
 }

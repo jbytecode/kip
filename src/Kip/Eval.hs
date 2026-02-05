@@ -150,12 +150,12 @@ evalExpWith localEnv e =
       return (IntLit annExp intVal)
     FloatLit {annExp, floatVal} ->
       return (FloatLit annExp floatVal)
-    Bind {annExp, bindName, bindExp} -> do
+    Bind {annExp, bindName, bindNameAnn, bindExp} -> do
       v <- evalExpWith localEnv bindExp
-      return (Bind annExp bindName v)
+      return (Bind annExp bindName bindNameAnn v)
     Seq {annExp, first, second} -> do
       case first of
-        Bind {bindName, bindExp} -> do
+        Bind {bindName, bindNameAnn, bindExp} -> do
           v <- evalExpWith localEnv bindExp
           evalExpWith ((bindName, v) : localEnv) second
         _ -> do
@@ -195,7 +195,7 @@ applyFunction :: Exp Ann -- ^ Function expression.
               -> [Exp Ann] -- ^ Evaluated arguments.
               -> EvalM (Exp Ann) -- ^ Result expression.
 applyFunction fn localEnv (args, clauses) values = do
-  let argNames = map fst args
+  let argNames = map argIdent args
       argBindings = zip argNames values
   case findClause values clauses of
     Nothing -> return (App (annExp fn) fn values)

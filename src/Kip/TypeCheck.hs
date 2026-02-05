@@ -405,17 +405,17 @@ tcExp1With allowEffect e =
       return (IntLit annExp intVal)
     FloatLit {annExp, floatVal} ->
       return (FloatLit annExp floatVal)
-    Bind {annExp, bindName, bindExp} -> do
+    Bind {annExp, bindName, bindNameAnn, bindExp} -> do
       exp' <- tcExp1With allowEffect bindExp
-      return (Bind annExp bindName exp')
+      return (Bind annExp bindName bindNameAnn exp')
     Seq {annExp = annSeq, first, second} -> do
       case first of
-        Bind {bindName, bindExp} -> do
+        Bind {bindName, bindNameAnn, bindExp} -> do
           bindExp' <- tcExp1With True bindExp
           mTy <- inferType bindExp'
           let tys = maybe [] (\t -> [(bindName, t)]) mTy
           second' <- withCtx [bindName] (withVarTypes tys (tcExp1With allowEffect second))
-          return (Seq annSeq (Bind (annExp first) bindName bindExp') second')
+          return (Seq annSeq (Bind (annExp first) bindName bindNameAnn bindExp') second')
         _ -> do
           first' <- tcExp1With True first
           second' <- tcExp1With allowEffect second
@@ -425,7 +425,7 @@ tcExp1With allowEffect e =
       mScrutTy <- inferType scrutinee'
       let scrutArg =
             case mScrutTy of
-              Just ty -> [(([], T.pack "_scrutinee"), ty)]
+              Just ty -> [((([], T.pack "_scrutinee"), mkAnn Nom NoSpan), ty)]
               Nothing -> []
       clauses' <- mapM (tcClause scrutArg allowEffect) clauses
       case mScrutTy of
@@ -653,11 +653,12 @@ tcStmt stmt =
                       })
       return (Defn name ty e')
     Function name args ty body isInfinitive -> do
-      let argNames = map fst args
-          skolemArgs = map (Bifunctor.second skolemizeTy) args
-      mRet <- withCtx (name : argNames) (withVarTypes skolemArgs (inferReturnType body))
-      body' <- withCtx (name : argNames) (withFuncRet name (map snd skolemArgs) mRet (withFuncSig name skolemArgs (mapM (tcClause skolemArgs isInfinitive) body)))
-      case skolemArgs of
+      let argNames = map argIdent args
+          skolemArgs = map (\((ident, ann), ty) -> ((ident, ann), skolemizeTy ty)) args
+          skolemBindings = map (\((ident, _), ty) -> (ident, skolemizeTy ty)) args
+      mRet <- withCtx (name : argNames) (withVarTypes skolemBindings (inferReturnType body))
+      body' <- withCtx (name : argNames) (withFuncRet name (map (skolemizeTy . argType) args) mRet (withFuncSig name skolemArgs (mapM (tcClause skolemArgs isInfinitive) body)))
+      case skolemBindings of
         (_, argTy):_ -> checkExhaustivePatterns argTy body (annTy ty)
         _ -> return ()
       -- Check that the inferred return type matches the declared type with rigid type variables
@@ -784,10 +785,10 @@ tcClause :: [Arg Ann] -- ^ Argument signature.
          -> Clause Ann -- ^ Clause to check.
          -> TCM (Clause Ann) -- ^ Type-checked clause.
 tcClause args isInfinitive (Clause pat body) = do
-  let argNames = map fst args
+  let argNames = map argIdent args
       patNames = patIdentifiers pat
   patTys <- inferPatTypes pat args
-  let argTys = args
+  let argTys = map (\((ident, _), ty) -> (ident, ty)) args
   body' <- withCtx (patNames ++ argNames) (withVarTypes (patTys ++ argTys) (tcExp1With isInfinitive body))
   return (Clause pat body')
 
@@ -1048,7 +1049,7 @@ inferPatTypes pat args =
                       else argTys'
               -- Recursively infer types for nested patterns
               bindings <- sequence
-                [ inferPatTypes p [(([], T.pack "_"), ty)]
+                [ inferPatTypes p [((([], T.pack "_"), mkAnn Nom NoSpan), ty)]
                 | (p, ty) <- zip pats argTysAligned
                 ]
               return (concat bindings)

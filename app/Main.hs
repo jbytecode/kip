@@ -1545,7 +1545,7 @@ main = do
             Defn name _ body ->
               expRefs (name : bound) body
             Function _ args _ clauses _ ->
-              concatMap (clauseRefs (map fst args ++ bound)) clauses
+              concatMap (clauseRefs (map argIdent args ++ bound)) clauses
             ExpStmt e ->
               expRefs bound e
             _ -> []

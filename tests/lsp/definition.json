@@ -7,7 +7,9 @@
   "definitionAt": {
     "line": 3,
     "character": 1,
-    "atLeast": 1
+    "atLeast": 1,
+    "expectedLine": 0,
+    "expectedCharacter": 16
   },
   "completionIncludes": [],
   "hover": false

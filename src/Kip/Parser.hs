@@ -1387,7 +1387,7 @@ parseExpWithCtx' useCtx allowMatch =
                   StrLit ann txt -> StrLit (updateAnn ann) txt
                   IntLit ann n -> IntLit (updateAnn ann) n
                   FloatLit ann n -> FloatLit (updateAnn ann) n
-                  Bind ann name body -> Bind (updateAnn ann) name body
+                  Bind ann name nameAnn body -> Bind (updateAnn ann) name (updateAnn nameAnn) body
                   Seq ann a b -> Seq (updateAnn ann) a b
                   Match ann scrut clauses -> Match (updateAnn ann) scrut clauses
                   Let ann name body -> Let (updateAnn ann) name body
@@ -1422,7 +1422,8 @@ parseExpWithCtx' useCtx allowMatch =
       lexeme (string "için")
       action <- try ascribeInner <|> app <|> atom
       let ann = mkAnn (annCase (annExp action)) (mergeSpan sp (annSpan (annExp action)))
-      return (Bind ann name action)
+          nameAnn = mkAnn Nom sp
+      return (Bind ann name nameAnn action)
       where
         -- | Parse type ascription without consuming from seqExp.
         ascribeInner :: KipParser (Exp Ann)
@@ -1472,7 +1473,8 @@ parseExpWithCtx' useCtx allowMatch =
           val <- buildAppFrom exprItems
           let bindSpan = mergeSpan (annSpan (annExp val)) nameSpan
               bindAnn = mkAnn (annCase (annExp val)) bindSpan
-              bindExp = Bind bindAnn name val
+              nameAnn = mkAnn Nom nameSpan
+              bindExp = Bind bindAnn name nameAnn val
           lexeme (string "dersek")
           lexeme (char ',')
           st <- getP
@@ -2093,12 +2095,13 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
       _ <- try (lexeme (string "bir") *> lookAhead (identifierNotKeyword <|> (char '(' $> ([], T.pack ""))))
       parseTypeWithCase
     -- | Parse a function argument declaration.
-    parseArg :: KipParser (Identifier, Ty Ann) -- ^ Parsed argument declaration.
+    parseArg :: KipParser ((Identifier, Ann), Ty Ann) -- ^ Parsed argument declaration.
     parseArg = do
-      argName <- identifierNotKeyword
+      (argName, argSpan) <- withSpan identifierNotKeyword
       ws
       ty <- try parseTypeWithCase <|> parseTypeLoose
-      return (argName, ty)
+      let argAnn = mkAnn Nom argSpan
+      return ((argName, argAnn), ty)
     -- | Parse a type without requiring it to be in scope.
     parseTypeLoose :: KipParser (Ty Ann) -- ^ Parsed type.
     parseTypeLoose = do
@@ -2188,7 +2191,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
             _ -> customFailure ErrDefinitionBodyMissing
         else do
           st <- getP
-          let argNames = map fst args
+          let argNames = map argIdent args
           putP (st {parserCtx = fname : argNames ++ parserCtx st})
           prim <- optional (try (lexeme (string "yerleşiktir") *> period))
           let retTy = fromMaybe (TyString (mkAnn Nom NoSpan)) mRetTy
@@ -3042,8 +3045,8 @@ expToPat allowScrutinee argNames e = do
                 Nothing ->
                   -- Not a constructor, treat as variable pattern
                   case preferInflected candidates of
-                    (n, c):_ -> return (PVar n (mkAnn (preferSurfaceCase name c) NoSpan))
-                    _ -> return (PVar name (mkAnn (annCase ann) NoSpan))
+                    (n, c):_ -> return (PVar n (mkAnn (preferSurfaceCase name c) (annSpan ann)))
+                    _ -> return (PVar name (mkAnn (annCase ann) (annSpan ann)))
             Just ctorName -> return (PCtor ctorName [])
         App _ (Var _ _ candidates) es -> do
           ctorName <- case selectCondNameInCtors parserCtors candidates of
@@ -3189,8 +3192,8 @@ expToPatArg e = do
         Just ctorName -> return (PCtor ctorName [])
         Nothing ->
           case preferInflected candidates of
-            (n, c):_ -> return (PVar n (mkAnn (preferSurfaceCase name c) NoSpan))
-            _ -> return (PVar name (mkAnn (annCase ann) NoSpan))
+            (n, c):_ -> return (PVar n (mkAnn (preferSurfaceCase name c) (annSpan ann)))
+            _ -> return (PVar name (mkAnn (annCase ann) (annSpan ann)))
     App _ (Var _ _ candidates) es -> do
       -- Nested constructor pattern - check if the function is a constructor
       case selectCondNameInCtors parserCtors candidates of
@@ -3200,9 +3203,9 @@ expToPatArg e = do
         Nothing ->
           -- Treat non-constructor applications as annotated variables (e.g., x öğe listesi)
           case es of
-            (Var _ _ argCandidates : _) ->
+            (Var argAnn _ argCandidates : _) ->
               case preferInflected argCandidates of
-                (n, c):_ -> return (PVar n (mkAnn c NoSpan))
+                (n, c):_ -> return (PVar n (mkAnn c (annSpan argAnn)))
                 _ -> customFailure ErrPatternAmbiguousName
             _ -> customFailure ErrPatternOnlyNames
     IntLit ann n -> return (PIntLit n ann)

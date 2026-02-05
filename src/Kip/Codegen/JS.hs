@@ -380,7 +380,7 @@ renderFunction name args clauses =
           _ ->
             let arg0 = case args of
                          [] -> "__arg0"
-                         ((argName, _) : _) -> toJsIdent argName
+                         (((argName, _), _) : _) -> toJsIdent argName
             in ("const __scrut = " <> arg0 <> ";")
                : renderClauseChain "__scrut" clauses
   in
@@ -644,7 +644,7 @@ renderIife lines' =
 
 renderArgNames :: [Arg Ann] -> Text
 renderArgNames args =
-  T.intercalate ", " (map (toJsIdent . fst) args)
+  T.intercalate ", " (map (toJsIdent . argIdent) args)
 
 identText :: Identifier -> Text
 identText (_, name) = name

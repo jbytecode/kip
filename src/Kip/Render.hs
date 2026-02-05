@@ -446,7 +446,7 @@ renderArg :: RenderCache -- ^ Render cache.
           -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
           -> Arg Ann -- ^ Argument to render.
           -> IO String -- ^ Rendered argument.
-renderArg cache fsm paramTyCons tyMods (argName, ty) = do
+renderArg cache fsm paramTyCons tyMods ((argName, _), ty) = do
   argStr <- renderIdentWithCase cache fsm argName Nom
   tyStr <-
     if shouldPossessiveArg argName
@@ -461,7 +461,7 @@ renderArgParts :: RenderCache -- ^ Render cache.
                -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
                -> Arg Ann -- ^ Argument to render.
                -> IO (String, [(String, Bool)]) -- ^ Rendered name and type parts.
-renderArgParts cache fsm paramTyCons tyMods (argName, ty) = do
+renderArgParts cache fsm paramTyCons tyMods ((argName, _), ty) = do
   argStr <- renderIdentWithCase cache fsm argName Nom
   tyParts <-
     if shouldPossessiveArg argName
