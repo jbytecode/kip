@@ -310,7 +310,16 @@ tcExp1With allowEffect e =
                         then lift (throwE (NoMatchingCtor nameForErr argTys tys (annSpan annApp)))
                         else
                           if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys tys)
-                            then return (App annApp fn' args')
+                            then do
+                              case lookupByCandidatesMap tcCtors varCandidates of
+                                Just (ctorArgTys, resTy)
+                                  | length ctorArgTys == length args' && Nothing `notElem` argTys ->
+                                      case unifyTypes (Map.toList tcTyCons) ctorArgTys (catMaybes argTys) of
+                                        Just subst ->
+                                          recordResolvedType (annSpan annApp) (applySubst subst resTy)
+                                        Nothing -> return ()
+                                _ -> return ()
+                              return (App annApp fn' args')
                             else lift (throwE (NoMatchingCtor nameForErr argTys tys (annSpan annApp)))
                     _ -> do
                       -- Check if we're trying to apply a type variable as a function (parametric polymorphism violation)
@@ -406,17 +415,24 @@ tcExp1With allowEffect e =
                               recordResolvedName (annSpan annFn) ident
                               recordResolvedSig (annSpan annFn) name tysForSig
                             _ -> return ()
+                          MkTCState{tcFuncSigRets} <- get
+                          forM_ (Map.lookup (name, tysForSig) tcFuncSigRets) (recordResolvedType (annSpan annApp))
                           return (App annApp fn' firstMatch)
                         [] -> return (App annApp fn' args')
         _ -> return (App annApp fn' args')
-    StrLit {annExp, lit} ->
+    StrLit {annExp, lit} -> do
+      recordResolvedType (annSpan annExp) (TyString (mkAnn Nom (annSpan annExp)))
       return (StrLit annExp lit)
-    IntLit {annExp, intVal} ->
+    IntLit {annExp, intVal} -> do
+      recordResolvedType (annSpan annExp) (TyInt (mkAnn Nom (annSpan annExp)))
       return (IntLit annExp intVal)
-    FloatLit {annExp, floatVal} ->
+    FloatLit {annExp, floatVal} -> do
+      recordResolvedType (annSpan annExp) (TyFloat (mkAnn Nom (annSpan annExp)))
       return (FloatLit annExp floatVal)
     Bind {annExp, bindName, bindNameAnn, bindExp} -> do
       exp' <- tcExp1With allowEffect bindExp
+      mTy <- inferType exp'
+      forM_ mTy (recordResolvedType (annSpan bindNameAnn))
       return (Bind annExp bindName bindNameAnn exp')
     Seq {annExp = annSeq, first, second} -> do
       case first of
@@ -424,6 +440,7 @@ tcExp1With allowEffect e =
           bindExp' <- tcExp1With True bindExp
           mTy <- inferType bindExp'
           let tys = maybe [] (\t -> [(bindName, t)]) mTy
+          forM_ mTy (recordResolvedType (annSpan bindNameAnn))
           second' <- withCtx [bindName] (withVarTypes tys (tcExp1With allowEffect second))
           return (Seq annSeq (Bind (annExp first) bindName bindNameAnn bindExp') second')
         _ -> do
@@ -803,6 +820,9 @@ tcClause args isInfinitive (Clause pat body) = do
   let argNames = map argIdent args
       patNames = patIdentifiers pat
   patTys <- inferPatTypes pat args
+  patSpans <- inferPatTypesWithSpans pat args
+  mapM_ (uncurry recordResolvedType) patSpans
+  forM_ args (\((_, ann), ty) -> recordResolvedType (annSpan ann) ty)
   let argTys = map (\((ident, _), ty) -> (ident, ty)) args
   body' <- withCtx (patNames ++ argNames) (withVarTypes (patTys ++ argTys) (tcExp1With isInfinitive body))
   return (Clause pat body')
@@ -1076,6 +1096,41 @@ inferPatTypes pat args =
                          _ -> annSpan (annTy scrutTy)
               lift (throwE (PatternTypeMismatch ctor resTy scrutTy sp))
         Nothing -> return []  -- Constructor not found - might be undefined, let other checks handle it
+    _ -> return []
+
+-- | Infer types for identifiers bound in a pattern, returning their spans.
+inferPatTypesWithSpans :: Pat Ann -- ^ Pattern to inspect.
+                       -> [Arg Ann] -- ^ Constructor argument types.
+                       -> TCM [(Span, Ty Ann)] -- ^ Inferred bindings with spans.
+inferPatTypesWithSpans pat args =
+  case (pat, args) of
+    (PWildcard _, _) -> return []
+    (PVar _ ann, (_, ty):_) -> return [(annSpan ann, ty)]
+    (PIntLit _ _, _) -> return []
+    (PFloatLit _ _, _) -> return []
+    (PStrLit _ _, _) -> return []
+    (PListLit pats, (_, scrutTy):_) -> do
+      MkTCState{tcTyCons} <- get
+      let elemTy = extractListElemTypeMap tcTyCons scrutTy
+      concat <$> mapM (\p -> inferPatTypesWithSpans p [(undefined, elemTy)]) pats
+    (PCtor (ctor, _) pats, (_, scrutTy):_) -> do
+      MkTCState{tcCtors, tcTyCons} <- get
+      case Map.lookup ctor tcCtors of
+        Just (argTys, resTy) ->
+          case unifyTypes (Map.toList tcTyCons) [resTy] [scrutTy] of
+            Just subst -> do
+              let argTys' = map (applySubst subst) argTys
+                  argTysAligned =
+                    if length pats < length argTys'
+                      then drop (length argTys' - length pats) argTys'
+                      else argTys'
+              bindings <- sequence
+                [ inferPatTypesWithSpans p [((([], T.pack "_"), mkAnn Nom NoSpan), ty)]
+                | (p, ty) <- zip pats argTysAligned
+                ]
+              return (concat bindings)
+            Nothing -> return []
+        Nothing -> return []
     _ -> return []
 
 -- | Check whether a set of patterns exhausts a scrutinee type.

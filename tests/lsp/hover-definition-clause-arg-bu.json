@@ -1,0 +1,12 @@
+{
+  "hover": true,
+  "hoverAt": { "line": 11, "character": 2 },
+  "hoverContains": ["gün"],
+  "definitionAt": {
+    "line": 11,
+    "character": 2,
+    "atLeast": 1,
+    "expectedLine": 10,
+    "expectedCharacter": 1
+  }
+}

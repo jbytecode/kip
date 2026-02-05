@@ -1,0 +1,5 @@
+{
+  "hover": true,
+  "hoverAt": { "line": 1, "character": 2 },
+  "hoverContains": ["dizge"]
+}

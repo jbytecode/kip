@@ -1,0 +1,5 @@
+{
+  "hover": true,
+  "hoverAt": { "line": 15, "character": 80 },
+  "hoverContains": ["asalları", "tam-sayı listesi"]
+}
