@@ -41,6 +41,7 @@ import Data.Maybe (fromMaybe, mapMaybe, maybeToList, listToMaybe, isJust)
 import qualified Data.Map.Strict as Map
 import qualified Data.MultiMap as MultiMap
 import qualified Data.Set as Set
+import qualified Data.HashMap.Strict as HM
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -86,14 +87,23 @@ import Data.List.NonEmpty (NonEmpty(..))
 -- * The open document map ('lsDocs') keyed by URI.
 -- * A workspace definition index ('lsDefIndex') for cross-file go-to-definition.
 data LspState = LspState
-  { lsCache :: !RenderCache
+  { -- | Morphology-aware render cache shared across all documents.
+    lsCache :: !RenderCache
+    -- | Finite-state morphology transducer for Kip inflection.
   , lsFsm :: !FSM
+    -- | Cached “ups” transformations for morphological rendering.
   , lsUpsCache :: !MorphCache
+    -- | Cached “downs” transformations for morphological rendering.
   , lsDownsCache :: !MorphCache
+    -- | Module roots for resolving and indexing definitions.
   , lsModuleDirs :: ![FilePath]
+    -- | Parser state including the prelude (stdlib) context.
   , lsBaseParser :: !ParserState
+    -- | Typechecker state including the prelude (stdlib) context.
   , lsBaseTC :: !TCState
+    -- | Per-URI document cache with parsed/typed state.
   , lsDocs :: Map.Map Uri DocState
+    -- | Workspace definition index for cross-file go-to-definition.
   , lsDefIndex :: Map.Map Identifier Location
   }
 
@@ -105,8 +115,11 @@ data LspState = LspState
 -- * The range of the binder name itself (for go-to-definition).
 -- * The span of the scope where the binding is valid (for resolution).
 data BinderInfo = BinderInfo
-  { biIdent :: !Identifier
+  { -- | Identifier bound by this binder.
+    biIdent :: !Identifier
+    -- | LSP range of the binder name itself.
   , biRange :: !Range
+    -- | Span where the binding is in scope.
   , biScope :: !Span
   }
 
@@ -122,30 +135,53 @@ data BinderInfo = BinderInfo
 -- The guiding rule: any computation that depends solely on the current text
 -- should be done once here and then reused by all handlers.
 data DocState = DocState
-  { dsText :: !Text
+  { -- | Raw document text for this version.
+    dsText :: !Text
+    -- | Parser state used for this document.
   , dsParser :: !ParserState
+    -- | Typechecker state used for this document.
   , dsTC :: !TCState
+    -- | Parsed statements for this document.
   , dsStmts :: ![Stmt Ann]
+    -- | Diagnostics generated for this document.
   , dsDiagnostics :: ![Diagnostic]
+    -- | Definition name spans for local go-to-definition.
   , dsDefSpans :: Map.Map Identifier Range
+    -- | Resolved identifier names keyed by span.
   , dsResolved :: Map.Map Span Identifier
+    -- | Resolved overload signatures keyed by span.
   , dsResolvedSigs :: Map.Map Span (Identifier, [Ty Ann])
+    -- | Resolved types keyed by span.
   , dsResolvedTypes :: Map.Map Span (Ty Ann)
+    -- | Binder spans for local variable definitions.
   , dsBinderSpans :: [BinderInfo]
+    -- | Unified span index for exact span/range lookups.
   , dsSpanIndex :: SpanIndex
+    -- | Expression index for positional lookup.
   , dsExpIndex :: ExpIndex
+    -- | Variable-use index for positional lookup.
   , dsVarIndex :: VarIndex
+    -- | Pattern-variable index for positional lookup.
   , dsPatVarIndex :: PatVarIndex
+    -- | Constructor-pattern index for positional lookup.
   , dsCtorIndex :: CtorIndex
+    -- | Match clause index for positional lookup.
   , dsMatchClauseIndex :: MatchClauseIndex
+    -- | Function clause index for positional lookup.
   , dsFuncClauseIndex :: FuncClauseIndex
+    -- | Per-document cache of rendered types (hash table for O(1) lookups).
   , dsTyRenderCache :: HT.BasicHashTable Text Text
+    -- | Per-document cache of token classifications (hash table for O(1) lookups).
+  , dsTokenCache :: HT.BasicHashTable Text (Maybe TokenAtPosition)
   }
 
 -- | LSP server configuration wrapper.
 --
 -- The LSP library requires a config value; we store the mutable 'LspState' in it.
-newtype Config = Config { cfgVar :: MVar LspState }
+newtype Config = Config
+  { -- | Mutable LSP server state.
+    cfgVar :: MVar LspState
+  }
 
 -- | Entry point for the LSP server.
 --
@@ -396,12 +432,19 @@ renderHoverSignature fnName args retTy isInfinitive infinitives cache fsm paramT
         Arr {} -> True
 
 data ResolvedAt = ResolvedAt
-  { raExp :: Maybe (Exp Ann)
+  { -- | Expression under the cursor (if any).
+    raExp :: Maybe (Exp Ann)
+    -- | Variable occurrence and its morphological candidates.
   , raVar :: Maybe (Identifier, [(Identifier, Case)])
+    -- | Definition identifier under the cursor (if any).
   , raDefIdent :: Maybe (Identifier, [(Identifier, Case)])
+    -- | Constructor pattern information at the cursor.
   , raCtor :: Maybe (Identifier, Ann, [Pat Ann], Maybe (Exp Ann))
+    -- | Pattern-bound variable at the cursor.
   , raPatVar :: Maybe Identifier
+    -- | Unified span index info near the cursor.
   , raSpanInfo :: Maybe SpanInfo
+    -- | Resolved type at the cursor (if any).
   , raResolvedType :: Maybe (Ty Ann)
   }
 
@@ -416,11 +459,17 @@ data SpanKey
   deriving (Eq, Ord, Show)
 
 data SpanInfo = SpanInfo
-  { siSpan :: Maybe Span
+  { -- | Span for the indexed entity (if span-backed).
+    siSpan :: Maybe Span
+    -- | Range for the indexed entity (if range-backed).
   , siRange :: Maybe Range
+    -- | Resolved identifier for this span/range.
   , siIdent :: Maybe Identifier
+    -- | Resolved overload signature for this span/range.
   , siSig :: Maybe (Identifier, [Ty Ann])
+    -- | Resolved type for this span/range.
   , siType :: Maybe (Ty Ann)
+    -- | Binder information if this span/range is a binder.
   , siBinder :: Maybe BinderInfo
   }
 
@@ -429,26 +478,52 @@ data SpanInfo = SpanInfo
 -- Some entities (expressions, resolved symbols) are indexed by 'Span', while
 -- binder locations are naturally represented as LSP 'Range's. We keep both
 -- and allow position lookups to match either.
-type SpanIndex = Map.Map SpanKey SpanInfo
+--
+-- The index is hash-backed for fast exact lookups, while a separate list
+-- enables the “smallest enclosing span” search needed for cursor queries.
+data SpanIndex = SpanIndex
+  { -- | Hash map for exact span/range lookups.
+    siByKey :: HM.HashMap Text SpanInfo
+    -- | Entry list used for containment-based lookups.
+  , siEntries :: [(SpanKey, SpanInfo)]
+  }
+
+-- | Positional index backed by a hash map plus an entry list.
+--
+-- We use a hash map for exact lookups (O(1) average) and keep the original
+-- entry list for containment queries (smallest enclosing span).
+data PosIndex a = PosIndex
+  { -- | Hash map for exact span lookups.
+    piByKey :: HM.HashMap Text a
+    -- | Entry list used for containment-based lookups.
+  , piEntries :: [(Span, a)]
+  }
+
 -- | Map from expression span to the expression node.
-type ExpIndex = Map.Map Span (Exp Ann)
+type ExpIndex = PosIndex (Exp Ann)
 -- | Map from variable-use span to its name and morphological candidates.
-type VarIndex = Map.Map Span (Identifier, [(Identifier, Case)])
+type VarIndex = PosIndex (Identifier, [(Identifier, Case)])
 -- | Map from pattern variable span to the bound identifier.
-type PatVarIndex = Map.Map Span Identifier
+type PatVarIndex = PosIndex Identifier
 -- | Map from constructor-pattern span to its constructor metadata.
-type CtorIndex = Map.Map Span (Identifier, Ann, [Pat Ann], Maybe (Exp Ann))
+type CtorIndex = PosIndex (Identifier, Ann, [Pat Ann], Maybe (Exp Ann))
 -- | Map from clause-body span to the enclosing match clause (scrutinee + pattern).
-type MatchClauseIndex = Map.Map Span (Exp Ann, Pat Ann)
+type MatchClauseIndex = PosIndex (Exp Ann, Pat Ann)
 -- | Map from clause scope span to the enclosing function clause (args + pattern).
-type FuncClauseIndex = Map.Map Span ([Arg Ann], Pat Ann)
+type FuncClauseIndex = PosIndex ([Arg Ann], Pat Ann)
 
 data DocIndexLists = DocIndexLists
-  { expEntries :: [(Span, Exp Ann)]
+  { -- | Collected expression entries.
+    expEntries :: [(Span, Exp Ann)]
+    -- | Collected variable entries.
   , varEntries :: [(Span, (Identifier, [(Identifier, Case)]))]
+    -- | Collected pattern variable entries.
   , patVarEntries :: [(Span, Identifier)]
+    -- | Collected constructor-pattern entries.
   , ctorEntries :: [(Span, (Identifier, Ann, [Pat Ann], Maybe (Exp Ann)))]
+    -- | Collected match clause entries.
   , matchClauseEntries :: [(Span, (Exp Ann, Pat Ann))]
+    -- | Collected function clause entries.
   , funcClauseEntries :: [(Span, ([Arg Ann], Pat Ann))]
   }
 
@@ -456,26 +531,56 @@ emptyDocIndexLists :: DocIndexLists
 emptyDocIndexLists =
   DocIndexLists [] [] [] [] [] []
 
+-- | Stable textual key for a span, used in hash-based indices.
+spanKeyText :: Span -> Text
+spanKeyText =
+  T.pack . show
+
+-- | Stable textual key for an LSP range, used in hash-based indices.
+rangeKeyText :: Range -> Text
+rangeKeyText =
+  T.pack . show
+
+-- | Stable textual key for a span index entry.
+spanKeyTextForSpanKey :: SpanKey -> Text
+spanKeyTextForSpanKey key =
+  case key of
+    SpanKey sp -> "S:" <> spanKeyText sp
+    RangeKey range -> "R:" <> rangeKeyText range
+
+-- | Build a positional index from a list of span entries.
+--
+-- The hash map is used for exact span lookups; the list is used for
+-- position-based queries that require span containment checks.
+posIndexFromEntries :: [(Span, a)] -> PosIndex a
+posIndexFromEntries entries =
+  let byKey = HM.fromList [ (spanKeyText sp, value) | (sp, value) <- entries ]
+  in PosIndex byKey entries
+
 buildSpanIndex :: Map.Map Span Identifier -> Map.Map Span (Identifier, [Ty Ann]) -> Map.Map Span (Ty Ann) -> [BinderInfo] -> SpanIndex
-buildSpanIndex resolved resolvedSigs resolvedTypes =
-  foldl' insertBinder baseIndex
+buildSpanIndex resolved resolvedSigs resolvedTypes binders =
+  SpanIndex (HM.map snd byKey) (HM.elems byKey)
   where
-    baseIndex =
-      foldl' insertType
-        (foldl' insertSig
-          (foldl' insertResolved Map.empty (Map.toList resolved))
-          (Map.toList resolvedSigs))
-        (Map.toList resolvedTypes)
-    insertResolved acc (sp, ident) =
-      insertSpanInfo (SpanKey sp) (SpanInfo (Just sp) Nothing (Just ident) Nothing Nothing Nothing) acc
-    insertSig acc (sp, sig) =
-      insertSpanInfo (SpanKey sp) (SpanInfo (Just sp) Nothing Nothing (Just sig) Nothing Nothing) acc
-    insertType acc (sp, ty) =
-      insertSpanInfo (SpanKey sp) (SpanInfo (Just sp) Nothing Nothing Nothing (Just ty) Nothing) acc
-    insertBinder acc bi =
-      insertSpanInfo (RangeKey (biRange bi)) (SpanInfo Nothing (Just (biRange bi)) (Just (biIdent bi)) Nothing Nothing (Just bi)) acc
-    insertSpanInfo =
-      Map.insertWith mergeSpanInfo
+    entries =
+      [ (SpanKey sp, SpanInfo (Just sp) Nothing (Just ident) Nothing Nothing Nothing)
+      | (sp, ident) <- Map.toList resolved
+      ] ++
+      [ (SpanKey sp, SpanInfo (Just sp) Nothing Nothing (Just sig) Nothing Nothing)
+      | (sp, sig) <- Map.toList resolvedSigs
+      ] ++
+      [ (SpanKey sp, SpanInfo (Just sp) Nothing Nothing Nothing (Just ty) Nothing)
+      | (sp, ty) <- Map.toList resolvedTypes
+      ] ++
+      [ (RangeKey (biRange bi), SpanInfo Nothing (Just (biRange bi)) (Just (biIdent bi)) Nothing Nothing (Just bi))
+      | bi <- binders
+      ]
+    byKey = foldl' insertEntry HM.empty entries
+    insertEntry acc (key, info) =
+      HM.insertWith mergeEntry (spanKeyTextForSpanKey key) (key, info) acc
+    mergeEntry new old =
+      let (oldKey, oldInfo) = old
+          (_, newInfo) = new
+      in (oldKey, mergeSpanInfo newInfo oldInfo)
     mergeSpanInfo new old =
       SpanInfo
         { siSpan = siSpan new <|> siSpan old
@@ -491,7 +596,8 @@ buildSpanIndex resolved resolvedSigs resolvedTypes =
 -- This is used when we already have a precise span from an AST node and
 -- want to merge that with resolved symbol/type data.
 spanInfoForSpan :: Span -> SpanIndex -> Maybe SpanInfo
-spanInfoForSpan sp = Map.lookup (SpanKey sp)
+spanInfoForSpan sp idx =
+  HM.lookup ("S:" <> spanKeyText sp) (siByKey idx)
 
 -- | Lookup span-index information at a cursor position.
 --
@@ -501,7 +607,7 @@ spanInfoAtPosition :: Position -> SpanIndex -> Maybe SpanInfo
 spanInfoAtPosition pos idx =
   let matches =
         [ (spanKeySize key, info)
-        | (key, info) <- Map.toList idx
+        | (key, info) <- siEntries idx
         , posInSpanKey pos key
         ]
   in fmap snd (listToMaybe (sortOn fst matches))
@@ -525,11 +631,11 @@ rangeSizeForSort (Range (Position sl sc) (Position el ec)) =
 --
 -- Used by the per-document indices built from the AST to avoid repeated
 -- tree traversals on hover/definition/highlight.
-lookupByPosition :: Position -> Map.Map Span a -> Maybe a
+lookupByPosition :: Position -> PosIndex a -> Maybe a
 lookupByPosition pos idx =
   let matches =
         [ (spanSizeForSort sp, value)
-        | (sp, value) <- Map.toList idx
+        | (sp, value) <- piEntries idx
         , posInSpan pos sp
         ]
   in fmap snd (listToMaybe (sortOn fst matches))
@@ -541,12 +647,12 @@ lookupByPosition pos idx =
 buildDocIndices :: [Stmt Ann] -> (ExpIndex, VarIndex, PatVarIndex, CtorIndex, MatchClauseIndex, FuncClauseIndex)
 buildDocIndices stmts =
   let lists = foldl' collectStmt emptyDocIndexLists stmts
-  in ( Map.fromList (expEntries lists)
-     , Map.fromList (varEntries lists)
-     , Map.fromList (patVarEntries lists)
-     , Map.fromList (ctorEntries lists)
-     , Map.fromList (matchClauseEntries lists)
-     , Map.fromList (funcClauseEntries lists)
+  in ( posIndexFromEntries (expEntries lists)
+     , posIndexFromEntries (varEntries lists)
+     , posIndexFromEntries (patVarEntries lists)
+     , posIndexFromEntries (ctorEntries lists)
+     , posIndexFromEntries (matchClauseEntries lists)
+     , posIndexFromEntries (funcClauseEntries lists)
      )
   where
     addSpanEntry sp val xs =
@@ -661,6 +767,9 @@ normalizeTyForRender ty =
 -- This is a hot path during hover. We normalize annotations to eliminate
 -- span noise and cache the rendered text for the lifetime of the document
 -- version.
+--
+-- The cache is a hash table because it is read-heavy and should be O(1)
+-- on average; this keeps hover latency low even with many repeated types.
 -- | Render cache key for a type.
 --
 -- We normalize spans and then use the 'Show' instance as a stable key.
@@ -704,8 +813,9 @@ onHover req respond = do
       pos = params ^. L.position
   case Map.lookup uri (lsDocs st) of
     Nothing -> respond (Right (InR Null))
-    Just doc ->
-      case tokenAtPosition doc pos of
+    Just doc -> do
+      token <- liftIO (tokenAtPositionIO doc pos)
+      case token of
         Nothing -> respond (Right (InR Null))
         Just (TokenKeyword _) -> respond (Right (InR Null))
         _ -> do
@@ -1069,8 +1179,9 @@ onDefinition req respond = do
       pos = params ^. L.position
   case Map.lookup uri (lsDocs st) of
     Nothing -> respond (Right (InL (Definition (InR []))))
-    Just doc ->
-      case tokenAtPosition doc pos of
+    Just doc -> do
+      token <- liftIO (tokenAtPositionIO doc pos)
+      case token of
         Nothing -> respond (Right (InL (Definition (InR []))))
         Just (TokenKeyword _) -> respond (Right (InL (Definition (InR []))))
         _ -> do
@@ -1241,7 +1352,8 @@ onDocumentHighlight req respond = do
   case Map.lookup uri (lsDocs st) of
     Nothing -> respond (Right (InL []))
     Just doc -> do
-      case tokenAtPosition doc pos of
+      token <- liftIO (tokenAtPositionIO doc pos)
+      case token of
         Nothing -> respond (Right (InL []))
         Just (TokenKeyword _) -> respond (Right (InL []))
         _ -> do
@@ -1320,7 +1432,8 @@ analyzeDocument st uri text = do
           spanIndex = buildSpanIndex resolved resolvedSigs resolvedTypes binderSpans
           (expIndex, varIndex, patVarIndex, ctorIndex, matchClauseIndex, funcClauseIndex) = buildDocIndices stmts
       tyRenderCache <- HT.new
-      let doc = DocState text pstCached tcCached stmts [] defSpans resolved resolvedSigs resolvedTypes binderSpans spanIndex expIndex varIndex patVarIndex ctorIndex matchClauseIndex funcClauseIndex tyRenderCache
+      tokenCache <- HT.new
+      let doc = DocState text pstCached tcCached stmts [] defSpans resolved resolvedSigs resolvedTypes binderSpans spanIndex expIndex varIndex patVarIndex ctorIndex matchClauseIndex funcClauseIndex tyRenderCache tokenCache
       return (doc, [])
     Nothing -> do
       let basePst = lsBaseParser st
@@ -1330,7 +1443,10 @@ analyzeDocument st uri text = do
         Left err -> do
           let diag = parseErrorToDiagnostic text err
           tyRenderCache <- HT.new
-          let doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty Map.empty [] Map.empty Map.empty Map.empty Map.empty Map.empty Map.empty Map.empty tyRenderCache
+          tokenCache <- HT.new
+          let emptySpanIndex = SpanIndex HM.empty []
+              emptyPosIndex = posIndexFromEntries []
+              doc = DocState text basePst baseTC [] [diag] Map.empty Map.empty Map.empty Map.empty [] emptySpanIndex emptyPosIndex emptyPosIndex emptyPosIndex emptyPosIndex emptyPosIndex emptyPosIndex tyRenderCache tokenCache
           return (doc, [diag])
         Right (stmts, pst') -> do
           -- Compute these once, early, and reuse throughout
@@ -1343,7 +1459,8 @@ analyzeDocument st uri text = do
               diag <- tcErrorToDiagnostic st text tcErr
               let spanIndex = buildSpanIndex Map.empty Map.empty Map.empty binderSpans
               tyRenderCache <- HT.new
-              let doc = DocState text pst' baseTC stmts [diag] defSpans Map.empty Map.empty Map.empty binderSpans spanIndex expIndex varIndex patVarIndex ctorIndex matchClauseIndex funcClauseIndex tyRenderCache
+              tokenCache <- HT.new
+              let doc = DocState text pst' baseTC stmts [diag] defSpans Map.empty Map.empty Map.empty binderSpans spanIndex expIndex varIndex patVarIndex ctorIndex matchClauseIndex funcClauseIndex tyRenderCache tokenCache
               return (doc, [diag])
             Right (_, tcStWithDecls) -> do
               tcStWithDefs <- case uriToFilePath uri of
@@ -1366,7 +1483,8 @@ analyzeDocument st uri text = do
                   !resolvedTypes = Map.fromList (filterResolved docSpans (tcResolvedTypes tcStFinal))
                   !spanIndex = buildSpanIndex resolved resolvedSigs resolvedTypes binderSpans
               tyRenderCache <- HT.new
-              let doc = DocState text pst' tcStFinal stmts diags defSpans resolved resolvedSigs resolvedTypes binderSpans spanIndex expIndex varIndex patVarIndex ctorIndex matchClauseIndex funcClauseIndex tyRenderCache
+              tokenCache <- HT.new
+              let doc = DocState text pst' tcStFinal stmts diags defSpans resolved resolvedSigs resolvedTypes binderSpans spanIndex expIndex varIndex patVarIndex ctorIndex matchClauseIndex funcClauseIndex tyRenderCache tokenCache
               return (doc, diags)
 
 -- | Attempt to load a cached document if the on-disk cache matches the
@@ -1793,8 +1911,9 @@ posInPat p pat =
 -- When the cursor is on \"bu\" in a clause head, we show the argument type
 -- rather than a keyword hover.
 hoverFunctionArgKeyword :: Position -> DocState -> LspM Config (Maybe Text)
-hoverFunctionArgKeyword pos doc =
-  case tokenAtPosition doc pos of
+hoverFunctionArgKeyword pos doc = do
+  token <- liftIO (tokenAtPositionIO doc pos)
+  case token of
     Just (TokenIdent "bu") ->
       case findFunctionArgsAtLine pos (dsStmts doc) of
         Just args ->
@@ -1853,12 +1972,20 @@ tokenAtPosition doc (Position line char) = do
     then Just (TokenKeyword word)
     else Just (TokenIdent word)
 
--- | Predicate for quickly filtering out keywords during resolution.
-keywordAt :: DocState -> Position -> Bool
-keywordAt doc pos =
-  case tokenAtPosition doc pos of
-    Just (TokenKeyword _) -> True
-    _ -> False
+-- | Cached token classification for a position within the current document.
+--
+-- This avoids repeated text slicing when hover/definition/highlight are
+-- called frequently on the same cursor position.
+tokenAtPositionIO :: DocState -> Position -> IO (Maybe TokenAtPosition)
+tokenAtPositionIO doc pos = do
+  let key = T.pack (show pos)
+  existing <- HT.lookup (dsTokenCache doc) key
+  case existing of
+    Just token -> return token
+    Nothing -> do
+      let token = tokenAtPosition doc pos
+      HT.insert (dsTokenCache doc) key token
+      return token
 
 -- | Evaluate actions in order and return the first 'Just' result.
 --

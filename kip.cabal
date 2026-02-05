@@ -156,6 +156,7 @@ executable kip-lsp
     , directory
     , filepath
     , hashtables
+    , unordered-containers
     , kip
     , lens
     , lsp
