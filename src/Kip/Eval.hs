@@ -95,18 +95,57 @@ isResolvableInAppContext varCandidates st =
       randomExists = isRandomCandidate varCandidates
   in fnExists || primExists || selectorExists || tyExists || ctorExists || randomExists
 
+-- | A single evaluation step for trampolining tail calls.
+-- | Done: final value.
+-- | Continue: evaluate a new (env, exp) without growing the Haskell call stack.
+data EvalStep
+  = Done (Exp Ann)
+  | Continue [(Identifier, Exp Ann)] (Exp Ann)
+
 -- | Evaluate an expression with a local environment.
+-- |
+-- | This is a trampoline: tail-position transitions return 'Continue' so the
+-- | evaluator can loop without consuming Haskell stack frames. Non-tail work
+-- | still evaluates recursively, but tail calls become iterative.
 evalExpWith :: [(Identifier, Exp Ann)] -- ^ Local environment bindings.
             -> Exp Ann -- ^ Expression to evaluate.
             -> EvalM (Exp Ann) -- ^ Evaluated expression.
 evalExpWith localEnv e =
+  evalExpLoop localEnv e
+
+-- | Main trampoline loop.
+-- |
+-- | The loop is strict in the next step: it only recurses in Haskell when the
+-- | evaluation cannot be in tail position (e.g., computing subexpressions).
+evalExpLoop :: [(Identifier, Exp Ann)] -- ^ Local environment bindings.
+            -> Exp Ann -- ^ Expression to evaluate.
+            -> EvalM (Exp Ann) -- ^ Evaluated expression.
+evalExpLoop localEnv e = do
+  evalStep localEnv e >>= \case
+    Done v -> return v
+    Continue env' e' -> evalExpLoop env' e'
+
+-- | One evaluation step.
+-- |
+-- | IMPORTANT: Only tail-position transitions should return 'Continue':
+-- | - Sequence second position
+-- | - Match clause body
+-- | - Let/Ascribe bodies
+-- | - Function bodies
+-- | - Variable evaluation that expands to another expression
+-- |
+-- | Everything else returns a 'Done' value (possibly after non-tail recursion).
+evalStep :: [(Identifier, Exp Ann)] -- ^ Local environment bindings.
+         -> Exp Ann -- ^ Expression to evaluate.
+         -> EvalM EvalStep -- ^ Trampoline step.
+evalStep localEnv e =
   case e of
     Var {annExp, varName, varCandidates} ->
       case lookupByCandidatesList localEnv varCandidates of
-        Just v -> return v
+        Just v -> return (Done v)
         Nothing ->
           case lookupBySuffixList localEnv varName of
-            Just v -> return v
+            Just v -> return (Done v)
             Nothing -> do
               st@MkEvalState{evalVals} <- get
               case lookupByCandidates evalVals varCandidates of
@@ -114,64 +153,75 @@ evalExpWith localEnv e =
                   -- Not a value binding. Check if it's a function/constructor/etc.
                   -- that will be resolved when applied in an App context.
                   if isResolvableInAppContext varCandidates st
-                    then return (Var annExp varName varCandidates)
+                    then return (Done (Var annExp varName varCandidates))
                     else throwError (UnboundVariable varName)
-                Just v -> evalExpWith localEnv v
+                Just v ->
+                  -- Tail-position indirection: keep evaluating the bound value.
+                  return (Continue localEnv v)
     App {annExp = annApp, fn, args} -> do
-      fn' <- evalExpWith localEnv fn
-      args' <- mapM (evalExpWith localEnv) args
+      -- Non-tail: we must compute function and arguments before applying.
+      fn' <- evalExpLoop localEnv fn
+      args' <- mapM (evalExpLoop localEnv) args
       case fn' of
         Var {varName, varCandidates} -> do
           MkEvalState{evalFuncs, evalPrimFuncs, evalSelectors, evalTyCons} <- get
           case args' of
             [arg] | any (\(ident, _) -> Map.member ident evalTyCons) varCandidates ->
-              return (applyTypeCase (annCase (annExp fn')) arg)
+              return (Done (applyTypeCase (annCase (annExp fn')) arg))
             _ -> do
               let fnCandidates = map fst varCandidates
                   matches = [(n, def) | n <- fnCandidates, def <- MultiMap.lookup n evalFuncs]
                   primMatches = [(n, def) | n <- fnCandidates, def <- MultiMap.lookup n evalPrimFuncs]
               pickPrimByTypes primMatches args' >>= \case
-                Just primImpl -> primImpl args'
+                Just primImpl -> Done <$> primImpl args'
                 Nothing ->
                   pickFunctionByTypes matches args' >>= \case
-                    Just def -> applyFunction fn' localEnv def args'
+                    Just def -> applyFunctionStep fn' localEnv def args'
                     Nothing ->
                       let selectorMatches = [idx | n <- map fst varCandidates, idx <- MultiMap.lookup n evalSelectors]
                       in case (selectorMatches, args') of
-                        (idx:_, [arg]) -> applySelector idx arg (App annApp fn' args')
+                        (idx:_, [arg]) ->
+                          Done <$> applySelector idx arg (App annApp fn' args')
                         _ ->
                           if isRandomCandidate varCandidates
-                            then primIntRandom args'
-                            else return (App annApp fn' args') -- Constructor application or unevaluated call
-        _ -> return (App annApp fn' args')
+                            then Done <$> primIntRandom args'
+                            else return (Done (App annApp fn' args')) -- Constructor application or unevaluated call
+        _ -> return (Done (App annApp fn' args'))
     StrLit {annExp, lit} ->
-      return (StrLit annExp lit)
+      return (Done (StrLit annExp lit))
     IntLit {annExp, intVal} ->
-      return (IntLit annExp intVal)
+      return (Done (IntLit annExp intVal))
     FloatLit {annExp, floatVal} ->
-      return (FloatLit annExp floatVal)
+      return (Done (FloatLit annExp floatVal))
     Bind {annExp, bindName, bindNameAnn, bindExp} -> do
-      v <- evalExpWith localEnv bindExp
-      return (Bind annExp bindName bindNameAnn v)
+      -- Non-tail: evaluate the binding expression, but the bind itself is a value.
+      v <- evalExpLoop localEnv bindExp
+      return (Done (Bind annExp bindName bindNameAnn v))
     Seq {annExp, first, second} -> do
       case first of
         Bind {bindName, bindNameAnn, bindExp} -> do
-          v <- evalExpWith localEnv bindExp
-          evalExpWith ((bindName, v) : localEnv) second
+          -- Tail position: continue with the extended environment and second.
+          v <- evalExpLoop localEnv bindExp
+          return (Continue ((bindName, v) : localEnv) second)
         _ -> do
-          _ <- evalExpWith localEnv first
-          evalExpWith localEnv second
+          -- Evaluate the first expression, then tail-continue into second.
+          _ <- evalExpLoop localEnv first
+          return (Continue localEnv second)
     Match {annExp, scrutinee, clauses} -> do
-      scrutinee' <- evalExpWith localEnv scrutinee
+      -- Non-tail: we need the scrutinee value to select the clause.
+      scrutinee' <- evalExpLoop localEnv scrutinee
       case findClause scrutinee' clauses of
         Nothing -> throwError NoMatchingClause
         Just (Clause _ body, patBindings) -> do
           let env = patBindings ++ localEnv
-          evalExpWith env body
+          -- Tail position: continue with the clause body.
+          return (Continue env body)
     Let {annExp, varName, body} ->
-      evalExpWith localEnv body
+      -- Tail position: the body is the result of the let.
+      return (Continue localEnv body)
     Ascribe {ascExp} ->
-      evalExpWith localEnv ascExp
+      -- Tail position: ascriptions do not affect evaluation.
+      return (Continue localEnv ascExp)
   where
     -- | Find the first matching clause for a scrutinee.
     findClause :: Exp Ann -- ^ Scrutinee expression.
@@ -189,19 +239,23 @@ evalExpWith localEnv e =
             Nothing -> go rest
 
 -- | Apply a function definition to evaluated arguments.
-applyFunction :: Exp Ann -- ^ Function expression.
-              -> [(Identifier, Exp Ann)] -- ^ Local environment bindings.
-              -> ([Arg Ann], [Clause Ann]) -- ^ Function signature and clauses.
-              -> [Exp Ann] -- ^ Evaluated arguments.
-              -> EvalM (Exp Ann) -- ^ Result expression.
-applyFunction fn localEnv (args, clauses) values = do
+-- |
+-- | This is a tail-position producer: when a clause matches, we return a
+-- | 'Continue' step so the trampoline can evaluate the body without growing
+-- | the Haskell stack.
+applyFunctionStep :: Exp Ann -- ^ Function expression.
+                  -> [(Identifier, Exp Ann)] -- ^ Local environment bindings.
+                  -> ([Arg Ann], [Clause Ann]) -- ^ Function signature and clauses.
+                  -> [Exp Ann] -- ^ Evaluated arguments.
+                  -> EvalM EvalStep -- ^ Trampoline step.
+applyFunctionStep fn localEnv (args, clauses) values = do
   let argNames = map argIdent args
       argBindings = zip argNames values
   case findClause values clauses of
-    Nothing -> return (App (annExp fn) fn values)
+    Nothing -> return (Done (App (annExp fn) fn values))
     Just (Clause pat body, patBindings) -> do
       let env = patBindings ++ argBindings ++ localEnv
-      evalExpWith env body
+      return (Continue env body)
   where
     -- | Find the first matching clause for argument values.
     findClause :: [Exp Ann] -- ^ Argument values.

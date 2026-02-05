@@ -1,0 +1,11 @@
+(* Derin kuyruk-çağrılı toplama: trampolin olmazsa yığın taşabilir. *)
+(bu tam-sayıyı) (birikim tam-sayıyı) (birikimli-toplamı tam-sayısı),
+  (bunla 0'ın eşitliği) doğruysa,
+    birikim;
+  değilse,
+    (bunla 1'in farkını) (birikimle bunla toplamını) birikimli-toplamıdır.
+
+çalıştırmak,
+  (10000'i 0'ı birikimli-toplamını) yaz.
+
+çalıştır.
