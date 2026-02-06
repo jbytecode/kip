@@ -17,6 +17,7 @@ import System.Process (CreateProcess(..), ProcessHandle, StdStream(..), createPr
 import Test.Tasty (TestTree)
 import Test.Tasty.HUnit (assertBool, assertEqual, assertFailure, testCase)
 import Data.Time.Clock (UTCTime)
+import System.Timeout (timeout)
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AK
 import qualified Data.Aeson.KeyMap as AKM
@@ -30,6 +31,7 @@ import Data.Vector (toList)
 -- | Expected behaviors for a single LSP fixture.
 data LspSpec = LspSpec
   { specDiagnosticsAtLeast :: Int
+  , specDiagnosticsAfterChangeAtMost :: Maybe Int
   , specDiagnosticMessageContains :: [T.Text]
   , specFormattingEdits :: Bool
   , specFormattingNoop :: Bool
@@ -40,6 +42,8 @@ data LspSpec = LspSpec
   , specCompletionAt :: Maybe PositionQuery
   , specCache :: Bool
   , specCacheReuse :: Bool
+  , specDidChangeAppend :: Maybe T.Text
+  , specDidChangeAppendCharwise :: Bool
   , specDefinitionAt :: Maybe DefinitionQuery
   , specDocumentHighlightAt :: Maybe HighlightQuery
   }
@@ -48,6 +52,7 @@ data LspSpec = LspSpec
 instance A.FromJSON LspSpec where
   parseJSON = A.withObject "LspSpec" $ \obj -> do
     specDiagnosticsAtLeast <- obj A..:? "diagnosticsAtLeast" A..!= 0
+    specDiagnosticsAfterChangeAtMost <- obj A..:? "diagnosticsAfterChangeAtMost"
     specDiagnosticMessageContains <- obj A..:? "diagnosticMessageContains" A..!= []
     specFormattingEdits <- obj A..:? "formattingEdits" A..!= False
     specFormattingNoop <- obj A..:? "formattingNoop" A..!= False
@@ -58,10 +63,13 @@ instance A.FromJSON LspSpec where
     specCompletionAt <- obj A..:? "completionAt"
     specCache <- obj A..:? "cache" A..!= False
     specCacheReuse <- obj A..:? "cacheReuse" A..!= False
+    specDidChangeAppend <- obj A..:? "didChangeAppend"
+    specDidChangeAppendCharwise <- obj A..:? "didChangeAppendCharwise" A..!= False
     specDefinitionAt <- obj A..:? "definitionAt"
     specDocumentHighlightAt <- obj A..:? "documentHighlightAt"
     return LspSpec
       { specDiagnosticsAtLeast = specDiagnosticsAtLeast
+      , specDiagnosticsAfterChangeAtMost = specDiagnosticsAfterChangeAtMost
       , specDiagnosticMessageContains = specDiagnosticMessageContains
       , specFormattingEdits = specFormattingEdits
       , specFormattingNoop = specFormattingNoop
@@ -72,6 +80,8 @@ instance A.FromJSON LspSpec where
       , specCompletionAt = specCompletionAt
       , specCache = specCache
       , specCacheReuse = specCacheReuse
+      , specDidChangeAppend = specDidChangeAppend
+      , specDidChangeAppendCharwise = specDidChangeAppendCharwise
       , specDefinitionAt = specDefinitionAt
       , specDocumentHighlightAt = specDocumentHighlightAt
       }
@@ -177,6 +187,7 @@ loadSpec path = do
   if not exists
     then return LspSpec
       { specDiagnosticsAtLeast = 0
+      , specDiagnosticsAfterChangeAtMost = Nothing
       , specDiagnosticMessageContains = []
       , specFormattingEdits = False
       , specFormattingNoop = False
@@ -187,6 +198,8 @@ loadSpec path = do
       , specCompletionAt = Nothing
       , specCache = False
       , specCacheReuse = False
+      , specDidChangeAppend = Nothing
+      , specDidChangeAppendCharwise = False
       , specDefinitionAt = Nothing
       , specDocumentHighlightAt = Nothing
       }
@@ -228,6 +241,17 @@ runSession lspPath uri content spec doSave = do
       sendMessage inH (didOpenNotification uri content)
       diags <- expectDiagnosticsAtLeast outH uri (specDiagnosticsAtLeast spec)
       mapM_ (expectDiagnosticContains diags) (specDiagnosticMessageContains spec)
+      case specDidChangeAppend spec of
+        Nothing -> return ()
+        Just suffix -> do
+          if specDidChangeAppendCharwise spec
+            then sendCharwiseAppend inH uri 2 content suffix
+            else sendMessage inH (didChangeAppendNotification uri 2 content suffix)
+          case specDiagnosticsAfterChangeAtMost spec of
+            Nothing -> return ()
+            Just maxCount -> do
+              _ <- expectDiagnosticsAtMost outH uri maxCount
+              return ()
       when (specFormattingEdits spec) $ do
         sendMessage inH (formattingRequest 2 uri)
         expectNonEmptyEdits outH 2
@@ -320,6 +344,15 @@ expectDiagnosticsAtLeast h uri expected = do
   diags <- awaitMessage h (matchDiagnostics uri)
   let count = length diags
   assertBool "diagnostics count too small" (count >= expected)
+  return diags
+
+-- | Wait for diagnostics and ensure a maximum count.
+expectDiagnosticsAtMost :: Handle -> T.Text -> Int -> IO [A.Value]
+expectDiagnosticsAtMost h uri maxExpected = do
+  mDiags <- timeout 2000000 (awaitMessage h (matchDiagnostics uri))
+  let diags = fromMaybe [] mDiags
+  let count = length diags
+  assertBool "diagnostics count too large" (count <= maxExpected)
   return diags
 
 -- | Ensure diagnostic messages contain a substring.
@@ -655,6 +688,42 @@ didOpenNotification uri content =
         ]
     ]
 
+-- | Build a didChange notification that appends text as a ranged edit.
+didChangeAppendNotification :: T.Text -> Int -> T.Text -> T.Text -> A.Value
+didChangeAppendNotification uri version oldText suffix =
+  let (line, character) = endPosition oldText
+  in A.object
+      [ "jsonrpc" A..= ("2.0" :: String)
+      , "method" A..= ("textDocument/didChange" :: String)
+      , "params" A..= A.object
+          [ "textDocument" A..= A.object
+              [ "uri" A..= uri
+              , "version" A..= version
+              ]
+          , "contentChanges" A..=
+              [ A.object
+                  [ "range" A..= A.object
+                      [ "start" A..= A.object ["line" A..= line, "character" A..= character]
+                      , "end" A..= A.object ["line" A..= line, "character" A..= character]
+                      ]
+                  , "rangeLength" A..= (0 :: Int)
+                  , "text" A..= suffix
+                  ]
+              ]
+          ]
+      ]
+
+-- | Send append edits one character at a time with monotonically increasing versions.
+sendCharwiseAppend :: Handle -> T.Text -> Int -> T.Text -> T.Text -> IO ()
+sendCharwiseAppend h uri versionStart oldText suffix =
+  go versionStart oldText (T.unpack suffix)
+  where
+    go _ _ [] = return ()
+    go version current (c:rest) = do
+      let chunk = T.singleton c
+      sendMessage h (didChangeAppendNotification uri version current chunk)
+      go (version + 1) (current <> chunk) rest
+
 -- | Build a didSave notification payload.
 didSaveNotification :: T.Text -> A.Value
 didSaveNotification uri =
@@ -667,6 +736,14 @@ didSaveNotification uri =
             ]
         ]
     ]
+
+-- | Compute the end position (line, character) of a text buffer.
+endPosition :: T.Text -> (Int, Int)
+endPosition txt =
+  let ls = T.splitOn "\n" txt
+  in case reverse ls of
+      [] -> (0, 0)
+      lastLine:_ -> (length ls - 1, T.length lastLine)
 
 -- | Build a formatting request payload.
 formattingRequest :: Int -> T.Text -> A.Value

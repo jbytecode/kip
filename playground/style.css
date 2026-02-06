@@ -112,6 +112,19 @@ code {
   margin-left: auto;
 }
 
+.topbar-lang {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  color: rgba(226, 232, 240, 0.85);
+}
+
+.topbar-lang select {
+  min-width: 105px;
+  padding: 0.4rem 0.55rem;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

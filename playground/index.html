@@ -26,12 +26,19 @@
         </a>
 
         <div class="topbar-cta">
-          <a class="icon-link" href="https://github.com/kip-dili/kip" aria-label="Kip on GitHub">
+          <label class="topbar-lang" for="ui-lang">
+            <span data-i18n="topbar.language">Language</span>
+            <select id="ui-lang" aria-label="Language switch" data-i18n-aria-label="topbar.languageSwitchAria">
+              <option value="en" data-i18n="language.english">English</option>
+              <option value="tr" data-i18n="language.turkish">Turkish</option>
+            </select>
+          </label>
+          <a class="icon-link" href="https://github.com/kip-dili/kip" aria-label="Kip on GitHub" data-i18n-aria-label="aria.github">
             <svg class="icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
               <path d="M12 2a10 10 0 0 0-3.16 19.48c.5.1.68-.22.68-.48v-1.7c-2.77.6-3.35-1.19-3.35-1.19-.45-1.14-1.1-1.45-1.1-1.45-.9-.62.07-.6.07-.6 1 .07 1.52 1.03 1.52 1.03.9 1.52 2.36 1.08 2.94.83.1-.65.35-1.08.64-1.33-2.21-.25-4.54-1.1-4.54-4.9 0-1.08.38-1.96 1.02-2.65-.1-.25-.44-1.27.1-2.65 0 0 .83-.27 2.7 1.01a9.4 9.4 0 0 1 4.92 0c1.87-1.28 2.7-1.01 2.7-1.01.54 1.38.2 2.4.1 2.65.64.7 1.02 1.57 1.02 2.65 0 3.81-2.33 4.65-4.55 4.9.36.32.68.93.68 1.87v2.77c0 .26.18.59.69.48A10 10 0 0 0 12 2z"></path>
               </svg>
           </a>
-          <a class="icon-link" href="https://twitter.com/KipDili" aria-label="Kip on Twitter">
+          <a class="icon-link" href="https://twitter.com/KipDili" aria-label="Kip on Twitter" data-i18n-aria-label="aria.twitter">
             <svg class="icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
               <path d="M19.633 7.997c.013.177.013.355.013.534 0 5.43-4.135 11.69-11.69 11.69-2.322 0-4.482-.68-6.3-1.844.324.038.636.051.973.051 1.92 0 3.687-.648 5.096-1.74a4.124 4.124 0 0 1-3.85-2.86c.25.038.5.063.763.063.363 0 .726-.05 1.064-.138A4.118 4.118 0 0 1 2.3 9.21v-.05c.55.303 1.188.49 1.862.51a4.117 4.117 0 0 1-1.835-3.43c0-.763.2-1.464.55-2.075a11.7 11.7 0 0 0 8.5 4.31 4.63 4.63 0 0 1-.1-.942 4.117 4.117 0 0 1 7.12-2.81 8.09 8.09 0 0 0 2.61-.986 4.1 4.1 0 0 1-1.81 2.27 8.24 8.24 0 0 0 2.36-.636 8.86 8.86 0 0 1-2.06 2.125z"></path>
             </svg>
@@ -45,33 +52,33 @@
       <section class="hero">
         <div class="hero-inner">
           <div class="hero-copy">
-            <h1 class="hero-title">
+            <h1 class="hero-title" data-i18n-html="hero.title">
               A programming language in Turkish where <span class="accent">grammatical case</span> and <span class="accent">mood</span> are part of the type system.
             </h1>
-            <p class="hero-subtitle">Kip is an experimental language that integrates Turkish morphology into typing, exploring the overlap between linguistics and type theory.</p>
-            <p class="hero-subtitle">In Kip, pure function signatures are <span class="accent bold">noun phrases</span>; effectful ones are <span class="accent bold">infinitives</span> invoked in the <span class="accent bold">imperative</span>. Every argument bears a grammatical case—nominative, accusative, dative, and so on—and case is part of the function’s type. When cases are distinct, arguments can be supplied in any order.</p>
-            <p class="hero-subtitle">Kip also resolves natural-language ambiguity with type-directed disambiguation: it preserves multiple parses through parsing and lets elaboration and type checking select the intended one.</p>
+            <p class="hero-subtitle" data-i18n="hero.subtitle1">Kip is an experimental language that integrates Turkish morphology into typing, exploring the overlap between linguistics and type theory.</p>
+            <p class="hero-subtitle" data-i18n-html="hero.subtitle2">In Kip, pure function signatures are <span class="accent bold">noun phrases</span>; effectful ones are <span class="accent bold">infinitives</span> invoked in the <span class="accent bold">imperative</span>. Every argument bears a grammatical case—nominative, accusative, dative, and so on—and case is part of the function’s type. When cases are distinct, arguments can be supplied in any order.</p>
+            <p class="hero-subtitle" data-i18n="hero.subtitle3">Kip also resolves natural-language ambiguity with type-directed disambiguation: it preserves multiple parses through parsing and lets elaboration and type checking select the intended one.</p>
 
             <div class="hero-actions">
-              <a class="btn primary" href="#playground">Open the playground</a>
+              <a class="btn primary" href="#playground" data-i18n="hero.openPlayground">Open the playground</a>
             </div>
 
             <div class="hero-badges">
-              <a class="badge" href="https://github.com/kip-dili/kip/wiki/K%C4%B1lavuz">
+              <a class="badge" href="https://github.com/kip-dili/kip/wiki/K%C4%B1lavuz" data-i18n-html="hero.tutorialTr">
                 <span class="badge-dot"></span>
                 Kılavuz (Türkçe)
               </a>
-              <a class="badge" href="https://github.com/kip-dili/kip/wiki/Tutorial">
+              <a class="badge" href="https://github.com/kip-dili/kip/wiki/Tutorial" data-i18n-html="hero.tutorialEn">
                 <span class="badge-dot"></span>
                 Tutorial (English)
               </a>
             </div>
           </div>
 
-          <div class="hero-card" aria-label="Kip example">
+          <div class="hero-card" aria-label="Kip example" data-i18n-aria-label="hero.exampleAria">
             <div class="hero-card-header">
-              <div class="pill">Example</div>
-              <div class="muted">defining and using a linked list type</div>
+              <div class="pill" data-i18n="hero.examplePill">Example</div>
+              <div class="muted" data-i18n="hero.exampleMuted">defining and using a linked list type</div>
             </div>
             <pre class="code-sample"><code id="code-sample">Bir öğe listesi
 ya boş
@@ -106,26 +113,26 @@ olabilir.
       <!-- Playground -->
       <section id="features" class="section">
         <div class="section-inner">
-          <h2 class="section-title">Features</h2>
-          <p class="section-subtitle">
+          <h2 class="section-title" data-i18n="features.title">Features</h2>
+          <p class="section-subtitle" data-i18n="features.subtitle">
             A small set of ideas that make Kip different.
           </p>
           <div class="feature-grid">
             <div class="feature-card">
-              <h3>Grammar-aware types</h3>
-              <p>Grammatical case and mood are part of the type system, so argument order can vary when cases differ.</p>
+              <h3 data-i18n="features.card1.title">Grammar-aware types</h3>
+              <p data-i18n="features.card1.body">Grammatical case and mood are part of the type system, so argument order can vary when cases differ.</p>
             </div>
             <div class="feature-card">
-              <h3>Type-directed disambiguation</h3>
-              <p>Parsing preserves alternatives; type checking selects the intended meaning.</p>
+              <h3 data-i18n="features.card2.title">Type-directed disambiguation</h3>
+              <p data-i18n="features.card2.body">Parsing preserves alternatives; type checking selects the intended meaning.</p>
             </div>
             <div class="feature-card">
-              <h3>Bytecode caches</h3>
-              <p>Type-checked modules are cached as <code>.iz</code> files to speed up repeated runs.</p>
+              <h3 data-i18n="features.card3.title">Bytecode caches</h3>
+              <p data-i18n-html="features.card3.body">Type-checked modules are cached as <code>.iz</code> files to speed up repeated runs.</p>
             </div>
             <div class="feature-card">
-              <h3>JavaScript codegen</h3>
-              <p>Generate JS with <code>kip --codegen js</code> for experimenting outside the REPL.</p>
+              <h3 data-i18n="features.card4.title">JavaScript codegen</h3>
+              <p data-i18n-html="features.card4.body">Generate JS with <code>kip --codegen js</code> for experimenting outside the REPL.</p>
             </div>
           </div>
         </div>
@@ -133,53 +140,45 @@ olabilir.
 
       <section id="playground" class="section">
         <div class="section-inner">
-          <h2 class="section-title">Playground</h2>
-          <p class="section-subtitle">
+          <h2 class="section-title" data-i18n="playground.title">Playground</h2>
+          <p class="section-subtitle" data-i18n="playground.subtitle">
             Write custom Kip code, or pick an existing example, and run it.
           </p>
 
           <div class="playground-shell">
             <div class="playground-controls">
               <label>
-                Example:
+                <span data-i18n="playground.example">Example:</span>
                 <select id="example"></select>
-              </label>
-
-              <label>
-                Diagnostics:
-                <select id="lang">
-                  <option value="tr">Türkçe</option>
-                  <option value="en">English</option>
-                </select>
               </label>
 
               <div class="playground-actions-group">
                 <div class="playground-actions primary-actions">
-                  <button id="run" aria-pressed="false">
+                  <button id="run" aria-pressed="false" data-i18n-aria-label="playground.run">
                     <svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M8 5v14l11-7z"></path>
                     </svg>
-                    Run
+                    <span data-i18n="playground.run">Run</span>
                   </button>
-                  <button id="stop" class="secondary" disabled>
+                  <button id="stop" class="secondary" disabled data-i18n-aria-label="playground.stop">
                     <svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M7 7h10v10H7z"></path>
                     </svg>
-                    Stop
+                    <span data-i18n="playground.stop">Stop</span>
                   </button>
-                  <button id="codegen" aria-pressed="false">
+                  <button id="codegen" aria-pressed="false" data-i18n-aria-label="playground.codegen">
                     <svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.22-1.12.52-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.3-.06.61-.06.94s.02.64.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.41 1.05.72 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.58-.22 1.12-.52 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"></path>
                     </svg>
-                    Generate JavaScript
+                    <span data-i18n="playground.codegen">Generate JavaScript</span>
                   </button>
                 </div>
                 <div class="playground-actions utility-actions">
-                  <button id="fullscreen" class="secondary" aria-pressed="false">
+                  <button id="fullscreen" class="secondary" aria-pressed="false" data-i18n-aria-label="playground.fullscreen">
                     <svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M7 3H3v4h2V5h2V3zm14 0h-4v2h2v2h2V3zM5 17H3v4h4v-2H5v-2zm16 0h-2v2h-2v2h4v-4z"></path>
                     </svg>
-                    <span class="btn-label">Fullscreen</span>
+                    <span class="btn-label" data-i18n="playground.fullscreen">Fullscreen</span>
                   </button>
                 </div>
               </div>
@@ -187,17 +186,17 @@ olabilir.
 
             <div class="playground-panels">
               <div class="panel">
-                <label for="source">Source</label>
+                <label for="source" data-i18n="playground.source">Source</label>
                 <div class="editor-wrap">
                   <pre class="editor-highlight" id="source-highlight" aria-hidden="true"></pre>
                   <textarea id="source" spellcheck="false"></textarea>
                 </div>
               </div>
 
-              <div class="panel-divider" id="panel-divider" role="separator" aria-orientation="vertical" aria-label="Resize panels" tabindex="0"></div>
+              <div class="panel-divider" id="panel-divider" role="separator" aria-orientation="vertical" aria-label="Resize panels" data-i18n-aria-label="playground.resizePanels" tabindex="0"></div>
 
               <div class="panel">
-                <label for="output">Output</label>
+                <label for="output" data-i18n="playground.output">Output</label>
                 <div class="terminal">
                   <div class="terminal-body" id="terminal-body">
                     <pre id="output" class="terminal-output"></pre>
@@ -211,7 +210,7 @@ olabilir.
             </div>
 
             <div class="playground-codegen hidden" id="codegen-panel">
-              <label for="codegen-output">Generated JavaScript</label>
+              <label for="codegen-output" data-i18n="playground.generatedJs">Generated JavaScript</label>
               <pre id="codegen-output" class="codegen-output"></pre>
             </div>
           </div>
@@ -224,16 +223,16 @@ olabilir.
             <img class="footer-logo" src="./logo.png" alt="Kip logo" />
             <div>
               <div class="footer-title">Kip</div>
-              <div class="footer-subtitle">A programming language in Turkish where grammatical case and mood are part of the type system.</div>
+              <div class="footer-subtitle" data-i18n="footer.subtitle">A programming language in Turkish where grammatical case and mood are part of the type system.</div>
             </div>
           </div>
           <div class="footer-links">
-            <a class="icon-link" href="https://github.com/kip-dili/kip" aria-label="Kip on GitHub">
+            <a class="icon-link" href="https://github.com/kip-dili/kip" aria-label="Kip on GitHub" data-i18n-aria-label="aria.github">
               <svg class="icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
                 <path d="M12 2a10 10 0 0 0-3.16 19.48c.5.1.68-.22.68-.48v-1.7c-2.77.6-3.35-1.19-3.35-1.19-.45-1.14-1.1-1.45-1.1-1.45-.9-.62.07-.6.07-.6 1 .07 1.52 1.03 1.52 1.03.9 1.52 2.36 1.08 2.94.83.1-.65.35-1.08.64-1.33-2.21-.25-4.54-1.1-4.54-4.9 0-1.08.38-1.96 1.02-2.65-.1-.25-.44-1.27.1-2.65 0 0 .83-.27 2.7 1.01a9.4 9.4 0 0 1 4.92 0c1.87-1.28 2.7-1.01 2.7-1.01.54 1.38.2 2.4.1 2.65.64.7 1.02 1.57 1.02 2.65 0 3.81-2.33 4.65-4.55 4.9.36.32.68.93.68 1.87v2.77c0 .26.18.59.69.48A10 10 0 0 0 12 2z"></path>
               </svg>
             </a>
-            <a class="icon-link" href="https://twitter.com/KipDili" aria-label="Kip on Twitter">
+            <a class="icon-link" href="https://twitter.com/KipDili" aria-label="Kip on Twitter" data-i18n-aria-label="aria.twitter">
               <svg class="icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
                 <path d="M19.633 7.997c.013.177.013.355.013.534 0 5.43-4.135 11.69-11.69 11.69-2.322 0-4.482-.68-6.3-1.844.324.038.636.051.973.051 1.92 0 3.687-.648 5.096-1.74a4.124 4.124 0 0 1-3.85-2.86c.25.038.5.063.763.063.363 0 .726-.05 1.064-.138A4.118 4.118 0 0 1 2.3 9.21v-.05c.55.303 1.188.49 1.862.51a4.117 4.117 0 0 1-1.835-3.43c0-.763.2-1.464.55-2.075a11.7 11.7 0 0 0 8.5 4.31 4.63 4.63 0 0 1-.1-.942 4.117 4.117 0 0 1 7.12-2.81 8.09 8.09 0 0 0 2.61-.986 4.1 4.1 0 0 1-1.81 2.27 8.24 8.24 0 0 0 2.36-.636 8.86 8.86 0 0 1-2.06 2.125z"></path>
               </svg>

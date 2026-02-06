@@ -309,9 +309,26 @@ onDidChange msg = do
   let params = msg ^. L.params
       uri = params ^. L.textDocument . L.uri
       changes = params ^. L.contentChanges
-  case changes of
-    (change:_) -> processDocument uri (changeText change) True
-    [] -> return ()
+  newText <- withState $ \s ->
+    let docs = lsDocs s
+        mKey = lookupDocKeyByUri uri docs
+        oldText =
+          case mKey of
+            Just key -> dsText (docs Map.! key)
+            Nothing -> ""
+        changedText = applyContentChanges oldText changes
+        docs' =
+          case mKey of
+            Just key -> Map.adjust (\d -> d { dsText = changedText }) key docs
+            Nothing -> docs
+    in return (s { lsDocs = docs' }, changedText)
+  finalText <-
+    if T.null newText
+      then do
+        st <- readState
+        liftIO (docTextForChange uri (lsDocs st))
+      else return newText
+  processDocument uri finalText True
 
 onDidClose :: TNotificationMessage 'Method_TextDocumentDidClose -> LspM Config ()
 onDidClose msg = do
@@ -1391,22 +1408,58 @@ onDocumentHighlight req respond = do
               highlights <- liftIO $ findHighlights st doc pos ident allIdents
               respond (Right (InL highlights))
 
--- | Extract the text content from a change event.
+-- | Apply a sequence of LSP content changes to document text.
 --
--- We only support full-document changes in LSP options, but this handles
--- both partial and whole-document cases for robustness.
-changeText :: TextDocumentContentChangeEvent -> Text
+-- The protocol allows both full-document replacements and ranged edits.
+-- Clients may send incremental edits even when full sync is requested, so
+-- we handle both forms here.
+applyContentChanges :: Text -> [TextDocumentContentChangeEvent] -> Text
+applyContentChanges =
+  foldl' applyContentChange
+
+-- | Apply one LSP content change to document text.
+applyContentChange :: Text -> TextDocumentContentChangeEvent -> Text
 #if MIN_VERSION_lsp_types(2,3,0)
-changeText (TextDocumentContentChangeEvent change) =
+applyContentChange oldText (TextDocumentContentChangeEvent change) =
   case change of
-    InL (TextDocumentContentChangePartial _ _ t) -> t
+    InL (TextDocumentContentChangePartial range _ t) -> applyRangeEdit oldText range t
     InR (TextDocumentContentChangeWholeDocument t) -> t
 #else
-changeText (TextDocumentContentChangeEvent change) =
+applyContentChange oldText (TextDocumentContentChangeEvent change) =
   case change of
-    InL rec -> rec .! #text
+    InL rec -> applyRangeEdit oldText (rec .! #range) (rec .! #text)
     InR rec -> rec .! #text
 #endif
+
+-- | Apply a ranged text edit to a UTF-16 position-based document.
+applyRangeEdit :: Text -> Range -> Text -> Text
+applyRangeEdit txt (Range startPos endPos) replacement =
+  let startOff = offsetAtPosition txt startPos
+      endOff = offsetAtPosition txt endPos
+      prefix = T.take startOff txt
+      suffix = T.drop endOff txt
+  in prefix <> replacement <> suffix
+
+-- | Convert an LSP position to a text offset, clamped to valid bounds.
+--
+-- LSP positions are line/character pairs. We treat the character as a code
+-- unit index compatible with the editor stream and clamp out-of-range values.
+offsetAtPosition :: Text -> Position -> Int
+offsetAtPosition txt (Position line0 col0) =
+  let targetLine = max 0 (fromIntegral line0)
+      targetCol = max 0 (fromIntegral col0)
+      lines' = T.splitOn "\n" txt
+      lineCount = length lines'
+  in if lineCount == 0
+      then 0
+      else
+        if targetLine >= lineCount
+          then T.length txt
+          else
+            let (before, current:_) = splitAt targetLine lines'
+                beforeLen = sum (map T.length before) + length before
+                col = min targetCol (T.length current)
+            in beforeLen + col
 
 -- | Parse/typecheck a document and optionally publish diagnostics.
 --
@@ -2622,10 +2675,48 @@ locationScore (Location uri _) =
 -- | Convert an offset into (line, column) coordinates.
 offsetToPos :: Text -> (UInt, UInt)
 offsetToPos prefix =
-  let ls = T.lines prefix
-      line = max 0 (fromIntegral (length ls) - 1)
-      col = fromIntegral (T.length (if null ls then "" else last ls))
-  in (line, col)
+  let ls = T.splitOn "\n" prefix
+      lineInt = max 0 (length ls - 1)
+      colInt =
+        case reverse ls of
+          [] -> 0
+          lastLine:_ -> T.length lastLine
+  in (fromIntegral lineInt, fromIntegral colInt)
+
+-- | Resolve previous document text for incremental didChange handling.
+--
+-- We first try exact URI lookup, then normalized-URI lookup, and finally
+-- fall back to on-disk text when this is the first seen change for a URI.
+docTextForChange :: Uri -> Map.Map Uri DocState -> IO Text
+docTextForChange uri docs =
+  case lookupDocByUri uri docs of
+    Just txt -> return txt
+    Nothing ->
+      case uriToFilePath uri of
+        Nothing -> return ""
+        Just path -> do
+          exists <- doesFileExist path
+          if exists then TIO.readFile path else return ""
+
+-- | Lookup a document by exact or normalized URI.
+lookupDocByUri :: Uri -> Map.Map Uri DocState -> Maybe Text
+lookupDocByUri uri docs =
+  fmap (dsText . snd) $
+    case lookupDocKeyByUri uri docs of
+      Just key -> Just (key, docs Map.! key)
+      Nothing -> Nothing
+
+-- | Find the map key for a URI using exact/normalized matching.
+lookupDocKeyByUri :: Uri -> Map.Map Uri DocState -> Maybe Uri
+lookupDocKeyByUri uri docs =
+  case Map.lookup uri docs of
+    Just _ -> Just uri
+    Nothing ->
+      fmap fst . listToMaybe $
+        [ kv
+        | kv@(k, _) <- Map.toList docs
+        , toNormalizedUri k == toNormalizedUri uri
+        ]
 
 -- | Format document: trim trailing whitespace and ensure trailing newline.
 formatText :: Text -> Text
