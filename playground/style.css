@@ -120,9 +120,46 @@ code {
   color: rgba(226, 232, 240, 0.85);
 }
 
-.topbar-lang select {
-  min-width: 105px;
-  padding: 0.4rem 0.55rem;
+.topbar-lang-label {
+  font-weight: 650;
+}
+
+.lang-toggle {
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lang-toggle-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 0.38rem 0.65rem;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  transform: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.lang-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: none;
+}
+
+.lang-toggle-btn.is-active {
+  background: linear-gradient(90deg, rgba(32, 214, 199, 0.95), rgba(26, 99, 255, 0.95));
+  color: #061018;
+  transform: none;
+}
+
+.lang-toggle-btn.is-active:disabled {
+  opacity: 1;
 }
 
 .chip {

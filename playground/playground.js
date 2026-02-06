@@ -10,7 +10,7 @@ const sourceHighlightEl = document.getElementById("source-highlight");
 const runBtn = document.getElementById("run");
 const codegenBtn = document.getElementById("codegen");
 const stopBtn = document.getElementById("stop");
-const uiLangEl = document.getElementById("ui-lang");
+const uiLangButtons = Array.from(document.querySelectorAll("[data-ui-lang]"));
 const exampleEl = document.getElementById("example");
 const codegenPanelEl = document.getElementById("codegen-panel");
 const codegenOutputEl = document.getElementById("codegen-output");
@@ -29,10 +29,7 @@ const translations = {
   en: {
     "meta.title": "Kip",
     "meta.description": "Kip is an experimental programming language in Turkish where grammatical case and mood are part of the type system.",
-    "topbar.language": "Language",
     "topbar.languageSwitchAria": "Language switch",
-    "language.english": "English",
-    "language.turkish": "Turkish",
     "aria.github": "Kip on GitHub",
     "aria.twitter": "Kip on Twitter",
     "hero.title": "A programming language in Turkish where <span class=\"accent\">grammatical case</span> and <span class=\"accent\">mood</span> are part of the type system.",
@@ -77,13 +74,10 @@ const translations = {
   tr: {
     "meta.title": "Kip",
     "meta.description": "Kip, ismin halleri ve eylem kiplerinin tip sisteminin bir parçası olduğu deneysel bir Türkçe programlama dilidir.",
-    "topbar.language": "Dil",
     "topbar.languageSwitchAria": "Dil seçimi",
-    "language.english": "İngilizce",
-    "language.turkish": "Türkçe",
     "aria.github": "GitHub'da Kip",
     "aria.twitter": "Twitter'da Kip",
-    "hero.title": "<span class=\"accent\">İsmin halleri</span> ve <span class=\"accent\">eylem kipleri</span>nin tip sisteminin bir parçası olduğu Türkçe bir programlama dili.",
+    "hero.title": "<span class=\"accent\">İsmin halleri</span> ve <span class=\"accent\">eylem kiplerinin</span> tip sisteminin bir parçası olduğu Türkçe bir programlama dili.",
     "hero.subtitle1": "Kip, Türkçe morfolojiyi tiplemeye entegre eden; dilbilim ile tip kuramı arasındaki kesişimi inceleyen deneysel bir dildir.",
     "hero.subtitle2": "Kip'te saf fonksiyon imzaları <span class=\"accent bold\">isim tamlaması</span>; etkili fonksiyonlar ise <span class=\"accent bold\">mastar</span> yapısında olup <span class=\"accent bold\">emir kipi</span>yle çağrılır. Her argüman bir hal taşır ve bu haller, fonksiyon tipinin bir parçasıdır. Haller farklı olduğunda argümanlar herhangi bir sırada verilebilir.",
     "hero.subtitle3": "Kip ayrıca doğal dil belirsizliğini tür yönlendirmeli ayrıştırma ile çözer: Birden fazla ayrıştırmayı korur, ardından genişletme ve tip denetimi doğru olanı seçer.",
@@ -95,7 +89,7 @@ const translations = {
     "hero.exampleMuted": "bağlı liste tipini tanımlama ve kullanma",
     "features.title": "Özellikler",
     "features.subtitle": "Kip'i farklı yapan fikirlerden kısa bir seçki.",
-    "features.card1.title": "Dil bilgisine duyarlı tipler",
+    "features.card1.title": "Dilbilgisine duyarlı tipler",
     "features.card1.body": "İsmin halleri ve eylem kipleri tip sisteminin parçasıdır; haller farklı olduğunda argüman sırası değişebilir.",
     "features.card2.title": "Tip yönlendirmeli ayrıştırma",
     "features.card2.body": "Ayrıştırma seçenekleri korunur; tip denetimi hedeflenen anlamı seçer.",
@@ -241,7 +235,35 @@ function applyTranslations() {
   });
 }
 
+function applyLanguageToggleState() {
+  uiLangButtons.forEach((button) => {
+    const isActive = button.dataset.uiLang === currentLanguage;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+}
+
+function getLanguageFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const lang = params.get("lang");
+  const normalized = lang ? lang.toLowerCase() : null;
+  if (normalized && supportedLanguages.has(normalized)) {
+    return normalized;
+  }
+  return null;
+}
+
+function syncLanguageToUrl(nextLanguage) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("lang", nextLanguage);
+  window.history.replaceState({}, "", url);
+}
+
 function detectPreferredLanguage() {
+  const urlLanguage = getLanguageFromUrl();
+  if (urlLanguage) {
+    return urlLanguage;
+  }
   try {
     const stored = window.localStorage.getItem(languageStorageKey);
     if (stored && supportedLanguages.has(stored)) {
@@ -268,12 +290,10 @@ function detectPreferredLanguage() {
 }
 
 function setLanguage(nextLanguage, options = {}) {
-  const { persist = true } = options;
+  const { persist = true, syncUrl = true } = options;
   const normalized = supportedLanguages.has(nextLanguage) ? nextLanguage : "en";
   currentLanguage = normalized;
-  if (uiLangEl && uiLangEl.value !== normalized) {
-    uiLangEl.value = normalized;
-  }
+  applyLanguageToggleState();
   applyTranslations();
   buildExampleOptions();
   if (persist) {
@@ -282,6 +302,9 @@ function setLanguage(nextLanguage, options = {}) {
     } catch (_err) {
       // Ignore storage failures.
     }
+  }
+  if (syncUrl) {
+    syncLanguageToUrl(normalized);
   }
 }
 
@@ -1067,11 +1090,15 @@ if (exampleEl) {
   });
 }
 
-if (uiLangEl) {
-  uiLangEl.addEventListener("change", (event) => {
-    setLanguage(event.target.value);
+uiLangButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const nextLanguage = button.dataset.uiLang;
+    if (!nextLanguage || nextLanguage === currentLanguage) {
+      return;
+    }
+    setLanguage(nextLanguage);
   });
-}
+});
 
 if (terminalInputField) {
   terminalInputField.addEventListener("keydown", (event) => {
@@ -1109,4 +1136,4 @@ if (fullscreenBtn) {
   });
 }
 
-setLanguage(detectPreferredLanguage(), { persist: false });
+setLanguage(detectPreferredLanguage(), { persist: false, syncUrl: false });

@@ -26,13 +26,12 @@
         </a>
 
         <div class="topbar-cta">
-          <label class="topbar-lang" for="ui-lang">
-            <span data-i18n="topbar.language">Language</span>
-            <select id="ui-lang" aria-label="Language switch" data-i18n-aria-label="topbar.languageSwitchAria">
-              <option value="en" data-i18n="language.english">English</option>
-              <option value="tr" data-i18n="language.turkish">Turkish</option>
-            </select>
-          </label>
+          <div class="topbar-lang">
+            <div class="lang-toggle" role="group" aria-label="Language switch" data-i18n-aria-label="topbar.languageSwitchAria">
+              <button type="button" class="lang-toggle-btn" data-ui-lang="en" aria-pressed="false">English</button>
+              <button type="button" class="lang-toggle-btn" data-ui-lang="tr" aria-pressed="false">Türkçe</button>
+            </div>
+          </div>
           <a class="icon-link" href="https://github.com/kip-dili/kip" aria-label="Kip on GitHub" data-i18n-aria-label="aria.github">
             <svg class="icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
               <path d="M12 2a10 10 0 0 0-3.16 19.48c.5.1.68-.22.68-.48v-1.7c-2.77.6-3.35-1.19-3.35-1.19-.45-1.14-1.1-1.45-1.1-1.45-.9-.62.07-.6.07-.6 1 .07 1.52 1.03 1.52 1.03.9 1.52 2.36 1.08 2.94.83.1-.65.35-1.08.64-1.33-2.21-.25-4.54-1.1-4.54-4.9 0-1.08.38-1.96 1.02-2.65-.1-.25-.44-1.27.1-2.65 0 0 .83-.27 2.7 1.01a9.4 9.4 0 0 1 4.92 0c1.87-1.28 2.7-1.01 2.7-1.01.54 1.38.2 2.4.1 2.65.64.7 1.02 1.57 1.02 2.65 0 3.81-2.33 4.65-4.55 4.9.36.32.68.93.68 1.87v2.77c0 .26.18.59.69.48A10 10 0 0 0 12 2z"></path>
