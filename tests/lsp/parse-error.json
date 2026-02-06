@@ -1,6 +1,6 @@
 {
   "diagnosticsAtLeast": 1,
-  "diagnosticMessageContains": ["TrivialError"],
+  "diagnosticMessageContains": ["Sözdizim hatası:", "bekleniyor"],
   "formattingEdits": false,
   "hover": false,
   "completionIncludes": [],

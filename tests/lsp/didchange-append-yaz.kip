@@ -1,0 +1,21 @@
+(gizli tam-sayıyı) tahmin-etmek,
+  "Tahmininizi girin:"'i yazıp,
+  cevap için okuyup,
+  ((cevabın tam-sayı-hali)
+    yokluksa,
+      "Geçersiz sayı, tekrar deneyin."'i yazıp,
+      gizliyi tahmin-etmektir;
+    tahminin varlığıysa,
+      ((tahminin gizliyle eşitliği) doğruysa,
+        "Tebrikler! Doğru tahmin!"'i yazmaktır;
+      yanlışsa,
+        ((tahminin gizliden küçüklüğü) doğruysa,
+          "Daha büyük bir sayı deneyin."'i yazıp,
+          gizliyi tahmin-etmektir;
+        yanlışsa,
+          "Daha küçük bir sayı deneyin."'i yazıp,
+          gizliyi tahmin-etmektir))).
+
+sayı için 0'dan 100'e sayı-çekip, 
+"0 ile 100 arası bir sayı tuttum."'u yazıp,
+sayıyı tahmin-et.

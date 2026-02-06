@@ -32,6 +32,8 @@ import Data.Vector (toList)
 data LspSpec = LspSpec
   { specDiagnosticsAtLeast :: Int
   , specDiagnosticsAfterChangeAtMost :: Maybe Int
+  , specDiagnosticsAfterAppendAtLeast :: Maybe Int
+  , specDiagnosticsAfterRevertAtMost :: Maybe Int
   , specDiagnosticMessageContains :: [T.Text]
   , specFormattingEdits :: Bool
   , specFormattingNoop :: Bool
@@ -43,6 +45,7 @@ data LspSpec = LspSpec
   , specCache :: Bool
   , specCacheReuse :: Bool
   , specDidChangeAppend :: Maybe T.Text
+  , specDidChangeRevertToOriginal :: Bool
   , specDidChangeAppendCharwise :: Bool
   , specDefinitionAt :: Maybe DefinitionQuery
   , specDocumentHighlightAt :: Maybe HighlightQuery
@@ -53,6 +56,8 @@ instance A.FromJSON LspSpec where
   parseJSON = A.withObject "LspSpec" $ \obj -> do
     specDiagnosticsAtLeast <- obj A..:? "diagnosticsAtLeast" A..!= 0
     specDiagnosticsAfterChangeAtMost <- obj A..:? "diagnosticsAfterChangeAtMost"
+    specDiagnosticsAfterAppendAtLeast <- obj A..:? "diagnosticsAfterAppendAtLeast"
+    specDiagnosticsAfterRevertAtMost <- obj A..:? "diagnosticsAfterRevertAtMost"
     specDiagnosticMessageContains <- obj A..:? "diagnosticMessageContains" A..!= []
     specFormattingEdits <- obj A..:? "formattingEdits" A..!= False
     specFormattingNoop <- obj A..:? "formattingNoop" A..!= False
@@ -64,12 +69,15 @@ instance A.FromJSON LspSpec where
     specCache <- obj A..:? "cache" A..!= False
     specCacheReuse <- obj A..:? "cacheReuse" A..!= False
     specDidChangeAppend <- obj A..:? "didChangeAppend"
+    specDidChangeRevertToOriginal <- obj A..:? "didChangeRevertToOriginal" A..!= False
     specDidChangeAppendCharwise <- obj A..:? "didChangeAppendCharwise" A..!= False
     specDefinitionAt <- obj A..:? "definitionAt"
     specDocumentHighlightAt <- obj A..:? "documentHighlightAt"
     return LspSpec
       { specDiagnosticsAtLeast = specDiagnosticsAtLeast
       , specDiagnosticsAfterChangeAtMost = specDiagnosticsAfterChangeAtMost
+      , specDiagnosticsAfterAppendAtLeast = specDiagnosticsAfterAppendAtLeast
+      , specDiagnosticsAfterRevertAtMost = specDiagnosticsAfterRevertAtMost
       , specDiagnosticMessageContains = specDiagnosticMessageContains
       , specFormattingEdits = specFormattingEdits
       , specFormattingNoop = specFormattingNoop
@@ -81,6 +89,7 @@ instance A.FromJSON LspSpec where
       , specCache = specCache
       , specCacheReuse = specCacheReuse
       , specDidChangeAppend = specDidChangeAppend
+      , specDidChangeRevertToOriginal = specDidChangeRevertToOriginal
       , specDidChangeAppendCharwise = specDidChangeAppendCharwise
       , specDefinitionAt = specDefinitionAt
       , specDocumentHighlightAt = specDocumentHighlightAt
@@ -188,6 +197,8 @@ loadSpec path = do
     then return LspSpec
       { specDiagnosticsAtLeast = 0
       , specDiagnosticsAfterChangeAtMost = Nothing
+      , specDiagnosticsAfterAppendAtLeast = Nothing
+      , specDiagnosticsAfterRevertAtMost = Nothing
       , specDiagnosticMessageContains = []
       , specFormattingEdits = False
       , specFormattingNoop = False
@@ -199,6 +210,7 @@ loadSpec path = do
       , specCache = False
       , specCacheReuse = False
       , specDidChangeAppend = Nothing
+      , specDidChangeRevertToOriginal = False
       , specDidChangeAppendCharwise = False
       , specDefinitionAt = Nothing
       , specDocumentHighlightAt = Nothing
@@ -247,11 +259,23 @@ runSession lspPath uri content spec doSave = do
           if specDidChangeAppendCharwise spec
             then sendCharwiseAppend inH uri 2 content suffix
             else sendMessage inH (didChangeAppendNotification uri 2 content suffix)
+          case specDiagnosticsAfterAppendAtLeast spec of
+            Nothing -> return ()
+            Just minCount -> do
+              _ <- expectDiagnosticsAtLeast outH uri minCount
+              return ()
           case specDiagnosticsAfterChangeAtMost spec of
             Nothing -> return ()
             Just maxCount -> do
               _ <- expectDiagnosticsAtMost outH uri maxCount
               return ()
+          when (specDidChangeRevertToOriginal spec) $ do
+            sendMessage inH (didChangeWholeNotification uri 3 content)
+            case specDiagnosticsAfterRevertAtMost spec of
+              Nothing -> return ()
+              Just maxCount -> do
+                _ <- expectDiagnosticsAtMostStrict outH uri maxCount
+                return ()
       when (specFormattingEdits spec) $ do
         sendMessage inH (formattingRequest 2 uri)
         expectNonEmptyEdits outH 2
@@ -351,6 +375,17 @@ expectDiagnosticsAtMost :: Handle -> T.Text -> Int -> IO [A.Value]
 expectDiagnosticsAtMost h uri maxExpected = do
   mDiags <- timeout 2000000 (awaitMessage h (matchDiagnostics uri))
   let diags = fromMaybe [] mDiags
+  let count = length diags
+  assertBool "diagnostics count too large" (count <= maxExpected)
+  return diags
+
+-- | Wait for diagnostics (strict) and ensure a maximum count.
+expectDiagnosticsAtMostStrict :: Handle -> T.Text -> Int -> IO [A.Value]
+expectDiagnosticsAtMostStrict h uri maxExpected = do
+  mDiags <- timeout 5000000 (awaitMessage h (matchDiagnostics uri))
+  diags <- case mDiags of
+    Just ds -> return ds
+    Nothing -> assertFailure "expected diagnostics notification after change" >> return []
   let count = length diags
   assertBool "diagnostics count too large" (count <= maxExpected)
   return diags
@@ -712,6 +747,25 @@ didChangeAppendNotification uri version oldText suffix =
               ]
           ]
       ]
+
+-- | Build a didChange notification with full document replacement text.
+didChangeWholeNotification :: T.Text -> Int -> T.Text -> A.Value
+didChangeWholeNotification uri version text =
+  A.object
+    [ "jsonrpc" A..= ("2.0" :: String)
+    , "method" A..= ("textDocument/didChange" :: String)
+    , "params" A..= A.object
+        [ "textDocument" A..= A.object
+            [ "uri" A..= uri
+            , "version" A..= version
+            ]
+        , "contentChanges" A..=
+            [ A.object
+                [ "text" A..= text
+                ]
+            ]
+        ]
+    ]
 
 -- | Send append edits one character at a time with monotonically increasing versions.
 sendCharwiseAppend :: Handle -> T.Text -> Int -> T.Text -> T.Text -> IO ()

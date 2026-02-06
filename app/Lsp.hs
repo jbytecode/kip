@@ -36,7 +36,7 @@ import Control.Monad (void, when, forM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (runReaderT)
 import Data.List (foldl', nub, isPrefixOf, sortOn)
-import Data.Char (isAlphaNum)
+import Data.Char (isAlphaNum, ord)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList, listToMaybe, isJust)
 import qualified Data.Map.Strict as Map
 import qualified Data.MultiMap as MultiMap
@@ -68,7 +68,7 @@ import Kip.Eval (EvalState, emptyEvalState)
 import Kip.Parser
 import Kip.Render
 import qualified Kip.Render as Render
-import Kip.Runner (RenderCtx(..), Lang(..), renderTCError, tcErrSpan, loadPreludeState)
+import Kip.Runner (RenderCtx(..), Lang(..), renderParseError, renderTCError, tcErrSpan, loadPreludeState)
 import Kip.TypeCheck
 import Language.Foma
 import Paths_kip (getDataFileName)
@@ -101,6 +101,8 @@ data LspState = LspState
   , lsBaseParser :: !ParserState
     -- | Typechecker state including the prelude (stdlib) context.
   , lsBaseTC :: !TCState
+    -- | Latest raw text per URI (authoritative for incremental edits).
+  , lsLatestText :: Map.Map Uri Text
     -- | Per-URI document cache with parsed/typed state.
   , lsDocs :: Map.Map Uri DocState
     -- | Workspace definition index for cross-file go-to-definition.
@@ -292,6 +294,7 @@ initState = do
     , lsModuleDirs = moduleDirs
     , lsBaseParser = baseParser
     , lsBaseTC = baseTC
+    , lsLatestText = Map.empty
     , lsDocs = Map.empty
     , lsDefIndex = Map.empty
     }
@@ -302,38 +305,36 @@ onDidOpen msg = do
   let doc = msg ^. L.params . L.textDocument
       uri = doc ^. L.uri
       text = doc ^. L.text
+  withState $ \s ->
+    return (s { lsLatestText = Map.insert uri text (lsLatestText s) }, ())
   processDocument uri text True
 
 onDidChange :: TNotificationMessage 'Method_TextDocumentDidChange -> LspM Config ()
 onDidChange msg = do
+  st <- readState
   let params = msg ^. L.params
       uri = params ^. L.textDocument . L.uri
       changes = params ^. L.contentChanges
-  newText <- withState $ \s ->
-    let docs = lsDocs s
-        mKey = lookupDocKeyByUri uri docs
-        oldText =
-          case mKey of
-            Just key -> dsText (docs Map.! key)
-            Nothing -> ""
-        changedText = applyContentChanges oldText changes
-        docs' =
-          case mKey of
-            Just key -> Map.adjust (\d -> d { dsText = changedText }) key docs
-            Nothing -> docs
-    in return (s { lsDocs = docs' }, changedText)
-  finalText <-
-    if T.null newText
-      then do
-        st <- readState
-        liftIO (docTextForChange uri (lsDocs st))
-      else return newText
-  processDocument uri finalText True
+      mOld = lookupLatestTextByUri uri st
+  oldText <- case mOld of
+    Just t -> return t
+    Nothing -> liftIO (docTextForChange uri (lsDocs st))
+  let newText = applyContentChanges oldText changes
+  withState $ \s ->
+    return (s { lsLatestText = Map.insert uri newText (lsLatestText s) }, ())
+  processDocument uri newText True
 
 onDidClose :: TNotificationMessage 'Method_TextDocumentDidClose -> LspM Config ()
 onDidClose msg = do
   let uri = msg ^. L.params . L.textDocument . L.uri
-  withState $ \s -> return (s { lsDocs = Map.delete uri (lsDocs s) }, ())
+  withState $ \s ->
+    return
+      ( s
+          { lsDocs = Map.delete uri (lsDocs s)
+          , lsLatestText = Map.delete uri (lsLatestText s)
+          }
+      , ()
+      )
 
 onDidSave :: TNotificationMessage 'Method_TextDocumentDidSave -> LspM Config ()
 onDidSave msg = do
@@ -1442,24 +1443,44 @@ applyRangeEdit txt (Range startPos endPos) replacement =
 
 -- | Convert an LSP position to a text offset, clamped to valid bounds.
 --
--- LSP positions are line/character pairs. We treat the character as a code
--- unit index compatible with the editor stream and clamp out-of-range values.
+-- LSP positions are UTF-16 line/character pairs. This scanner handles both
+-- LF and CRLF line endings and clamps to end-of-line/file when needed.
 offsetAtPosition :: Text -> Position -> Int
 offsetAtPosition txt (Position line0 col0) =
-  let targetLine = max 0 (fromIntegral line0)
-      targetCol = max 0 (fromIntegral col0)
-      lines' = T.splitOn "\n" txt
-      lineCount = length lines'
-  in if lineCount == 0
-      then 0
-      else
-        if targetLine >= lineCount
-          then T.length txt
-          else
-            let (before, current:_) = splitAt targetLine lines'
-                beforeLen = sum (map T.length before) + length before
-                col = min targetCol (T.length current)
-            in beforeLen + col
+  go 0 0 0 (T.unpack txt)
+  where
+    targetLine = max 0 (fromIntegral line0)
+    targetCol = max 0 (fromIntegral col0)
+
+    go :: Int -> Int -> Int -> String -> Int
+    go off line col chars
+      | line > targetLine = off
+      | line == targetLine && col >= targetCol = off
+      | otherwise =
+          case chars of
+            [] -> off
+            '\r':'\n':rest ->
+              if line == targetLine
+                then off
+                else go (off + 2) (line + 1) 0 rest
+            '\r':rest ->
+              if line == targetLine
+                then off
+                else go (off + 1) (line + 1) 0 rest
+            '\n':rest ->
+              if line == targetLine
+                then off
+                else go (off + 1) (line + 1) 0 rest
+            c:rest ->
+              let w = utf16Width c
+                  nextCol = col + w
+              in if line == targetLine && nextCol > targetCol
+                  then off
+                  else go (off + 1) line nextCol rest
+
+    utf16Width :: Char -> Int
+    utf16Width c =
+      if ord c > 0xFFFF then 2 else 1
 
 -- | Parse/typecheck a document and optionally publish diagnostics.
 --
@@ -1470,13 +1491,24 @@ processDocument :: Uri -> Text -> Bool -> LspM Config ()
 processDocument uri text publish = do
   st <- readState
   (doc, diags) <- liftIO (analyzeDocument st uri text)
-  when publish $ publishDiagnostics 100 (toNormalizedUri uri) Nothing (partitionBySource diags)
-  withState $ \s ->
-    let defsForDoc = defLocationsForUri uri (dsDefSpans doc)
-        merged = Map.union (lsDefIndex s) defsForDoc
-    in return (s { lsDocs = Map.insert uri doc (lsDocs s)
-                 , lsDefIndex = merged
-                 }, ())
+  stNow <- readState
+  let stale =
+        case lookupLatestTextByUri uri stNow of
+          Just latest -> latest /= text
+          Nothing -> False
+  if stale
+    then return ()
+    else do
+      when publish $ do
+        let bySource = partitionBySource diags
+            bySource' = Map.insertWith (<>) (Just "kip") mempty bySource
+        publishDiagnostics 100 (toNormalizedUri uri) Nothing bySource'
+      withState $ \s ->
+        let defsForDoc = defLocationsForUri uri (dsDefSpans doc)
+            merged = Map.union (lsDefIndex s) defsForDoc
+        in return (s { lsDocs = Map.insert uri doc (lsDocs s)
+                     , lsDefIndex = merged
+                     }, ())
 
 -- | Analyze a document and produce a fresh 'DocState'.
 --
@@ -1680,7 +1712,8 @@ parseErrorToDiagnostic source bundle =
       (line, col) = offsetToPos (T.take (errorOffset err) source)
       pos = Position line col
       range = Range pos pos
-  in Diagnostic range (Just DiagnosticSeverity_Error) Nothing Nothing (Just "kip") (T.pack (show err)) Nothing Nothing Nothing
+      msg = renderParseError LangTr bundle
+  in Diagnostic range (Just DiagnosticSeverity_Error) Nothing Nothing (Just "kip") msg Nothing Nothing Nothing
 
 -- | Render a typechecker error into a diagnostic using the LSP render context.
 tcErrorToDiagnostic :: LspState -> Text -> TCError -> IO Diagnostic
@@ -2697,6 +2730,18 @@ docTextForChange uri docs =
         Just path -> do
           exists <- doesFileExist path
           if exists then TIO.readFile path else return ""
+
+-- | Lookup the latest raw text for a URI using exact/normalized matching.
+lookupLatestTextByUri :: Uri -> LspState -> Maybe Text
+lookupLatestTextByUri uri st =
+  case Map.lookup uri (lsLatestText st) of
+    Just txt -> Just txt
+    Nothing ->
+      snd <$> listToMaybe
+        [ kv
+        | kv@(k, _) <- Map.toList (lsLatestText st)
+        , toNormalizedUri k == toNormalizedUri uri
+        ]
 
 -- | Lookup a document by exact or normalized URI.
 lookupDocByUri :: Uri -> Map.Map Uri DocState -> Maybe Text

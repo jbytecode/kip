@@ -1,0 +1,7 @@
+{
+  "diagnosticsAtLeast": 0,
+  "didChangeAppend": "\n\net.\n",
+  "diagnosticsAfterAppendAtLeast": 1,
+  "didChangeRevertToOriginal": true,
+  "diagnosticsAfterRevertAtMost": 0
+}
