@@ -818,7 +818,7 @@ onHover req respond = do
       case token of
         Nothing -> respond (Right (InR Null))
         Just (TokenKeyword _) -> respond (Right (InR Null))
-        _ -> do
+        Just (TokenIdent tokenIdent) -> do
           let resolved = resolveAtPosition pos doc
               pst = dsParser doc
               paramTyCons = [name | (name, arity) <- parserTyCons pst, arity > 0]
@@ -847,6 +847,19 @@ onHover req respond = do
                             isInfinitive = stmtInf || isInfBySet
                         renderHoverSignatureMaybe fnName args retTy isInfinitive
                       Nothing -> return Nothing
+                  Nothing -> return Nothing
+          let hoverFromBindDefinition =
+                case findBindExpAt pos (Just tokenIdent) doc of
+                  Just bindExp ->
+                    case binderTypeFromUses pos doc of
+                      Just ty -> renderTyNomMaybe ty
+                      Nothing -> do
+                        let tcSt' = dsTC doc
+                            boundExp = bindValueExp bindExp
+                        res <- liftIO (runTCM (inferType boundExp) tcSt')
+                        case res of
+                          Right (Just ty, _) -> renderTyNomMaybe ty
+                          _ -> return Nothing
                   Nothing -> return Nothing
           let hoverFromResolvedSig =
                 case raSpanInfo resolved >>= siSig of
@@ -1088,16 +1101,19 @@ onHover req respond = do
                 case raExp resolved of
                   Nothing -> return Nothing
                   Just exp' -> case exp' of
-                    Bind {bindNameAnn = bindNameAnn} ->
+                    Bind {bindNameAnn = bindNameAnn, bindExp = bindExp} ->
                       if posInSpan pos (annSpan bindNameAnn)
-                        then case raResolvedType resolved of
-                          Just ty -> renderTyNomMaybe ty
-                          Nothing -> do
-                            let tcSt' = dsTC doc
-                            res <- liftIO (runTCM (inferType exp') tcSt')
-                            case res of
-                              Right (Just ty, _) -> renderTyNomMaybe ty
-                              _ -> return Nothing
+                        then do
+                          let binderTy =
+                                spanInfoForSpan (annSpan bindNameAnn) (dsSpanIndex doc) >>= siType
+                          case binderTy of
+                            Just ty -> renderTyNomMaybe ty
+                            Nothing -> do
+                              let tcSt' = dsTC doc
+                              res <- liftIO (runTCM (inferType bindExp) tcSt')
+                              case res of
+                                Right (Just ty, _) -> renderTyNomMaybe ty
+                                _ -> return Nothing
                         else return Nothing
                     var@Var{} -> do
                       sig <- tryRenderSignature exp' var
@@ -1142,6 +1158,7 @@ onHover req respond = do
                             _ -> return Nothing
           hoverText <- firstJustM
             [ hoverFromDefinition
+            , hoverFromBindDefinition
             , hoverFromConstructor
             , hoverFromResolvedSig
             , hoverFromPatternBinding
@@ -1154,6 +1171,11 @@ onHover req respond = do
                   hover = Hover contents Nothing
               respond (Right (InL hover))
             Nothing -> respond (Right (InR Null))
+  where
+    bindValueExp exp' =
+      case exp' of
+        Seq _ first _ -> first
+        _ -> exp'
     
 #if MIN_VERSION_lsp_types(2,3,0)
 onDefinition :: TRequestMessage 'Method_TextDocumentDefinition -> (Either (TResponseError 'Method_TextDocumentDefinition) (MessageResult 'Method_TextDocumentDefinition) -> LspM Config ()) -> LspM Config ()
@@ -1888,6 +1910,83 @@ argTypeForVarAt pos ident doc =
 findFunctionArgsAt :: Position -> DocState -> Maybe [Arg Ann]
 findFunctionArgsAt pos doc =
   fmap fst (findFunctionClauseAtScope pos doc)
+
+-- | Recover binder type by inspecting resolved variable uses in binder scope.
+--
+-- Some binder sites can overlap with enclosing expression spans whose type is
+-- not the bound value type. This fallback uses resolved identifier+type data
+-- from in-scope variable uses to recover the binder's actual type.
+binderTypeFromUses :: Position -> DocState -> Maybe (Ty Ann)
+binderTypeFromUses pos doc = do
+  binder <- listToMaybe . sortOn (rangeSizeForSort . biRange) $
+    [ bi | bi <- dsBinderSpans doc, positionInRange pos (biRange bi) ]
+  fmap snd . listToMaybe . sortOn fst $
+    [ (spanSizeForSort sp, ty)
+    | (sp, ident) <- Map.toList (dsResolved doc)
+    , ident == biIdent binder
+    , spanInScope sp (biScope binder)
+    , spanToRange sp /= biRange binder
+    , Just ty <- [Map.lookup sp (dsResolvedTypes doc)]
+    ]
+  where
+    spanInScope sp scope =
+      case sp of
+        Span s e -> posInSpan (posToLsp s) scope && posInSpan (posToLsp e) scope
+        NoSpan -> False
+
+-- | Find the bound expression of a binder definition at cursor position.
+--
+-- This matches only the binder name site (e.g. \"x\" in \"x için ...\")
+-- and returns the expression being bound so hover can show the binder type.
+findBindExpAt :: Position -> Maybe Text -> DocState -> Maybe (Exp Ann)
+findBindExpAt pos mWord doc =
+  fmap thd3 . listToMaybe . sortOn candidateSortKey . concatMap collectStmt $ dsStmts doc
+  where
+    thd3 (_, _, c) = c
+    spanKey sp =
+      case sp of
+        NoSpan -> maxBound :: Int
+        _ -> spanSizeForSort sp
+    candidateSortKey (bindSp, expSp, _) = (spanKey bindSp, spanKey expSp)
+    collectStmt stt =
+      case stt of
+        Defn _ _ e -> collectExp e
+        Function _ _ _ clauses _ -> concatMap collectClause clauses
+        ExpStmt e -> collectExp e
+        _ -> []
+    collectClause (Clause pat body) = collectPat pat ++ collectExp body
+    collectPat pat =
+      case pat of
+        PWildcard _ -> []
+        PVar _ _ -> []
+        PCtor _ pats -> concatMap collectPat pats
+        PIntLit _ _ -> []
+        PFloatLit _ _ -> []
+        PStrLit _ _ -> []
+        PListLit pats -> concatMap collectPat pats
+    collectExp e =
+      let nested =
+            case e of
+              App _ fn args -> concatMap collectExp (fn : args)
+              Bind _ _ _ bindExp -> collectExp bindExp
+              Seq _ a b -> collectExp a ++ collectExp b
+              Match _ scr clauses -> collectExp scr ++ concatMap collectClause clauses
+              Let _ _ body -> collectExp body
+              Ascribe _ _ exp' -> collectExp exp'
+              _ -> []
+      in case e of
+          Bind {bindName = bindName, bindNameAnn = bindNameAnn, bindExp = bindExp} ->
+            let bindSpan = annSpan bindNameAnn
+                bindToken = snd bindName
+                tokenMatches =
+                  case mWord of
+                    Just w -> w == bindToken
+                    Nothing -> False
+            in case bindSpan of
+                NoSpan -> nested
+                _ | tokenMatches && posInSpan pos bindSpan -> (bindSpan, annSpan (annExp bindExp), bindExp) : nested
+                  | otherwise -> nested
+          _ -> nested
 
 -- | Check whether a clause body or pattern contains a cursor position.
 clauseContainsPos :: Position -> Clause Ann -> Bool
