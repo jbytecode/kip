@@ -364,8 +364,16 @@ renderTy cache fsm paramTyCons tyMods ty =
       renderIdentWithCase cache fsm ([T.pack "ondalık"], T.pack "sayı") (annCase ann)
     TyString ann ->
       renderIdentWithCase cache fsm ([], T.pack "dizge") (annCase ann)
-    Arr {} ->
-      return "işlev"
+    Arr ann d i -> do
+      let d' = setTyCase Gen d
+          i' = setTyCase Nom i
+      dStr <- renderTy cache fsm paramTyCons tyMods d'
+      iBase <- renderTyPossessive cache fsm paramTyCons tyMods i'
+      iStr <-
+        if annCase ann == Nom
+          then return iBase
+          else applyCaseToLastWord cache fsm (annCase ann) iBase
+      return (dStr ++ " " ++ normalizePossIns iStr)
 
 -- | Render a type in nominative case (for error messages).
 renderTyNom :: RenderCache -- ^ Render cache.
@@ -397,6 +405,19 @@ renderTyNom cache fsm paramTyCons tyMods ty =
       renderIdentWithCase cache fsm ([], T.pack "dizge") Nom
     Arr {} ->
       return "işlev"
+
+-- | Rewrite a type's top-level case annotation recursively.
+setTyCase :: Case -> Ty Ann -> Ty Ann
+setTyCase cas ty =
+  case ty of
+    TyInd ann name -> TyInd (setAnnCase ann cas) name
+    TyVar ann name -> TyVar (setAnnCase ann cas) name
+    TySkolem ann name -> TySkolem (setAnnCase ann cas) name
+    TyInt ann -> TyInt (setAnnCase ann cas)
+    TyFloat ann -> TyFloat (setAnnCase ann cas)
+    TyString ann -> TyString (setAnnCase ann cas)
+    TyApp ann ctor args -> TyApp (setAnnCase ann cas) (setTyCase cas ctor) (map (setTyCase cas) args)
+    Arr ann d i -> Arr (setAnnCase ann cas) (setTyCase cas d) (setTyCase cas i)
 
 -- | Render a type as parts with a flag indicating type variables.
 renderTyParts :: RenderCache -- ^ Render cache.
@@ -437,8 +458,9 @@ renderTyParts cache fsm paramTyCons tyMods ty =
     TyString ann -> do
       s <- renderIdentWithCase cache fsm ([], T.pack "dizge") (annCase ann)
       return [(s, False)]
-    Arr {} ->
-      return [("işlev", False)]
+    Arr {} -> do
+      s <- renderTy cache fsm paramTyCons tyMods ty
+      return [(s, False)]
 
 -- | Render a typed argument as a single string.
 renderArg :: RenderCache -- ^ Render cache.
@@ -509,8 +531,26 @@ renderTyPossessive cache fsm paramTyCons tyMods ty =
       renderIdentWithCases cache fsm ([T.pack "ondalık"], T.pack "sayı") (possessiveCases (annCase ann))
     TyString ann ->
       renderIdentWithCases cache fsm ([], T.pack "dizge") (possessiveCases (annCase ann))
-    Arr ann _ _ ->
-      return ("işlev" ++ caseTag (annCase ann))
+    Arr ann d i -> do
+      let d' = setTyCase Gen d
+          i' = setTyCase Nom i
+      dStr <- renderTy cache fsm paramTyCons tyMods d'
+      iBase <- renderTyPossessive cache fsm paramTyCons tyMods i'
+      iStr <-
+        if annCase ann == Nom
+          then return iBase
+          else applyCaseToLastWord cache fsm (annCase ann) iBase
+      return (dStr ++ " " ++ normalizePossIns iStr)
+
+-- | Normalize possessive+instrumental spellings like "b'si'yle" to "b'siyle".
+normalizePossIns :: String -> String
+normalizePossIns s =
+  let t = T.pack s
+      t1 = T.replace (T.pack "'si'yle") (T.pack "'siyle") t
+      t2 = T.replace (T.pack "'sı'yla") (T.pack "'sıyla") t1
+      t3 = T.replace (T.pack "'su'yla") (T.pack "'suyla") t2
+      t4 = T.replace (T.pack "'sü'yle") (T.pack "'süyle") t3
+  in T.unpack t4
 
 -- | Render type parts with possessive suffixes before grammatical case.
 renderTyPartsPossessive :: RenderCache -- ^ Render cache.
@@ -547,8 +587,9 @@ renderTyPartsPossessive cache fsm paramTyCons tyMods ty =
     TyString ann -> do
       s <- renderIdentWithCases cache fsm ([], T.pack "dizge") (possessiveCases (annCase ann))
       return [(s, False)]
-    Arr ann _ _ ->
-      return [("işlev" ++ caseTag (annCase ann), False)]
+    Arr {} -> do
+      s <- renderTyPossessive cache fsm paramTyCons tyMods ty
+      return [(s, False)]
 
 -- | Build a possessive-then-case sequence.
 possessiveCases :: Case -- ^ Target case.

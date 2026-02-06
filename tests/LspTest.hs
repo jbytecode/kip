@@ -48,6 +48,7 @@ data LspSpec = LspSpec
   , specDidChangeRevertToOriginal :: Bool
   , specDidChangeAppendCharwise :: Bool
   , specDefinitionAt :: Maybe DefinitionQuery
+  , specTypeDefinitionAt :: Maybe DefinitionQuery
   , specDocumentHighlightAt :: Maybe HighlightQuery
   }
 
@@ -72,6 +73,7 @@ instance A.FromJSON LspSpec where
     specDidChangeRevertToOriginal <- obj A..:? "didChangeRevertToOriginal" A..!= False
     specDidChangeAppendCharwise <- obj A..:? "didChangeAppendCharwise" A..!= False
     specDefinitionAt <- obj A..:? "definitionAt"
+    specTypeDefinitionAt <- obj A..:? "typeDefinitionAt"
     specDocumentHighlightAt <- obj A..:? "documentHighlightAt"
     return LspSpec
       { specDiagnosticsAtLeast = specDiagnosticsAtLeast
@@ -92,6 +94,7 @@ instance A.FromJSON LspSpec where
       , specDidChangeRevertToOriginal = specDidChangeRevertToOriginal
       , specDidChangeAppendCharwise = specDidChangeAppendCharwise
       , specDefinitionAt = specDefinitionAt
+      , specTypeDefinitionAt = specTypeDefinitionAt
       , specDocumentHighlightAt = specDocumentHighlightAt
       }
 
@@ -213,6 +216,7 @@ loadSpec path = do
       , specDidChangeRevertToOriginal = False
       , specDidChangeAppendCharwise = False
       , specDefinitionAt = Nothing
+      , specTypeDefinitionAt = Nothing
       , specDocumentHighlightAt = Nothing
       }
     else do
@@ -295,6 +299,11 @@ runSession lspPath uri content spec doSave = do
         Just defQuery -> do
           sendMessage inH (definitionRequest 6 uri defQuery)
           expectDefinition outH 6 uri defQuery
+      case specTypeDefinitionAt spec of
+        Nothing -> return ()
+        Just defQuery -> do
+          sendMessage inH (typeDefinitionRequest 8 uri defQuery)
+          expectDefinition outH 8 uri defQuery
       case specDocumentHighlightAt spec of
         Nothing -> return ()
         Just hlQuery -> do
@@ -848,6 +857,22 @@ definitionRequest reqId uri defQuery =
     [ "jsonrpc" A..= ("2.0" :: String)
     , "id" A..= reqId
     , "method" A..= ("textDocument/definition" :: String)
+    , "params" A..= A.object
+        [ "textDocument" A..= A.object ["uri" A..= uri]
+        , "position" A..= A.object
+            [ "line" A..= defLine defQuery
+            , "character" A..= defCharacter defQuery
+            ]
+        ]
+    ]
+
+-- | Build a typeDefinition request payload.
+typeDefinitionRequest :: Int -> T.Text -> DefinitionQuery -> A.Value
+typeDefinitionRequest reqId uri defQuery =
+  A.object
+    [ "jsonrpc" A..= ("2.0" :: String)
+    , "id" A..= reqId
+    , "method" A..= ("textDocument/typeDefinition" :: String)
     , "params" A..= A.object
         [ "textDocument" A..= A.object ["uri" A..= uri]
         , "position" A..= A.object

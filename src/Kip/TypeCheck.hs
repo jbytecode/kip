@@ -106,19 +106,19 @@ import Data.Word (Word8)
 import Kip.AST
 import qualified Kip.Primitive as Prim
 
-import Control.Monad (unless, when, forM_)
-import Control.Applicative ((<|>))
+import Control.Monad (unless, when, forM_, guard)
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Except
 import Control.Monad.IO.Class
-import Data.List (find, foldl', intersect, nub)
-import Data.Maybe (fromMaybe, catMaybes, mapMaybe, isJust, maybeToList)
+import Data.List (find, foldl', intersect, nub, zipWith4)
+import Data.Maybe (fromMaybe, catMaybes, mapMaybe, isJust, maybeToList, listToMaybe)
 import qualified Data.Map.Strict as Map
 import qualified Data.MultiMap as MultiMap
 import System.FilePath (FilePath)
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import Kip.Parser (stripBareCaseSuffix)
 
 -- | Record a resolved name at a source span (most-recent wins).
 recordResolvedName :: Span -> Identifier -> TCM ()
@@ -281,15 +281,23 @@ tcExp1With allowEffect e =
           resolveVar annExp varName (Just (length args)) varCandidates
         _ -> tcExp1With allowEffect fn
       args' <- mapM (tcExp1With False) args
-      case fn' of
+      let (fnResolved, preAppliedArgs) = flattenApplied fn'
+          allArgs = preAppliedArgs ++ args'
+      case fnResolved of
         Var {annExp = annFn, varName, varCandidates} -> do
           case varCandidates of
             (ident, _) : _ -> unless allowEffect (rejectReadEffect annFn ident)
             _ -> return ()
-          MkTCState{tcFuncSigs, tcTyCons, tcCtors} <- get
+          MkTCState{tcFuncSigs, tcTyCons, tcCtors, tcFuncSigRets, tcVarTys} <- get
+          let isHigherOrderVarCall =
+                case lookupByCandidates tcVarTys varCandidates of
+                  Just Arr {} -> True
+                  _ -> False
+          when (isHigherOrderVarCall && annCase annFn /= Gen) $
+            lift (throwE (NoType (annSpan annApp)))
           let tyNames = Map.keys tcTyCons
               funcNames = MultiMap.keys tcFuncSigs
-          case args' of
+          case allArgs of
             [arg] | any (\(ident, _) -> ident `elem` tyNames) varCandidates
                   , not (any (\(ident, _) -> ident `elem` funcNames) varCandidates) ->
               return (applyTypeCase (annCase annFn) arg)
@@ -300,54 +308,52 @@ tcExp1With allowEffect e =
                       [] -> varName
               let fnNames = map fst varCandidates
                   allSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs]
-                  sigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig == length args']
-              if null sigs
+                  exactSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig == length allArgs]
+                  partialSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig > length allArgs]
+              if null exactSigs && null partialSigs
                 then do
                   case lookupByCandidatesMap tcCtors varCandidates of
                     Just (tys, _) -> do
-                      argTys <- mapM inferType args'
-                      if length tys /= length args'
+                      argTys <- mapM inferType allArgs
+                      if length tys /= length allArgs
                         then lift (throwE (NoMatchingCtor nameForErr argTys tys (annSpan annApp)))
                         else
                           if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys tys)
                             then do
                               case lookupByCandidatesMap tcCtors varCandidates of
                                 Just (ctorArgTys, resTy)
-                                  | length ctorArgTys == length args' && Nothing `notElem` argTys ->
+                                  | length ctorArgTys == length allArgs && Nothing `notElem` argTys ->
                                       case unifyTypes (Map.toList tcTyCons) ctorArgTys (catMaybes argTys) of
                                         Just subst ->
                                           recordResolvedType (annSpan annApp) (applySubst subst resTy)
                                         Nothing -> return ()
                                 _ -> return ()
-                              return (App annApp fn' args')
+                              return (App annApp fnResolved allArgs)
                             else lift (throwE (NoMatchingCtor nameForErr argTys tys (annSpan annApp)))
                     _ -> do
-                      -- Check if we're trying to apply a type variable as a function (parametric polymorphism violation)
-                      MkTCState{tcVarTys} <- get
                       case lookupByCandidates tcVarTys varCandidates of
                         Just TyVar {} -> lift (throwE (NoType (annSpan annApp)))
                         Just TySkolem {} -> lift (throwE (NoType (annSpan annApp)))
-                        _ -> return (App annApp fn' args')
+                        _ -> return (App annApp fnResolved allArgs)
                 else do
-                  argTys <- mapM inferType args'
+                  argTys <- mapM inferType allArgs
                   MkTCState{tcVarTys, tcCtors, tcCtx} <- get
-                  let argCases = map (annCase . annExp) args'
-                      -- Check if an argument should allow flexible case
+                  let argCases = map (annCase . annExp) allArgs
+                      boundVarNames = map fst tcVarTys
+                      hasBoundCandidate =
+                        any (\(ident, _) -> ident `elem` boundVarNames)
                       shouldAllowFlexibleCase arg = case arg of
-                        Var {varCandidates} ->
-                          -- Allow flexible case only for pattern-bound vars
+                        Var {varCandidates, varName} ->
                           isJust (lookupByCandidates tcVarTys varCandidates)
+                            || hasBoundCandidate varCandidates
+                            || varName `elem` boundVarNames
                         App {fn} -> case fn of
-                          -- If calling a constructor, enforce strict case
                           Var {varCandidates} ->
                             case lookupByCandidatesMap tcCtors varCandidates of
-                              Just _ -> False  -- Constructor application - strict case
-                              Nothing -> True  -- Function call - flexible case
-                          _ -> True  -- Other function calls - flexible case
-                        _ -> False  -- Other expressions require strict case matching
-                      -- If the argument still has multiple candidates,
-                      -- we can use that set to detect ambiguity between
-                      -- expected/actual cases before accepting a match.
+                              Just _ -> False
+                              Nothing -> True
+                          _ -> True
+                        _ -> False
                       hasExpectedCaseCandidate expCase arg =
                         let hasCase = any ((== expCase) . snd)
                         in case arg of
@@ -356,33 +362,28 @@ tcExp1With allowEffect e =
                             Var {varCandidates} -> hasCase varCandidates
                             _ -> False
                           _ -> False
-                      -- Detect a bare accusative surface form whose base
-                      -- is in scope but the surface is not; this is used
-                      -- to reject ambiguous parses that should have been
-                      -- P3s + Acc (e.g. "varlığı" vs "varlık").
                       isBareAccInCtx name =
-                        case stripBareAccSuffix name of
-                          Just base -> Set.member base tcCtx && not (Set.member name tcCtx)
+                        case stripBareCaseSuffix name of
+                          Just (base, Acc) -> Set.member base tcCtx && not (Set.member name tcCtx)
                           Nothing -> False
-                      matchSig argsSig =
+                          _ -> False
+                      matchExactSig (name, argsSig) =
                         let expCases = map (annCase . annTy . snd) argsSig
-                            argsForSig = fromMaybe args' (reorderByCases expCases argCases args')
-                            argTysForSig = fromMaybe argTys (reorderByCases expCases argCases argTys)
+                            argsForSig = fromMaybe allArgs (reorderByCasesNomFallback expCases argCases allArgs)
+                            argTysForSig = fromMaybe argTys (reorderByCasesNomFallback expCases argCases argTys)
                             argCasesReordered = map (annCase . annExp) argsForSig
                             tys = map snd argsSig
-                            -- Check for case mismatches after reordering (unless flexible case is allowed)
-                            hasCaseMismatch = or (zipWith3 checkCaseMismatch expCases argCasesReordered argsForSig)
-                            checkCaseMismatch expCase argCase arg =
+                            hasCaseMismatch = or (zipWith4 checkCaseMismatch expCases tys argCasesReordered argsForSig)
+                            checkCaseMismatch expCase expTy argCase arg =
                               let flexible = shouldAllowFlexibleCase arg
-                                  -- Ambiguous: argument was parsed as P3s but could also
-                                  -- satisfy an expected Acc case (e.g. P3s+Acc collapse).
+                                  higherOrder = case expTy of
+                                    Arr {} -> True
+                                    _ -> False
+                                  strictGenToIns = expCase == Ins && argCase == Gen
                                   ambiguousP3sAcc =
                                     expCase == Acc &&
                                     argCase == P3s &&
                                     hasExpectedCaseCandidate expCase arg
-                                  -- Ambiguous: bare accusative form whose base is in scope.
-                                  -- We reject these for Acc expectations to avoid silently
-                                  -- accepting the wrong case; "ki" is exempt (e.g. "ilki").
                                   ambiguousBareAcc =
                                     expCase == Acc &&
                                     argCase == Acc &&
@@ -391,35 +392,48 @@ tcExp1With allowEffect e =
                                         not (T.isSuffixOf (T.pack "ki") (snd varName)) &&
                                         isBareAccInCtx varName
                                       _ -> False
-                              in ambiguousP3sAcc || ambiguousBareAcc || (expCase /= argCase && not flexible)
+                              in ambiguousP3sAcc || ambiguousBareAcc || (expCase /= argCase && (not flexible || strictGenToIns) && not higherOrder)
                         in if hasCaseMismatch
-                             then Nothing  -- Reject case mismatch
+                             then Nothing
                              else if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTysForSig tys)
                                then Just (argsForSig, tys)
                                else Nothing
-                      matches =
+                      matchPartialSig (name, argsSig) = do
+                        let tys = map snd argsSig
+                            expCases = map (annCase . annTy . snd) argsSig
+                            idxs = matchPartialCaseIndices expCases argCases
+                        idxs <- idxs
+                        let pickedExpectedTys = map (tys !!) idxs
+                        guard (and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys pickedExpectedTys))
+                        retTy <- Map.lookup (name, tys) tcFuncSigRets
+                        let remainingIdxs = [i | i <- [0 .. length tys - 1], i `notElem` idxs]
+                            remainingTys = map (tys !!) remainingIdxs
+                        return (foldr (Arr (mkAnn Nom NoSpan)) retTy remainingTys)
+                      exactMatches =
                         [ (name, tysForSig, argsForSig)
-                        | (name, argsSig) <- sigs
-                        , Just (argsForSig, tysForSig) <- [matchSig argsSig]
+                        | (name, argsSig) <- exactSigs
+                        , Just (argsForSig, tysForSig) <- [matchExactSig (name, argsSig)]
                         ]
-                  if null matches
-                    then do
-                      if Nothing `elem` argTys
-                        then return (App annApp fn' args')
-                        else lift (throwE (NoMatchingOverload nameForErr argTys allSigs (annSpan annApp)))
-                    else
-                      case matches of
-                        (name, tysForSig, firstMatch):_ -> do
-                          case fn' of
-                            Var {annExp = annFn, varCandidates = (ident, _):_} -> do
-                              recordResolvedName (annSpan annFn) ident
-                              recordResolvedSig (annSpan annFn) name tysForSig
-                            _ -> return ()
-                          MkTCState{tcFuncSigRets} <- get
-                          forM_ (Map.lookup (name, tysForSig) tcFuncSigRets) (recordResolvedType (annSpan annApp))
-                          return (App annApp fn' firstMatch)
-                        [] -> return (App annApp fn' args')
-        _ -> return (App annApp fn' args')
+                      partialMatches = mapMaybe matchPartialSig partialSigs
+                  case exactMatches of
+                    (name, tysForSig, firstMatch):_ -> do
+                      case fnResolved of
+                        Var {annExp = annVar, varCandidates = (ident, _):_} -> do
+                          recordResolvedName (annSpan annVar) ident
+                          recordResolvedSig (annSpan annVar) name tysForSig
+                        _ -> return ()
+                      forM_ (Map.lookup (name, tysForSig) tcFuncSigRets) (recordResolvedType (annSpan annApp))
+                      return (App annApp fnResolved firstMatch)
+                    [] ->
+                      case partialMatches of
+                        partialTy:_ -> do
+                          recordResolvedType (annSpan annApp) partialTy
+                          return (App annApp fnResolved allArgs)
+                        [] ->
+                          if Nothing `elem` argTys
+                            then return (App annApp fnResolved allArgs)
+                            else lift (throwE (NoMatchingOverload nameForErr argTys allSigs (annSpan annApp)))
+        _ -> return (App annApp fnResolved allArgs)
     StrLit {annExp, lit} -> do
       recordResolvedType (annSpan annExp) (TyString (mkAnn Nom (annSpan annExp)))
       return (StrLit annExp lit)
@@ -505,6 +519,18 @@ applyTypeCase cas exp =
     FloatLit ann n ->
       FloatLit (setAnnCase ann cas) n
     _ -> exp
+
+-- | Match provided argument cases to expected signature cases for partial application.
+-- Returns expected argument indices matched by each provided argument, in order.
+matchPartialCaseIndices :: [Case] -> [Case] -> Maybe [Int]
+matchPartialCaseIndices expectedCases = go []
+  where
+    go _ [] = Just []
+    go used (pc:pcs) =
+      let matches = [i | (i, ec) <- zip [0..] expectedCases, ec == pc, i `notElem` used]
+      in case matches of
+           [i] -> (i :) <$> go (i : used) pcs
+           _ -> Nothing
 
 -- | Resolve a variable by candidates, arity, and scope.
 resolveVar :: Ann -- ^ Annotation of the variable occurrence.
@@ -603,19 +629,6 @@ fallbackCopulaIdent ctx (mods, word) = do
       case T.unsnoc txt of
         Just (pref, 'ğ') -> Just (pref <> T.pack "k")
         _ -> Nothing
-
--- | Strip a bare accusative suffix (no apostrophe) from an identifier.
--- This is intentionally narrow and only used for ambiguity detection
--- where surface forms can collapse (p3s+acc) and mislead overload matching.
-stripBareAccSuffix :: Identifier -- ^ Surface identifier.
-                   -> Maybe Identifier -- ^ Base identifier.
-stripBareAccSuffix (mods, word) =
-  let suffixes = map T.pack ["yi", "yı", "yu", "yü", "i", "ı", "u", "ü"]
-      tryStrip suf =
-        case T.stripSuffix suf word of
-          Just base | T.length base > 1 -> Just (mods, base)
-          _ -> Nothing
-  in foldr (\s acc -> acc <|> tryStrip s) Nothing suffixes
 
 -- | Expect exactly one result from a multi-variant computation.
 expectOne :: TCM [Exp Ann] -- ^ Computation returning expressions.
@@ -820,6 +833,29 @@ reorderByCases expected actual xs
          -> Maybe a -- ^ Selected value.
     pick cas = Map.lookup cas mapping
 
+-- | Reorder values to expected cases, allowing nominative values to fill
+-- unmatched expected cases. This is used in call matching where arguments
+-- often stay in nominative form while a function expects an explicit case.
+reorderByCasesNomFallback :: [Case] -> [Case] -> [a] -> Maybe [a]
+reorderByCasesNomFallback expected actual xs
+  | length expected /= length actual || length actual /= length xs = Nothing
+  | otherwise = map snd <$> go (zip actual xs) expected
+  where
+    go rems [] = Just []
+    go rems (c:cs) =
+      case pick c rems of
+        Nothing -> Nothing
+        Just (v, rems') -> (v :) <$> go rems' cs
+    pick c rems =
+      case break (\(ac, _) -> ac == c) rems of
+        (before, m:after) -> Just (m, before ++ after)
+        (_, []) ->
+          if c == Nom
+            then Nothing
+            else case break (\(ac, _) -> ac == Nom) rems of
+              (before, m:after) -> Just (m, before ++ after)
+              (_, []) -> Nothing
+
 -- | Type-check a clause in the context of argument types.
 tcClause :: [Arg Ann] -- ^ Argument signature.
          -> Bool -- ^ Whether this is an infinitive function (allows effects).
@@ -940,7 +976,7 @@ inferType e =
     Bind {bindExp} -> inferType bindExp
     Seq {second} -> inferType second
     Var {varCandidates} -> do
-      MkTCState{tcVals, tcCtors, tcCtx, tcVarTys} <- get
+      MkTCState{tcVals, tcCtors, tcCtx, tcVarTys, tcFuncSigs, tcFuncSigRets} <- get
       case lookupByCandidates tcVarTys varCandidates of
         Just ty -> return (Just ty)
         Nothing ->
@@ -950,12 +986,15 @@ inferType e =
               case lookupByCandidatesMap tcCtors varCandidates of
                 Just ([], ty) -> return (Just ty)
                 _ ->
-                  case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
-                    Just (ident, cas) -> return (Just (TyVar (mkAnn cas NoSpan) ident))
-                    Nothing -> return Nothing
+                  case inferFunctionValueType varCandidates tcFuncSigs tcFuncSigRets of
+                    Just ty -> return (Just ty)
+                    Nothing ->
+                      case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
+                        Just (ident, cas) -> return (Just (TyVar (mkAnn cas NoSpan) ident))
+                        Nothing -> return Nothing
     App {fn, args} ->
       case fn of
-        Var {annExp, varCandidates} -> do
+        Var {annExp = annFn, varCandidates} -> do
           MkTCState{tcCtors, tcTyCons, tcFuncSigRets, tcCtx, tcFuncSigs} <- get
           case lookupByCandidatesMap tcCtors varCandidates of
             Just (tys, resTy)
@@ -972,13 +1011,29 @@ inferType e =
               -- Find matching overload by argument types and return its return type
               argTys <- mapM inferType args
               let fnNames = map fst varCandidates
-                  sigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig == length args]
-                  matchSig (name, argsSig) =
+                  argCount = length args
+                  exactSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig == argCount]
+                  partialSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig > argCount]
+                  matchExactSig (name, argsSig) =
                     let tys = map snd argsSig
                     in if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys tys)
                          then Map.lookup (name, tys) tcFuncSigRets
                          else Nothing
-                  matches = mapMaybe matchSig sigs
+                  matchPartialSig (name, argsSig) =
+                    let tys = map snd argsSig
+                        expCases = map (annCase . annTy . snd) argsSig
+                        actCases = map (annCase . annExp) args
+                    in case matchPartialCaseIndices expCases actCases of
+                         Just idxs ->
+                           let appliedTys = map (tys !!) idxs
+                               remainingIdxs = [i | i <- [0 .. length tys - 1], i `notElem` idxs]
+                               remainingTys = map (tys !!) remainingIdxs
+                               mkPartial retTy = foldr (Arr (mkAnn Nom NoSpan)) retTy remainingTys
+                           in if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys appliedTys)
+                                then fmap mkPartial (Map.lookup (name, tys) tcFuncSigRets)
+                                else Nothing
+                         Nothing -> Nothing
+                  matches = mapMaybe matchExactSig exactSigs ++ mapMaybe matchPartialSig partialSigs
               case matches of
                 retTy:_ -> return (Just retTy)
                 [] ->
@@ -990,11 +1045,11 @@ inferType e =
                       let inCtx = any (\(ident, _) -> Set.member ident tcCtx) varCandidates
                           inSigs = any (\(ident, _) -> not (null (MultiMap.lookup ident tcFuncSigs))) varCandidates
                       in case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
-                           Just (ident, _) -> return (Just (TyVar (mkAnn (annCase annExp) NoSpan) ident))
+                           Just (ident, _) -> return (Just (TyVar (mkAnn (annCase annFn) NoSpan) ident))
                            Nothing ->
                              if inCtx || inSigs
                                then case varCandidates of
-                                 (ident, _):_ -> return (Just (TyVar (mkAnn (annCase annExp) NoSpan) ident))
+                                 (ident, _):_ -> return (Just (TyVar (mkAnn (annCase annFn) NoSpan) ident))
                                  [] -> return Nothing
                                else return Nothing
         _ -> return Nothing
@@ -1004,6 +1059,24 @@ inferType e =
         Clause _ body:_ -> inferType body
     Ascribe {ascType} -> return (Just ascType)
     _ -> return Nothing
+  where
+    inferFunctionValueType :: [(Identifier, Case)]
+                           -> MultiMap.MultiMap Identifier [Arg Ann]
+                           -> Map.Map (Identifier, [Ty Ann]) (Ty Ann)
+                           -> Maybe (Ty Ann)
+    inferFunctionValueType candidates sigs retMap =
+      let candidateNames = map fst candidates
+          sigEntries =
+            [ (name, map snd argsSig)
+            | name <- candidateNames
+            , argsSig <- MultiMap.lookup name sigs
+            , not (null argsSig)
+            ]
+          buildFunctionType argTys retTy =
+            foldr (Arr (mkAnn Nom NoSpan)) retTy argTys
+          fromEntry (name, argTys) =
+            fmap (buildFunctionType argTys) (Map.lookup (name, argTys) retMap)
+      in listToMaybe (mapMaybe fromEntry sigEntries)
 
 -- | Infer a return type from a list of clauses.
 inferReturnType :: [Clause Ann] -- ^ Clauses to inspect.

@@ -1,0 +1,10 @@
+{
+  "typeDefinitionAt": {
+    "line": 0,
+    "character": 1,
+    "atLeast": 1,
+    "expectedLine": 32,
+    "expectedCharacter": 13,
+    "uriContains": "temel.kip"
+  }
+}

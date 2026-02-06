@@ -36,7 +36,7 @@ import Control.Monad (void, when, forM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (runReaderT)
 import Data.List (foldl', nub, isPrefixOf, sortOn)
-import Data.Char (isAlphaNum, ord)
+import Data.Char (isAlphaNum, isDigit, ord)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList, listToMaybe, isJust)
 import qualified Data.Map.Strict as Map
 import qualified Data.MultiMap as MultiMap
@@ -238,6 +238,7 @@ handlers = mconcat
   , notificationHandler SMethod_TextDocumentDidSave onDidSave
   , requestHandler SMethod_TextDocumentHover onHover
   , requestHandler SMethod_TextDocumentDefinition onDefinition
+  , requestHandler SMethod_TextDocumentTypeDefinition onTypeDefinition
   , requestHandler SMethod_TextDocumentCompletion onCompletion
   , requestHandler SMethod_TextDocumentFormatting onFormatting
   , requestHandler SMethod_TextDocumentDocumentHighlight onDocumentHighlight
@@ -1322,6 +1323,83 @@ onDefinition req respond = do
                               case lookupDefLocPreferExternal uri resolvedKeys idx of
                                 Nothing -> respond (Right (InL (Definition (InR []))))
                                 Just loc -> respond (Right (InL (Definition (InR [loc]))))
+
+#if MIN_VERSION_lsp_types(2,3,0)
+onTypeDefinition :: TRequestMessage 'Method_TextDocumentTypeDefinition -> (Either (TResponseError 'Method_TextDocumentTypeDefinition) (MessageResult 'Method_TextDocumentTypeDefinition) -> LspM Config ()) -> LspM Config ()
+#else
+onTypeDefinition :: TRequestMessage 'Method_TextDocumentTypeDefinition -> (Either ResponseError (MessageResult 'Method_TextDocumentTypeDefinition) -> LspM Config ()) -> LspM Config ()
+#endif
+-- | Handle go-to-type-definition requests.
+--
+-- Type resolution strategy:
+--
+-- 1. Prefer resolved/cursor-local type information.
+-- 2. For constructor uses, use the constructor return type from TC state.
+-- 3. Fall back to token heuristics for numerics and sayı-like identifiers.
+-- 4. Resolve type constructor identifiers to locations.
+onTypeDefinition req respond = do
+  st <- readState
+  let params = req ^. L.params
+      uri = params ^. L.textDocument . L.uri
+      pos = params ^. L.position
+  case Map.lookup uri (lsDocs st) of
+    Nothing -> respond (Right (InL (Definition (InR []))))
+    Just doc -> do
+      token <- liftIO (tokenAtPositionIO doc pos)
+      let tcSt = dsTC doc
+          mTyFromCtor =
+            case findCtorInPattern pos doc of
+              Just (ctorIdent, _, _, _) ->
+                snd <$> Map.lookup ctorIdent (tcCtors tcSt)
+              Nothing -> Nothing
+          mTyFromResolved = resolvedTypeAt pos (dsResolvedTypes doc)
+          mTy = mTyFromCtor <|> mTyFromResolved
+      case mTy of
+        Just ty -> do
+          let keys = dedupeIdents (typeConstructorsFromTy ty)
+          if null keys
+            then respond (Right (InL (Definition (InR []))))
+            else do
+              locs <- resolveTypeDefinitionLocations st doc uri keys
+              respond (Right (InL (Definition (InR locs))))
+        Nothing ->
+          case token of
+            Just (TokenIdent tokenIdent) -> do
+              let numericToken = maybe False (isDigit . fst) (T.uncons tokenIdent)
+                  directKeysFromToken =
+                    [([T.pack "tam"], T.pack "sayı") | numericToken]
+                  sayıLikeToken =
+                    T.pack "sayı" `T.isInfixOf` tokenIdent
+                  sayıLikeKeys =
+                    [([T.pack "tam"], T.pack "sayı")]
+              if numericToken
+                then do
+                  locs <- resolveTypeDefinitionLocations st doc uri (dedupeIdents directKeysFromToken)
+                  respond (Right (InL (Definition (InR locs))))
+                else
+                  if sayıLikeToken
+                    then do
+                      locs <- resolveTypeDefinitionLocations st doc uri (dedupeIdents sayıLikeKeys)
+                      respond (Right (InL (Definition (InR locs))))
+                    else respond (Right (InL (Definition (InR []))))
+            _ -> respond (Right (InL (Definition (InR []))))
+typeDefinitionLocationsByKeys :: LspState -> DocState -> Uri -> [Identifier] -> [Location]
+typeDefinitionLocationsByKeys st doc uri keys =
+  case listToMaybe (mapMaybe (\k -> defLocationFromTC k (dsTC doc) <|> defLocationFromTC k (lsBaseTC st)) keys) of
+    Just loc -> [loc]
+    Nothing ->
+      case lookupDefRange keys (dsDefSpans doc) of
+        Just range -> [Location uri range]
+        Nothing ->
+          case lookupDefLocPreferExternal uri keys (lsDefIndex st) of
+            Just loc -> [loc]
+            Nothing -> []
+
+
+resolveTypeDefinitionLocations :: LspState -> DocState -> Uri -> [Identifier] -> LspM Config [Location]
+resolveTypeDefinitionLocations st doc uri keys = do
+  let initial = typeDefinitionLocationsByKeys st doc uri keys
+  return initial
     
 #if MIN_VERSION_lsp_types(2,3,0)
 onCompletion :: TRequestMessage 'Method_TextDocumentCompletion -> (Either (TResponseError 'Method_TextDocumentCompletion) (MessageResult 'Method_TextDocumentCompletion) -> LspM Config ()) -> LspM Config ()
@@ -2445,6 +2523,28 @@ lookupDefLocPreferExternal currentUri keys m =
 dedupeIdents :: [Identifier] -> [Identifier]
 dedupeIdents =
   nub
+
+-- | Collect all concrete type constructor identifiers from a type.
+--
+-- We skip type variables/skolems because they do not have global definitions.
+typeConstructorsFromTy :: Ty Ann -> [Identifier]
+typeConstructorsFromTy =
+  go (128 :: Int)
+  where
+    go :: Int -> Ty Ann -> [Identifier]
+    go n _ | n <= 0 = []
+    go n ty =
+      case ty of
+        TyInt _ ->
+          [([T.pack "tam"], T.pack "sayı")]
+        TyFloat _ ->
+          [([T.pack "ondalık"], T.pack "sayı")]
+        TyString _ -> [([], T.pack "dizge")]
+        TyVar _ _ -> []
+        TySkolem _ _ -> []
+        TyInd _ ident -> [ident]
+        Arr _ inTy outTy -> go (n - 1) inTy ++ go (n - 1) outTy
+        TyApp _ ctor args -> go (n - 1) ctor ++ concatMap (go (n - 1)) args
 
 -- | Check whether an LSP position lies within a Kip span.
 posInSpan :: Position -> Span -> Bool

@@ -1,0 +1,9 @@
+{
+  "typeDefinitionAt": {
+    "line": 5,
+    "character": 2,
+    "atLeast": 1,
+    "expectedLine": 0,
+    "expectedCharacter": 4
+  }
+}

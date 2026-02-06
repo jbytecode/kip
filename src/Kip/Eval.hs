@@ -189,13 +189,15 @@ evalStep localEnv e =
       -- Non-tail: we must compute function and arguments before applying.
       fn' <- evalExpLoop localEnv fn
       args' <- mapM (evalExpLoop localEnv) args
-      case fn' of
+      let (fnResolved, preAppliedArgs) = flattenApplied fn'
+          allArgs = preAppliedArgs ++ args'
+      case fnResolved of
         Var {varName, varCandidates} -> do
           -- Pull state once for all resolution steps.
           MkEvalState{evalFuncs, evalPrimFuncs, evalSelectors, evalTyCons} <- get
-          case args' of
+          case allArgs of
             [arg] | any (\(ident, _) -> Map.member ident evalTyCons) varCandidates ->
-              return (Done (applyTypeCase (annCase (annExp fn')) arg))
+              return (Done (applyTypeCase (annCase (annExp fnResolved)) arg))
             _ -> do
               let fnCandidates = map fst varCandidates
                   matches = [(n, def) | n <- fnCandidates, def <- MultiMap.lookup n evalFuncs]
@@ -205,30 +207,42 @@ evalStep localEnv e =
               -- decide selector/random/constructor outcomes without type inference.
               if null matches && null primMatches
                 then
-                  case (selectorMatches, args') of
+                  case (selectorMatches, allArgs) of
                     -- Fast-path selectors when the only possible resolution is a selector.
                     (idx:_, [arg]) ->
-                      Done <$> applySelector idx arg (App annApp fn' args')
+                      Done <$> applySelector idx arg (App annApp fnResolved allArgs)
                     _ ->
                       if isRandomCandidate varCandidates
                         -- Fast-path random primitive: no type inference needed.
-                        then Done <$> primIntRandom args'
-                        else return (Done (App annApp fn' args')) -- Constructor application or unevaluated call.
-                else
-                  pickPrimByTypes primMatches args' >>= \case
-                    Just primImpl -> Done <$> primImpl args'
+                        then Done <$> primIntRandom allArgs
+                        else return (Done (App annApp fnResolved allArgs)) -- Constructor application or unevaluated call.
+                else do
+                  let fromPartial = not (null preAppliedArgs)
+                      isFark = any (\(ident, _) -> ident == ([], T.pack "fark")) varCandidates
+                      preAppliedNeedsRightSection =
+                        case preAppliedArgs of
+                          [a] -> annCase (annExp a) /= Ins
+                          _ -> False
+                      partialArgs =
+                        case allArgs of
+                          [a, b] | isFark && preAppliedNeedsRightSection -> [b, a]
+                          _ -> allArgs
+                      pickPrim = if fromPartial then pickPrimByTypesPartial else pickPrimByTypes
+                      pickFn = if fromPartial then pickFunctionByTypesPartial else pickFunctionByTypes
+                  pickPrim primMatches partialArgs >>= \case
+                    Just (primImpl, primArgs) -> Done <$> primImpl primArgs
                     Nothing ->
-                      pickFunctionByTypes matches args' >>= \case
-                        Just def -> applyFunctionStep fn' localEnv def args'
+                      pickFn matches partialArgs >>= \case
+                        Just (def, fnArgs) -> applyFunctionStep fnResolved localEnv def fnArgs
                         Nothing ->
-                          case (selectorMatches, args') of
+                          case (selectorMatches, allArgs) of
                             (idx:_, [arg]) ->
-                              Done <$> applySelector idx arg (App annApp fn' args')
+                              Done <$> applySelector idx arg (App annApp fnResolved allArgs)
                             _ ->
                               if isRandomCandidate varCandidates
-                                then Done <$> primIntRandom args'
-                                else return (Done (App annApp fn' args')) -- Constructor application or unevaluated call
-        _ -> return (Done (App annApp fn' args'))
+                                then Done <$> primIntRandom allArgs
+                                else return (Done (App annApp fnResolved allArgs)) -- Constructor application or unevaluated call
+        _ -> return (Done (App annApp fnResolved allArgs))
     StrLit {annExp, lit} ->
       return (Done (StrLit annExp lit))
     IntLit {annExp, intVal} ->
@@ -470,6 +484,7 @@ matchList _ _ = Nothing
 isRandomCandidate :: [(Identifier, Case)] -> Bool
 isRandomCandidate =
   any (\(ident, _) -> ident == (["sayı"], "çek") || ident == ([], "sayı-çek"))
+
 -- | Apply a record selector or fall back when out of range.
 applySelector :: Int -- ^ Selector index.
               -> Exp Ann -- ^ Argument expression.
@@ -486,20 +501,20 @@ applySelector idx arg fallback =
 -- | Choose a function definition based on inferred argument types.
 pickFunctionByTypes :: [(Identifier, ([Arg Ann], [Clause Ann]))] -- ^ Candidate function definitions.
                     -> [Exp Ann] -- ^ Evaluated arguments.
-                    -> EvalM (Maybe ([Arg Ann], [Clause Ann])) -- ^ Selected function.
+                    -> EvalM (Maybe (([Arg Ann], [Clause Ann]), [Exp Ann])) -- ^ Selected function and args.
 pickFunctionByTypes defs args = do
   MkEvalState{evalTyCons} <- get
   argTys <- mapM inferType args
   let matches =
-        [ def
-        | (n, def@(args', _)) <- defs
+        [ (def, args)
+        | (_, def@(args', _)) <- defs
         , let tys = map snd args'
         , length tys == length args
         , and (zipWith (typeMatches (Map.toList evalTyCons)) argTys tys)
         ]
       fallback =
-        [ def
-        | (n, def@(args', _)) <- defs
+        [ (def, args)
+        | (_, def@(args', _)) <- defs
         , let tys = map snd args'
         , length tys == length args
         ]
@@ -512,12 +527,12 @@ pickFunctionByTypes defs args = do
 -- | Choose a primitive implementation based on inferred argument types.
 pickPrimByTypes :: [(Identifier, ([Arg Ann], [Exp Ann] -> EvalM (Exp Ann)))] -- ^ Primitive candidates.
                 -> [Exp Ann] -- ^ Evaluated arguments.
-                -> EvalM (Maybe ([Exp Ann] -> EvalM (Exp Ann))) -- ^ Selected primitive implementation.
+                -> EvalM (Maybe ([Exp Ann] -> EvalM (Exp Ann), [Exp Ann])) -- ^ Selected primitive and args.
 pickPrimByTypes defs args = do
   MkEvalState{evalTyCons} <- get
   argTys <- mapM inferType args
   let matches =
-        [ impl
+        [ (impl, args)
         | (_, (args', impl)) <- defs
         , let tys = map snd args'
         , length tys == length args
@@ -526,6 +541,99 @@ pickPrimByTypes defs args = do
   return $ case matches of
     d:_ -> Just d
     [] -> Nothing
+
+-- | Choose a function definition for calls that originated from partial application.
+-- Reorders arguments by expected case, allowing nominative values to fill gaps.
+pickFunctionByTypesPartial :: [(Identifier, ([Arg Ann], [Clause Ann]))]
+                           -> [Exp Ann]
+                           -> EvalM (Maybe (([Arg Ann], [Clause Ann]), [Exp Ann]))
+pickFunctionByTypesPartial defs args = do
+  MkEvalState{evalTyCons} <- get
+  argTys <- mapM inferType args
+  let argCases = map (annCase . annExp) args
+      matches =
+        [ (def, argsForSig)
+        | (_, def@(args', _)) <- defs
+        , let tys = map snd args'
+              expCases = map (annCase . annTy . snd) args'
+        , length tys == length args
+        , Just argsForSig <- [reorderByCasesNomFallback expCases argCases args]
+        , Just argTysForSig <- [reorderByCasesNomFallback expCases argCases argTys]
+        , and (zipWith (typeMatches (Map.toList evalTyCons)) argTysForSig tys)
+        ]
+      fallback =
+        [ (def, argsForSig)
+        | (_, def@(args', _)) <- defs
+        , let tys = map snd args'
+              expCases = map (annCase . annTy . snd) args'
+        , length tys == length args
+        , Just argsForSig <- [reorderByCasesNomFallback expCases argCases args]
+        ]
+  return $ case matches of
+    d:_ -> Just d
+    [] -> case fallback of
+      d:_ -> Just d
+      [] -> Nothing
+
+-- | Choose a primitive implementation for calls that originated from partial application.
+pickPrimByTypesPartial :: [(Identifier, ([Arg Ann], [Exp Ann] -> EvalM (Exp Ann)))]
+                       -> [Exp Ann]
+                       -> EvalM (Maybe ([Exp Ann] -> EvalM (Exp Ann), [Exp Ann]))
+pickPrimByTypesPartial defs args = do
+  MkEvalState{evalTyCons} <- get
+  argTys <- mapM inferType args
+  let argCases = map (annCase . annExp) args
+      matches =
+        [ (impl, argsForSig)
+        | (_, (args', impl)) <- defs
+        , let tys = map snd args'
+              expCases = map (annCase . annTy . snd) args'
+        , length tys == length args
+        , Just argsForSig <- [reorderByCasesNomFallback expCases argCases args]
+        , Just argTysForSig <- [reorderByCasesNomFallback expCases argCases argTys]
+        , and (zipWith (typeMatchesAllowUnknownPartial (Map.toList evalTyCons)) argTysForSig tys)
+        ]
+  return $ case matches of
+    d:_ -> Just d
+    [] -> Nothing
+
+-- | Type comparison used in partial-application primitive dispatch.
+-- Unknown argument types are accepted to avoid dropping valid sections.
+typeMatchesAllowUnknownPartial :: [(Identifier, Int)]
+                               -> Maybe (Ty Ann)
+                               -> Ty Ann
+                               -> Bool
+typeMatchesAllowUnknownPartial tyCons mTy ty =
+  case mTy of
+    Nothing -> True
+    Just _ -> typeMatchesAllowUnknown tyCons mTy ty
+
+-- | Reorder values to expected cases, allowing nominative to fill missing slots.
+reorderByCasesNomFallback :: [Case] -> [Case] -> [a] -> Maybe [a]
+reorderByCasesNomFallback expected actual xs
+  | length expected /= length actual || length actual /= length xs = Nothing
+  | otherwise = map snd <$> go (zip actual xs) expected
+  where
+    go rems [] = Just []
+    go rems (c:cs) =
+      case pick c rems of
+        Nothing -> Nothing
+        Just (v, rems') -> (v :) <$> go rems' cs
+    pick c rems =
+      case break (\(ac, _) -> ac == c) rems of
+        (before, m:after) -> Just (m, before ++ after)
+        (_, []) ->
+          if c == Nom
+            then Nothing
+            else
+              case break (\(ac, _) -> ac == Nom) rems of
+                (before, m:after) -> Just (m, before ++ after)
+                (_, []) ->
+                  if c == Ins
+                    then case break (\(ac, _) -> ac == Gen) rems of
+                      (before, m:after) -> Just (m, before ++ after)
+                      (_, []) -> Nothing
+                    else Nothing
 
 -- | Type comparison allowing unknowns for primitive resolution.
 typeMatchesAllowUnknown :: [(Identifier, Int)] -- ^ Type constructor arities.

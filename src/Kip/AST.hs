@@ -112,6 +112,16 @@ data Exp a =
   | Ascribe { annExp :: a , ascType :: Ty a , ascExp :: Exp a } -- ^ Type ascription.
   deriving (Show, Eq, Generic, Functor, Binary)
 
+-- | Flatten nested applications into a root function and accumulated arguments.
+flattenApplied :: Exp a -- ^ Expression to inspect.
+              -> (Exp a, [Exp a]) -- ^ Root function and arguments in call order.
+flattenApplied exp =
+  case exp of
+    App {fn = appFn, args = appArgs} ->
+      let (root, prefixArgs) = flattenApplied appFn
+      in (root, prefixArgs ++ appArgs)
+    _ -> (exp, [])
+
 -- | Typed argument of a function.
 -- The annotation on the identifier captures the span of the parameter name for LSP.
 type Arg ann = ((Identifier, ann), Ty ann)

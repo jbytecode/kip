@@ -1,0 +1,6 @@
+(bu a listesinin) (şey a'nın b'siyle) eşlemi,
+  bu boşsa, boş;
+  ilkin devama ekiyse, (ilkin şeyinin) (devamın şeyle eşlemine) ekidir.
+
+(((1'in farkıyla) [1, 2, 3]'ün eşleminin) toplamını) yaz.
+(((10'la farkıyla) [1, 2, 3]'ün eşleminin) toplamını) yaz.

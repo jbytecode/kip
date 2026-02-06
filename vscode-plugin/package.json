@@ -49,6 +49,13 @@
         "path": "./syntaxes/kip.tmLanguage.json"
       }
     ],
+    "commands": [
+      {
+        "command": "kip.goToTypeDefinition",
+        "title": "Kip: Go to Type Definition",
+        "category": "Kip"
+      }
+    ],
     "configuration": {
       "title": "Kip",
       "properties": {

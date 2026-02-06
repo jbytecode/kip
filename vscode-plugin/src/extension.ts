@@ -91,6 +91,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(outputChannel);
   context.subscriptions.push(client);
+  context.subscriptions.push(
+    vscode.commands.registerCommand("kip.goToTypeDefinition", async () => {
+      await vscode.commands.executeCommand("editor.action.goToTypeDefinition");
+    })
+  );
   void client.start();
 
   context.subscriptions.push(

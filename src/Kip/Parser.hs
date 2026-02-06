@@ -2107,9 +2107,24 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     parseArg = do
       (argName, argSpan) <- withSpan identifierNotKeyword
       ws
-      ty <- try parseTypeWithCase <|> parseTypeLoose
+      ty <- try parseHigherOrderArgType <|> try parseTypeWithCase <|> parseTypeLoose
       let argAnn = mkAnn Nom argSpan
       return ((argName, argAnn), ty)
+      where
+        parseHigherOrderArgType :: KipParser (Ty Ann)
+        parseHigherOrderArgType = do
+          domTy <- try parseTypeWithCase <|> parseTypeLoose
+          ws
+          imgTy <- try parseTypeWithCase <|> parseTypeLoose
+          notFollowedBy (try (ws *> identifierNotKeyword))
+          let domCase = annCase (annTy domTy)
+              imgCase = annCase (annTy imgTy)
+              domLooksArrow = domCase == Gen
+              imgLooksArrow = imgCase == Ins || imgCase == P3s
+          guard domLooksArrow
+          guard imgLooksArrow
+          let spanMerged = mergeSpan (annSpan (annTy domTy)) (annSpan (annTy imgTy))
+          return (Arr (mkAnn imgCase spanMerged) domTy imgTy)
     -- | Parse a type without requiring it to be in scope.
     parseTypeLoose :: KipParser (Ty Ann) -- ^ Parsed type.
     parseTypeLoose = do
@@ -2664,33 +2679,32 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                 Just arg -> collectArgsLoop (soFar ++ [arg])
                 Nothing -> return soFar
         -- Try to parse as a type application, with arity validation inside try
-        mTypeApp <- optional (try (do
-          collected <- collectArgsLoop []
-          guard (not (null collected))
-          (rawIdent, sp) <- withSpan identifierNotKeyword
-          (name, cas) <- resolveTypeCandidatePreferCtx rawIdent
-          requireInCtx name
-          -- Validate arity: check if this type constructor accepts the right number of arguments
-          let numArgs = length collected
-              mArity = lookup name parserTyCons
-              arityMatches = case mArity of
-                Just expectedArity -> numArgs == expectedArity
-                Nothing ->
-                  -- Primitives have arity 0, type params shouldn't appear as constructors here
-                  (name `elem` primNames) && (numArgs == 0)
-          guard arityMatches  -- Allow backtracking if arity doesn't match
-          let cas' = preferSurfaceCase rawIdent cas
-              ann = mkAnn cas' sp
-          if name `elem` primNames && isIntType name
-            then return (TyInt ann)
-            else if name `elem` primNames && isFloatType name
-              then return (TyFloat ann)
-              else if name `elem` primNames && isStringType name
-                then return (TyString ann)
-                else do
-                  argTys <- mapM argTy collected
-                  return (TyApp ann (TyInd (mkAnn Nom NoSpan) name) argTys)
-          ))
+        mTypeApp <- optional . try $ do
+              collected <- collectArgsLoop []
+              guard (not (null collected))
+              (rawIdent, sp) <- withSpan identifierNotKeyword
+              (name, cas) <- resolveTypeCandidatePreferCtx rawIdent
+              requireInCtx name
+              -- Validate arity: check if this type constructor accepts the right number of arguments
+              let numArgs = length collected
+                  mArity = lookup name parserTyCons
+                  arityMatches = case mArity of
+                    Just expectedArity -> numArgs == expectedArity
+                    Nothing ->
+                      -- Primitives have arity 0, type params shouldn't appear as constructors here
+                      (name `elem` primNames) && (numArgs == 0)
+              guard arityMatches  -- Allow backtracking if arity doesn't match
+              let cas' = preferSurfaceCase rawIdent cas
+                  ann = mkAnn cas' sp
+              if name `elem` primNames && isIntType name
+                then return (TyInt ann)
+                else if name `elem` primNames && isFloatType name
+                  then return (TyFloat ann)
+                else if name `elem` primNames && isStringType name
+                    then return (TyString ann)
+                    else do
+                      argTys <- mapM argTy collected
+                      return (TyApp ann (TyInd (mkAnn Nom NoSpan) name) argTys)
         case mTypeApp of
           Just ty -> return ty
           Nothing -> do

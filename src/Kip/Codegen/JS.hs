@@ -250,6 +250,22 @@ jsPrimitives = T.unlines
   , "var dizge_hal = (n) => String(__kip_num(n));"
   , "var tam_sayı_hal = (s) => { const n = parseInt(s, 10); return isNaN(n) ? __kip_none() : __kip_some(n); };"
   , "var ondalık_sayı_hal = (s) => { const n = parseFloat(s); return isNaN(n) ? __kip_none() : __kip_some(__kip_float(n)); };"
+  , "var __kip_call = async (fn, args) => {"
+  , "  if (typeof fn !== 'function') {"
+  , "    throw new TypeError('Attempted to call a non-function');"
+  , "  }"
+  , "  if (args.length === 0) return await fn();"
+  , "  if (fn.length > 0 && args.length < fn.length) {"
+  , "    return (...rest) => __kip_call(fn, args.concat(rest));"
+  , "  }"
+  , "  if (fn.length > 0 && args.length > fn.length) {"
+  , "    const head = args.slice(0, fn.length);"
+  , "    const tail = args.slice(fn.length);"
+  , "    const out = await fn(...head);"
+  , "    return await __kip_call(out, tail);"
+  , "  }"
+  , "  return await fn(...args);"
+  , "};"
   ]
 
 -- | Wrappers for overloaded functions that dispatch based on argument type.
@@ -624,7 +640,16 @@ renderCall fn args =
         case fn of
           Var {} -> codegenExp fn
           _ -> "(" <> codegenExp fn <> ")"
-  in "(await " <> fnText <> "(" <> T.intercalate ", " (map codegenExp args) <> "))"
+      argsCsv = T.intercalate ", " (map codegenExp args)
+  in case (fn, args) of
+       (Var {varCandidates}, [arg])
+         | any (\(ident, _) -> ident == ([], T.pack "fark")) varCandidates
+         ->
+             if annCase (annExp arg) == Gen
+               then "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [__kip_arg0, " <> codegenExp arg <> "])))"
+               else "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [" <> codegenExp arg <> ", __kip_arg0])))"
+       _ ->
+         "(await " <> fnText <> "(" <> argsCsv <> "))"
 
 renderExpAsStmt :: Exp Ann -> [Text]
 renderExpAsStmt exp' =

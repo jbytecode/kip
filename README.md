@@ -23,6 +23,7 @@ selamla.
 
 - [Language Features](#language-features)
 - [Installation](#installation)
+- [Editor Plugins](#editor-plugins)
 - [WASM Playground](#wasm-playground)
 - [Bytecode Cache](#bytecode-cache)
 - [Project Structure](#project-structure)
@@ -207,35 +208,94 @@ kip --codegen js path/to/file.kip
 stack exec kip-lsp
 ```
 
-#### Editor setup (PATH guidance)
+#### PATH guidance
 
 Make sure `kip-lsp` is on your `PATH`, or configure your editor to call the
 absolute path from `stack exec -- which kip-lsp`.
 
-**VS Code (generic LSP extension):**
+## Editor Plugins
+
+This repository includes:
+- a VSCode extension in `vscode-plugin/`
+- a Vim/Neovim plugin in `.vim/`
+
+Both use `kip-lsp`.
+
+### VSCode Plugin
+
+Prerequisites:
+- `kip-lsp` installed and available on `PATH`, or an absolute executable path
+- Node.js and npm (for building the extension)
+
+Install and run from source:
+
+```bash
+cd vscode-plugin
+npm install
+npm run compile
+code --extensionDevelopmentPath=.
+```
+
+In the VSCode Extension Development Host, open a `.kip` file.
+
+Package and install as a normal extension:
+
+```bash
+cd vscode-plugin
+npm install
+npm run compile
+npx vsce package
+code --install-extension kip-0.1.0.vsix
+```
+
+Useful VSCode settings:
 
 ```json
 {
-  "languageServerExecutable": "kip-lsp",
-  "languageServerArgs": []
+  "kip.languageServerPath": "kip-lsp",
+  "kip.languageServerArgs": [],
+  "kip.trace.server": "off"
 }
 ```
 
-**Neovim (init.lua):**
+### Vim Plugin
 
-```lua
-vim.lsp.start({
-  name = "kip-lsp",
-  cmd = { "kip-lsp" },
-  root_dir = vim.fn.getcwd(),
-})
+The plugin files are already in the repo under `.vim/`:
+- `.vim/ftdetect/kip.vim`
+- `.vim/syntax/kip.vim`
+- `.vim/plugin/kip.vim`
+
+Prerequisites:
+- `kip-lsp` available on `PATH` (or set `g:kip_language_server_path`)
+- Neovim built-in LSP, or `vim-lsp`, or `coc.nvim`
+
+Use directly from this repo by adding the runtime path:
+
+```vim
+" ~/.vimrc or init.vim
+set runtimepath+=/absolute/path/to/kip/.vim
 ```
 
-**Emacs (eglot):**
+Or copy the folders into your Vim config:
 
-```elisp
-(add-to-list 'eglot-server-programs '(kip-mode . ("kip-lsp")))
+```bash
+cp -R .vim/ftdetect ~/.vim/
+cp -R .vim/syntax ~/.vim/
+cp -R .vim/plugin ~/.vim/
 ```
+
+Plugin options:
+
+```vim
+let g:kip_language_server_path = 'kip-lsp'
+let g:kip_language_server_args = []
+let g:kip_trace_server = 'off'
+let g:kip_lsp_autostart = 1
+```
+
+Plugin commands:
+- `:KipLspInfo` shows effective Kip LSP settings
+- `:KipLspRestart` restarts the configured LSP client
 
 ## WASM Playground
 
