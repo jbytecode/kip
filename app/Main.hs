@@ -1039,12 +1039,38 @@ main = do
                         lift (outputStrLn (T.unpack line))
                       loop rs
                 _ -> inferExprType ctx paramTyCons parsed expr
+      | Just expr <- stripPrefix ":parse " input = do
+          fsm <- runApp requireFsm
+          (uCache, dCache) <- runApp requireParserCaches
+          let pst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs)
+                    (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs)
+                    Map.empty uCache dCache
+          -- Decide statement vs expression based on trailing period
+          let isStmt = case dropWhile (== ' ') (reverse expr) of '.':_ -> True; _ -> False
+          if isStmt
+            then do
+              result <- liftIO (parseForDebug pst (T.pack expr))
+              case result of
+                Left err -> emitMsgTCtx (MsgParseError err)
+                Right (stmt, remaining) -> do
+                  lift (outputStrLn (ppStmt stmt))
+                  unless (T.null (T.strip remaining)) $
+                    lift (outputStrLn ("Remaining: " ++ T.unpack remaining))
+            else do
+              result <- liftIO (parseExpForDebug pst (T.pack expr))
+              case result of
+                Left err -> emitMsgTCtx (MsgParseError err)
+                Right (expr', remaining) -> do
+                  lift (outputStrLn (ppExp 0 expr'))
+                  unless (T.null (T.strip remaining)) $
+                    lift (outputStrLn ("Remaining: " ++ T.unpack remaining))
+          loop rs
       | otherwise = do
           fsm <- runApp requireFsm
           (uCache, dCache) <- runApp requireParserCaches
           let pst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) Map.empty uCache dCache
           -- If input ends with a period, parse as statement; otherwise parse as expression
-          if case reverse input of
+          if case dropWhile (== ' ') (reverse input) of
                '.':_ -> True
                _ -> False
             then do
