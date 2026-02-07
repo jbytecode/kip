@@ -74,7 +74,8 @@ import Language.Foma
 import Paths_kip (getDataFileName)
 
 import Control.Lens ((^.))
-import Text.Megaparsec (ParseErrorBundle(..), errorOffset)
+import Text.Megaparsec (ParseErrorBundle(..), ParseError(..), errorOffset)
+import Text.Megaparsec.Error (ErrorFancy(..))
 import Text.Megaparsec.Pos (SourcePos(..), unPos, sourceLine, sourceColumn)
 import Data.List.NonEmpty (NonEmpty(..))
 
@@ -1789,7 +1790,15 @@ parseErrorToDiagnostic source bundle =
         e :| _ -> e
       (line, col) = offsetToPos (T.take (errorOffset err) source)
       pos = Position line col
-      range = Range pos pos
+      customRange =
+        case err of
+          FancyError _ xs ->
+            listToMaybe
+              [ spanToRange sp
+              | ErrorCustom (ErrUnrecognizedTurkishWord _ sp) <- Set.toList xs
+              ]
+          _ -> Nothing
+      range = fromMaybe (Range pos pos) customRange
       msg = renderParseError LangTr bundle
   in Diagnostic range (Just DiagnosticSeverity_Error) Nothing Nothing (Just "kip") msg Nothing Nothing Nothing
 

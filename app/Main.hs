@@ -24,12 +24,12 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Text.Encoding (encodeUtf8)
-import Data.Maybe (fromMaybe, isJust, maybeToList)
+import Data.Maybe (fromMaybe, isJust, maybeToList, listToMaybe)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Map.Strict as Map
 import qualified Data.MultiMap as MultiMap
-import Text.Megaparsec (ParseErrorBundle(..), errorBundlePretty)
+import Text.Megaparsec (ParseErrorBundle(..), PosState(..), errorBundlePretty)
 import Text.Megaparsec.Error (ParseError(..), ErrorFancy(..), ShowErrorComponent(..))
 import qualified Data.List.NonEmpty as NE
 import Text.Megaparsec.Pos (sourceLine, sourceColumn, unPos)
@@ -735,13 +735,40 @@ renderParseError :: Lang -- ^ Language selection.
                  -> ParseErrorBundle Text ParserError -- ^ Parse error bundle.
                  -> Text -- ^ Rendered error text.
 renderParseError lang err =
-  case lang of
-    LangTr ->
-      let trBundle = mapParseErrorBundle ParserErrorTr err
-      in "Sözdizim hatası:\n" <> T.pack (turkifyParseError (errorBundlePretty trBundle))
-    LangEn ->
-      let enBundle = mapParseErrorBundle ParserErrorEn err
-      in "Syntax error:\n" <> T.pack (errorBundlePretty enBundle)
+  case findUnrecognizedWordError err of
+    Just (wordTxt, sp, source) ->
+      let header =
+            case lang of
+              LangTr -> "Sözdizim hatası:\n"
+              LangEn -> "Syntax error:\n"
+          msg =
+            case lang of
+              LangTr -> renderParserErrorTr (ErrUnrecognizedTurkishWord wordTxt sp)
+              LangEn -> renderParserErrorEn (ErrUnrecognizedTurkishWord wordTxt sp)
+      in header <> renderSpanSnippet source sp <> "\n" <> msg
+    Nothing ->
+      case lang of
+        LangTr ->
+          let trBundle = mapParseErrorBundle ParserErrorTr err
+          in "Sözdizim hatası:\n" <> T.pack (turkifyParseError (errorBundlePretty trBundle))
+        LangEn ->
+          let enBundle = mapParseErrorBundle ParserErrorEn err
+          in "Syntax error:\n" <> T.pack (errorBundlePretty enBundle)
+
+-- | Find the custom unrecognized-word parser error, if present.
+findUnrecognizedWordError :: ParseErrorBundle Text ParserError -> Maybe (Text, Span, Text)
+findUnrecognizedWordError (ParseErrorBundle errs posState) = do
+  (w, sp) <- listToMaybe (concatMap extract (NE.toList errs))
+  return (w, sp, pstateInput posState)
+  where
+    extract :: ParseError Text ParserError -> [(Text, Span)]
+    extract parseErr =
+      case parseErr of
+        FancyError _ xs ->
+          [ (w, sp)
+          | ErrorCustom (ErrUnrecognizedTurkishWord w sp) <- Set.toList xs
+          ]
+        _ -> []
 
 -- | Map custom error components inside a parse error bundle.
 mapParseErrorBundle :: Ord e'

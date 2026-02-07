@@ -4,6 +4,7 @@ module Main where
 import Control.Exception (bracket)
 import Data.List (isInfixOf, sort, stripPrefix)
 import Data.Maybe (fromMaybe)
+import GHC.Conc (getNumProcessors)
 import System.Directory (doesFileExist, doesDirectoryExist, findExecutable, getTemporaryDirectory, listDirectory, removeFile)
 import System.Environment (lookupEnv, setEnv)
 import System.Exit (ExitCode(..))
@@ -12,6 +13,7 @@ import System.IO (hClose, openTempFile)
 import System.Process (readProcessWithExitCode)
 import Test.Tasty
 import Test.Tasty.HUnit
+import Test.Tasty.Runners (NumThreads(..))
 import qualified LspTest
 
 -- | Discover tests and run them through tasty.
@@ -36,18 +38,20 @@ main = do
   lspTests <- case lspPath of
     Nothing -> return []
     Just lsp -> LspTest.lspTestsFor lsp
+  numProcessors <- getNumProcessors
   let lspGroupName = case lspPath of
         Nothing -> "lsp (skipped: kip-lsp missing)"
         Just _ -> "lsp"
   defaultMain $
-    testGroup
-      "kip"
-      [ testGroup "succeed" succeedTests
-      , testGroup "fail" failTests
-      , testGroup "repl" replTests
-      , testGroup jsGroupName jsTests
-      , testGroup lspGroupName lspTests
-      ]
+    localOption (NumThreads numProcessors) $
+      testGroup
+        "kip"
+        [ testGroup "succeed" succeedTests
+        , testGroup "fail" failTests
+        , testGroup "repl" replTests
+        , testGroup jsGroupName jsTests
+        , testGroup lspGroupName lspTests
+        ]
 
 -- | Resolve the Kip executable path from env or PATH.
 locateKip :: IO FilePath -- ^ Resolved executable path.

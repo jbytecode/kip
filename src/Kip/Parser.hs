@@ -109,6 +109,7 @@ import Kip.AST
 data ParserError
   = ErrKeywordAsIdent
   | ErrNoMatchingNominative
+  | ErrUnrecognizedTurkishWord Text Span
   | ErrMatchPatternExpected
   | ErrDefinitionName
   | ErrDefinitionBodyMissing
@@ -129,6 +130,8 @@ renderParserErrorTr err =
   case err of
     ErrKeywordAsIdent -> "Anahtar kelime isim yerine kullanılamaz."
     ErrNoMatchingNominative -> "Buraya uyan yalın halde bir isim bulunamadı."
+    ErrUnrecognizedTurkishWord w _ ->
+      "'" <> w <> "' Türkçe bir kelime olarak tanınmadığı için burada kullanılamaz."
     ErrMatchPatternExpected -> "Eşleştirme için bir yapkı örüntüsü bekleniyordu."
     ErrDefinitionName -> "Tanımın ismi bir isim olmalıdır."
     ErrDefinitionBodyMissing -> "Tanımın gövdesi bulunamadı."
@@ -148,6 +151,8 @@ renderParserErrorEn err =
   case err of
     ErrKeywordAsIdent -> "A keyword cannot be used as an identifier."
     ErrNoMatchingNominative -> "No matching nominative identifier found here."
+    ErrUnrecognizedTurkishWord w _ ->
+      "'" <> w <> "' is not recognized as a Turkish word, so it cannot be used here."
     ErrMatchPatternExpected -> "Expected a constructor pattern for matching."
     ErrDefinitionName -> "Definition name must be an identifier."
     ErrDefinitionBodyMissing -> "Definition body is missing."
@@ -1579,7 +1584,9 @@ parseExpWithCtx' useCtx allowMatch =
       e1 <- ascribeExp <|> bindExp <|> app <|> atom
       mcomma <- optional (try (lookAhead (lexeme (char ','))))
       case mcomma of
-        Nothing -> return e1
+        Nothing -> do
+          failOnUnknownWordBeforeSeparator
+          return e1
         Just _ ->
           if allowMatch && useCtx
             then do
@@ -1604,7 +1611,27 @@ parseExpWithCtx' useCtx allowMatch =
                 _ -> parseExpWithCtx' useCtx allowMatch
               let ann = mkAnn (annCase (annExp e2)) (mergeSpan (annSpan (annExp e1')) (annSpan (annExp e2)))
               return (Seq ann e1' e2)
-            else return e1'
+            else do
+              failOnUnknownWordBeforeSeparator
+              return e1'
+
+        failOnUnknownWordBeforeSeparator :: KipParser ()
+        failOnUnknownWordBeforeSeparator = do
+          mWord <- optional (try (lookAhead parseWordBeforeSeparator))
+          case mWord of
+            Nothing -> return ()
+            Just (w, sp) -> do
+              analyses <- upsCached w
+              when (null analyses) $
+                customFailure (ErrUnrecognizedTurkishWord w sp)
+
+        parseWordBeforeSeparator :: KipParser (Text, Span)
+        parseWordBeforeSeparator = do
+          ws
+          (w, sp) <- withSpan word
+          ws
+          _ <- char ','
+          return (w, sp)
 
         parseMatchFromApp :: Exp Ann -> KipParser (Exp Ann)
         parseMatchFromApp expItem =

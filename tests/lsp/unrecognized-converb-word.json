@@ -1,0 +1,8 @@
+{
+  "diagnosticsAtLeast": 1,
+  "diagnosticMessageContains": ["foolayıp", "Türkçe bir kelime olarak tanınmadığı"],
+  "formattingEdits": false,
+  "hover": false,
+  "completionIncludes": [],
+  "cache": false
+}
