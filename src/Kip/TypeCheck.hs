@@ -293,6 +293,16 @@ tcExp1With allowEffect e =
                 case lookupByCandidates tcVarTys varCandidates of
                   Just (Arr _ _ imgTy) -> Just imgTy
                   _ -> Nothing
+              isBoundHigherOrderVar =
+                case lookupByCandidates tcVarTys varCandidates of
+                  Just Arr {} -> True
+                  _ -> False
+              isEffectfulHigherOrderVar =
+                case lookupByCandidates tcVarTys varCandidates of
+                  Just (Arr _ domTy _) -> annCase (annTy domTy) /= Gen
+                  _ -> False
+              allowsVerbLikeHigherOrderCall =
+                annCase annFn /= Gen && isBoundHigherOrderVar && isEffectfulHigherOrderVar
               isConditionalResultTy ty =
                 let tyNorm = normalizePrimTy ty
                     tyConsList = Map.toList tcTyCons
@@ -306,7 +316,9 @@ tcExp1With allowEffect e =
                 in nullaryCtorCount >= 2
           case higherOrderResultTy of
             Just imgTy
-              | annCase annFn /= Gen && not (isConditionalResultTy imgTy) ->
+              | annCase annFn /= Gen
+              , not allowsVerbLikeHigherOrderCall
+              , not (isConditionalResultTy imgTy) ->
                   lift (throwE (NoType (annSpan annApp)))
             _ -> return ()
           let tyNames = Map.keys tcTyCons
@@ -754,9 +766,8 @@ tcStmt stmt =
       return (Function name args ty body' isInfinitive)
     PrimFunc name args ty isInfinitive -> do
       -- Validate that the primitive function is actually implemented
-      -- TEMPORARILY DISABLED FOR DEBUGGING
-      -- unless (isImplementedPrimitive name args) $
-      --   lift (throwE (UnimplementedPrimitive name args NoSpan))
+      unless (Prim.isImplementedPrimitive name args) $
+        lift (throwE (UnimplementedPrimitive name args NoSpan))
       modify (\s ->
         s { tcCtx = Set.insert name (tcCtx s)
           , tcFuncs = MultiMap.insert name (length args) (tcFuncs s)
@@ -1161,7 +1172,9 @@ inferPatTypes pat args =
       MkTCState{tcCtors, tcTyCons} <- get
       case Map.lookup ctor tcCtors of
         Just (argTys, resTy) ->
-          case unifyTypes (Map.toList tcTyCons) [resTy] [scrutTy] of
+          let resTyNorm = stripTyCaseForMatch resTy
+              scrutTyNorm = stripTyCaseForMatch scrutTy
+          in case unifyTypes (Map.toList tcTyCons) [resTyNorm] [scrutTyNorm] of
             Just subst -> do
               let argTys' = map (applySubst subst) argTys
                   -- Nested patterns match from the right, so we align argument
@@ -1206,7 +1219,9 @@ inferPatTypesWithSpans pat args =
       MkTCState{tcCtors, tcTyCons} <- get
       case Map.lookup ctor tcCtors of
         Just (argTys, resTy) ->
-          case unifyTypes (Map.toList tcTyCons) [resTy] [scrutTy] of
+          let resTyNorm = stripTyCaseForMatch resTy
+              scrutTyNorm = stripTyCaseForMatch scrutTy
+          in case unifyTypes (Map.toList tcTyCons) [resTyNorm] [scrutTyNorm] of
             Just subst -> do
               let argTys' = map (applySubst subst) argTys
                   argTysAligned =
@@ -1221,6 +1236,24 @@ inferPatTypesWithSpans pat args =
             Nothing -> return []
         Nothing -> return []
     _ -> return []
+
+-- | Normalize type-case annotations for constructor-pattern unification.
+--
+-- Pattern matching should compare ADT identity/shape; surface case
+-- inflections on type names are not semantically relevant here.
+stripTyCaseForMatch :: Ty Ann -> Ty Ann
+stripTyCaseForMatch ty =
+  case ty of
+    TyString ann -> TyString (setAnnCase ann Nom)
+    TyInt ann -> TyInt (setAnnCase ann Nom)
+    TyFloat ann -> TyFloat (setAnnCase ann Nom)
+    TyInd ann name -> TyInd (setAnnCase ann Nom) name
+    TyVar ann name -> TyVar (setAnnCase ann Nom) name
+    TySkolem ann name -> TySkolem (setAnnCase ann Nom) name
+    TyApp ann ctor args ->
+      TyApp (setAnnCase ann Nom) (stripTyCaseForMatch ctor) (map stripTyCaseForMatch args)
+    Arr ann d i ->
+      Arr (setAnnCase ann Nom) (stripTyCaseForMatch d) (stripTyCaseForMatch i)
 
 -- | Check whether a set of patterns exhausts a scrutinee type.
 

@@ -561,108 +561,163 @@ estimateCandidates useCtx (ss, s) = do
       mCtxMatch <- if useCtx
         then findCtxCandidateWithAnalyses ss s parserCtx sAnalyses
         else return Nothing
-      case mCtxMatch of
-        Just match -> return [match]
-        Nothing -> do
-          possBase <- normalizePossessive (ss, s)
-          (candidates0, filtered0) <- candidatesForWithAnalyses s parserCtx sAnalyses
-          -- If we see a bare case suffix, synthesize candidates that are
-          -- likely in-scope without relying on morphology: this helps
-          -- disambiguate P3s vs Acc for forms like "varlığı".
-          let bareCaseCandidates =
-                case mBareCase of
-                  Just (base, Acc) | base `elem` parserCtx ->
-                    (base, Acc) :
-                    [(possBase, P3s) | possBase /= (ss, s) && possBase `elem` parserCtx] ++
-                    [(base, P3s)]
-                  Just (base, cas) | base `elem` parserCtx -> [(base, cas)]
-                  _ -> []
-              -- Also allow a candidate inferred from the surface suffix
-              -- when morphology doesn't provide a case.
-              candidates0' = addSurfaceCaseCandidate s candidates0
-              candidates0'' = nub (bareCaseCandidates ++ candidates0')
-              hasCond = any (\(_, cas) -> cas == Cond) candidates0'
-          -- Conditional (-sa/-se) gets special casing to avoid losing
-          -- constructor matches when morphology is ambiguous.
-          condExtra0 <- condCandidatesM s
-          let candidates = nub (candidates0'' ++ condExtra0)
-              filtered0 = filter (\(ident, _) -> ident `elem` parserCtx) candidates
-              filtered =
-                if any (\(_, cas) -> cas == Cond) candidates
-                  then nub (filtered0 ++ filter (\(_, cas) -> cas == Cond) candidates)
-                  else filtered0
-          if useCtx && not (null filtered)
-            then return filtered
-            else do
-              -- Fast path for ip-converb roots already in scope.
-              let ipMatch = do
-                    stripped <- stripIpSuffix s
-                    let ipIdent = (ss, stripped)
-                    if useCtx && ipIdent `elem` parserCtx
-                      then Just [(ipIdent, Nom)]
-                      else Nothing
-              case ipMatch of
-                Just match -> return match
-                Nothing ->
-                  case mCopula of
-                    Just stripped -> do
-                      baseIdent <- normalizePossessive (ss, stripped)
-                      if useCtx && baseIdent `elem` parserCtx
-                        then return [(baseIdent, Nom)]
-                        else do
-                          strippedAnalyses <- case mCopulaAnalyses of
-                            Just (_, analyses) -> return analyses
-                            Nothing -> upsCached stripped
-                          possBase1 <- normalizePossessive (ss, stripped)
-                          (candidates1, filtered1) <- candidatesForWithAnalyses stripped parserCtx strippedAnalyses
-                          -- Same bare-case synthesis for the copula-stripped
-                          -- variant; this keeps P3s/Acc ambiguity visible.
-                          let bareCaseCandidates1 =
-                                case stripBareCaseSuffix (ss, stripped) of
-                                  Just (base, Acc) | base `elem` parserCtx ->
-                                    (base, Acc) :
-                                    [(possBase1, P3s) | possBase1 /= (ss, stripped) && possBase1 `elem` parserCtx] ++
-                                    [(base, P3s)]
-                                  Just (base, cas) | base `elem` parserCtx -> [(base, cas)]
-                                  _ -> []
-                              candidates1' = addSurfaceCaseCandidate stripped candidates1
-                              candidates1'' = nub (bareCaseCandidates1 ++ candidates1')
-                              hasCond1 = any (\(_, cas) -> cas == Cond) candidates1'
-                          condExtra1 <- condCandidatesM stripped
-                          let candidates' = nub (candidates1'' ++ condExtra1)
-                              filtered1 = filter (\(ident, _) -> ident `elem` parserCtx) candidates'
-                              filtered' =
-                                if any (\(_, cas) -> cas == Cond) candidates'
-                                  then nub (filtered1 ++ filter (\(_, cas) -> cas == Cond) candidates')
-                                  else filtered1
-                          let candidatesForMatch =
-                                if null candidates'
-                                  then [((ss, stripped), cas) | cas <- allCases]
-                                  else candidates'
-                          if useCtx && not (null filtered')
-                            then return filtered'
+      let isIpSurface = isJust (stripIpSuffix s)
+          ipFallbackMatch =
+            if not useCtx
+              then Nothing
+              else do
+                stripped <- stripIpSuffix s
+                let stripBufferY txt =
+                      case T.unsnoc txt of
+                        Just (pref, 'y') | not (T.null pref) -> Just pref
+                        _ -> Nothing
+                    fallbackRoots = nub (stripped : maybeToList (stripBufferY stripped))
+                    matches =
+                      [ ((ss, root), Nom)
+                      | root <- fallbackRoots
+                      , (ss, root) `elem` parserCtx
+                      ]
+                    pickLongest xs =
+                      case xs of
+                        [] -> []
+                        _ ->
+                          let score ((mods, word), _) = sum (map T.length mods) + T.length word
+                              maxScore = maximum (map score xs)
+                          in take 1 (filter (\x -> score x == maxScore) xs)
+                if null matches then Nothing else Just (pickLongest matches)
+          mCtxMatch' = if isIpSurface then Nothing else mCtxMatch
+      case ipFallbackMatch of
+        Just match -> return match
+        Nothing ->
+          case mCtxMatch' of
+            Just match -> return [match]
+            Nothing -> do
+              possBase <- normalizePossessive (ss, s)
+              (candidates0, filtered0) <- candidatesForWithAnalyses s parserCtx sAnalyses
+              -- If we see a bare case suffix, synthesize candidates that are
+              -- likely in-scope without relying on morphology: this helps
+              -- disambiguate P3s vs Acc for forms like "varlığı".
+              let bareCaseCandidates =
+                    case mBareCase of
+                      Just (base, Acc) | base `elem` parserCtx ->
+                        (base, Acc) :
+                        [(possBase, P3s) | possBase /= (ss, s) && possBase `elem` parserCtx] ++
+                        [(base, P3s)]
+                      Just (base, cas) | base `elem` parserCtx -> [(base, cas)]
+                      _ -> []
+                  -- Also allow a candidate inferred from the surface suffix
+                  -- when morphology doesn't provide a case.
+                  candidates0' = addSurfaceCaseCandidate s candidates0
+                  candidates0'' = nub (bareCaseCandidates ++ candidates0')
+                  hasCond = any (\(_, cas) -> cas == Cond) candidates0'
+              -- Conditional (-sa/-se) gets special casing to avoid losing
+              -- constructor matches when morphology is ambiguous.
+              condExtra0 <- condCandidatesM s
+              let candidates = nub (candidates0'' ++ condExtra0)
+                  filtered0 = filter (\(ident, _) -> ident `elem` parserCtx) candidates
+                  filtered =
+                    if any (\(_, cas) -> cas == Cond) candidates
+                      then nub (filtered0 ++ filter (\(_, cas) -> cas == Cond) candidates)
+                      else filtered0
+              if useCtx && not isIpSurface && not (null filtered)
+                then return filtered
+                else do
+                  -- Fast path for ip-converb roots already in scope.
+                  -- Prefer TRmorph analyses; keep suffix stripping only as a
+                  -- fallback when analyses are missing.
+                  let ipRootsFromAnalyses =
+                        nub
+                          [ T.takeWhile (/= '<') analysis
+                          | analysis <- sAnalyses
+                          , "<cv:ip>" `T.isInfixOf` analysis
+                          ]
+                      ipCandidatesFromAnalyses =
+                        [ ((ss, root), Nom)
+                        | root <- ipRootsFromAnalyses
+                        , (ss, root) `elem` parserCtx
+                        ]
+                      ipMatch = do
+                        stripped <- stripIpSuffix s
+                        let stripBufferY txt =
+                              case T.unsnoc txt of
+                                Just (pref, 'y') | not (T.null pref) -> Just pref
+                                _ -> Nothing
+                            fallbackRoots = nub (stripped : maybeToList (stripBufferY stripped))
+                            fallbackMatches =
+                              [ ((ss, root), Nom)
+                              | root <- fallbackRoots
+                              , (ss, root) `elem` parserCtx
+                              ]
+                            allMatches = nub (ipCandidatesFromAnalyses ++ fallbackMatches)
+                            pickLongest xs =
+                              case xs of
+                                [] -> []
+                                _ ->
+                                  let score ((mods, word), _) = sum (map T.length mods) + T.length word
+                                      maxScore = maximum (map score xs)
+                                  in take 1 (filter (\x -> score x == maxScore) xs)
+                        if useCtx && not (null allMatches)
+                          then Just (pickLongest allMatches)
+                          else Nothing
+                  case ipMatch of
+                    Just match -> return match
+                    Nothing ->
+                      case mCopula of
+                        Just stripped -> do
+                          baseIdent <- normalizePossessive (ss, stripped)
+                          if useCtx && baseIdent `elem` parserCtx
+                            then return [(baseIdent, Nom)]
                             else do
-                              mMatch <- if useCtx then matchCtxByInflection parserCtx (ss, stripped) candidatesForMatch else return Nothing
-                              case mMatch of
-                                Just matched -> return [matched]
-                                Nothing ->
-                                  if not (null candidates')
-                                    then return candidates'
-                                    else if null candidates
-                                      then customFailure ErrNoMatchingNominative
-                                      else return candidates
-                    Nothing -> do
-                      let candidatesForMatch =
-                            if null candidates
-                              then [((ss, s), cas) | cas <- allCases]
-                              else candidates
-                      mMatch <- if useCtx then matchCtxByInflection parserCtx (ss, s) candidatesForMatch else return Nothing
-                      case mMatch of
-                        Just matched -> return [matched]
-                        Nothing ->
-                          if null candidates
-                            then customFailure ErrNoMatchingNominative
-                            else return candidates
+                              strippedAnalyses <- case mCopulaAnalyses of
+                                Just (_, analyses) -> return analyses
+                                Nothing -> upsCached stripped
+                              possBase1 <- normalizePossessive (ss, stripped)
+                              (candidates1, filtered1) <- candidatesForWithAnalyses stripped parserCtx strippedAnalyses
+                              let bareCaseCandidates1 =
+                                    case stripBareCaseSuffix (ss, stripped) of
+                                      Just (base, Acc) | base `elem` parserCtx ->
+                                        (base, Acc)
+                                          : [(possBase1, P3s) | possBase1 /= (ss, stripped) && possBase1 `elem` parserCtx]
+                                          ++ [(base, P3s)]
+                                      Just (base, cas) | base `elem` parserCtx -> [(base, cas)]
+                                      _ -> []
+                                  candidates1' = addSurfaceCaseCandidate stripped candidates1
+                                  candidates1'' = nub (bareCaseCandidates1 ++ candidates1')
+                              condExtra1 <- condCandidatesM stripped
+                              let candidates' = nub (candidates1'' ++ condExtra1)
+                                  filtered1 = filter (\(ident, _) -> ident `elem` parserCtx) candidates'
+                                  filtered' =
+                                    if any (\(_, cas) -> cas == Cond) candidates'
+                                      then nub (filtered1 ++ filter (\(_, cas) -> cas == Cond) candidates')
+                                      else filtered1
+                                  candidatesForMatch =
+                                    if null candidates'
+                                      then [((ss, stripped), cas) | cas <- allCases]
+                                      else candidates'
+                              if useCtx && not (null filtered')
+                                then return filtered'
+                                else do
+                                  mMatch <- if useCtx then matchCtxByInflection parserCtx (ss, stripped) candidatesForMatch else return Nothing
+                                  case mMatch of
+                                    Just matched -> return [matched]
+                                    Nothing ->
+                                      if not (null candidates')
+                                        then return candidates'
+                                        else if null candidates
+                                          then customFailure ErrNoMatchingNominative
+                                          else return candidates
+                        Nothing -> do
+                          let candidatesForMatch =
+                                if null candidates
+                                  then [((ss, s), cas) | cas <- allCases]
+                                  else candidates
+                          mMatch <- if useCtx then matchCtxByInflection parserCtx (ss, s) candidatesForMatch else return Nothing
+                          case mMatch of
+                            Just matched -> return [matched]
+                            Nothing ->
+                              if null candidates
+                                then customFailure ErrNoMatchingNominative
+                                else return candidates
   where
     -- | Find a matching identifier in context without building full candidate lists.
     -- Short-circuits on the first context hit to avoid extra downs calls.
@@ -1605,7 +1660,7 @@ parseExpWithCtx' useCtx allowMatch =
     parseMoreClausesCont :: [Identifier] -- ^ Bound pattern names.
                          -> KipParser [Clause Ann] -- ^ Parsed clauses.
     parseMoreClausesCont argNames = do
-      msep <- optional (try clauseSep)
+      msep <- optional (try (clauseSep <|> (lexeme (char ',') $> ())))
       case msep of
         Nothing -> return []
         Just _ -> do
@@ -2104,13 +2159,34 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
       parseTypeWithCase
     -- | Parse a function argument declaration.
     parseArg :: KipParser ((Identifier, Ann), Ty Ann) -- ^ Parsed argument declaration.
-    parseArg = do
-      (argName, argSpan) <- withSpan identifierNotKeyword
-      ws
-      ty <- try parseHigherOrderArgType <|> try parseTypeWithCase <|> parseTypeLoose
-      let argAnn = mkAnn Nom argSpan
-      return ((argName, argAnn), ty)
+    parseArg =
+      try parseEffectfulHigherOrderArg <|> do
+        (argName, argSpan) <- withSpan identifierNotKeyword
+        ws
+        ty <- try parseHigherOrderArgType <|> try parseTypeWithCase <|> parseTypeLoose
+        let argAnn = mkAnn Nom argSpan
+        return ((argName, argAnn), ty)
       where
+        -- Parse nested effectful higher-order argument syntax:
+        --   (a'yı (işlemek b'siyle))
+        -- The bound callback name is the infinitive root (işle), and the type
+        -- becomes a function arrow from domain to image type.
+        parseEffectfulHigherOrderArg :: KipParser ((Identifier, Ann), Ty Ann)
+        parseEffectfulHigherOrderArg = do
+          domTy <- try parseTypeWithCase <|> parseTypeLoose
+          ws
+          (infNameRaw, infSpan, imgTy) <- parens $ do
+            (rawName, rawSpan) <- withSpan identifierNotKeyword
+            ws
+            ty <- try parseTypeWithCase <|> parseTypeLoose
+            return (rawName, rawSpan, ty)
+          infName <- maybe empty return (infinitiveRoot infNameRaw)
+          let imgCase = annCase (annTy imgTy)
+          let spanMerged = mergeSpan (annSpan (annTy domTy)) (annSpan (annTy imgTy))
+              argAnn = mkAnn Nom infSpan
+              arrTy = Arr (mkAnn imgCase spanMerged) domTy imgTy
+          return ((infName, argAnn), arrTy)
+
         parseHigherOrderArgType :: KipParser (Ty Ann)
         parseHigherOrderArgType = do
           domTy <- try parseTypeWithCase <|> parseTypeLoose
@@ -2176,7 +2252,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     -- | Parse a function declaration or definition.
     func :: KipParser (Stmt Ann) -- ^ Parsed function statement.
     func = do
-      args <- many (try (lexeme (parens parseArg) <* notFollowedBy (lexeme (char ','))))
+      args <- many (try (lexeme parseArgGroup <* notFollowedBy (lexeme (char ','))))
       (rawName, nameSpan, mRetTy) <- parseFuncHeader
       let isInfinitive = isJust (infinitiveRoot rawName)
           baseName = fromMaybe rawName (infinitiveRoot rawName)
@@ -2232,6 +2308,29 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
               st' <- getP
               putP (st' {parserCtx = fname : parserCtx st})
               return (Function fname args retTy clauses isInfinitive)
+    -- | Parse a single parenthesized function argument group.
+    --
+    -- This also supports nested effectful higher-order argument syntax:
+    --   (a'yı (işlemek b'siyle))
+    parseArgGroup :: KipParser ((Identifier, Ann), Ty Ann)
+    parseArgGroup =
+      try (parens parseNestedEffectfulArg) <|> parens parseArg
+      where
+        parseNestedEffectfulArg :: KipParser ((Identifier, Ann), Ty Ann)
+        parseNestedEffectfulArg = do
+          domTy <- try parseTypeWithCase <|> parseTypeLoose
+          ws
+          (infNameRaw, infSpan, imgTy) <- parens $ do
+            (rawName, rawSpan) <- withSpan identifierNotKeyword
+            ws
+            ty <- try parseTypeWithCase <|> parseTypeLoose
+            return (rawName, rawSpan, ty)
+          infName <- maybe empty return (infinitiveRoot infNameRaw)
+          let imgCase = annCase (annTy imgTy)
+              spanMerged = mergeSpan (annSpan (annTy domTy)) (annSpan (annTy imgTy))
+              argAnn = mkAnn Nom infSpan
+              arrTy = Arr (mkAnn imgCase spanMerged) domTy imgTy
+          return ((infName, argAnn), arrTy)
     -- | Parse function header with optional return type.
     parseFuncHeader :: KipParser (Identifier, Span, Maybe (Ty Ann)) -- ^ Function name, span, and optional return type.
     parseFuncHeader = do

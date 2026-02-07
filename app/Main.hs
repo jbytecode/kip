@@ -662,7 +662,13 @@ instance Render CompilerMsg where
             (cache, fsm) <- requireCacheFsm
             (sigArgs, sigName) <- liftIO (renderFunctionSignatureParts cache fsm paramTyCons tyMods isInfinitive name args)
             let argStrs =
-                  [ T.concat ["(", T.pack argName, " ", colorizeTyParts (rcUseColor ctx) tyParts, ")"]
+                  [ T.concat
+                      [ "("
+                      , T.pack argName
+                      , if null argName then "" else " "
+                      , colorizeTyParts (rcUseColor ctx) tyParts
+                      , ")"
+                      ]
                   | (argName, tyParts) <- sigArgs
                   ]
                 base = T.intercalate " " (argStrs ++ [renderNameBold (rcUseColor ctx) (T.pack sigName)])
@@ -675,7 +681,13 @@ instance Render CompilerMsg where
             (cache, fsm) <- requireCacheFsm
             (sigArgs, sigName) <- liftIO (renderFunctionSignatureParts cache fsm paramTyCons tyMods isInfinitive name args)
             let argStrs =
-                  [ T.concat ["(", T.pack argName, " ", colorizeTyParts (rcUseColor ctx) tyParts, ")"]
+                  [ T.concat
+                      [ "("
+                      , T.pack argName
+                      , if null argName then "" else " "
+                      , colorizeTyParts (rcUseColor ctx) tyParts
+                      , ")"
+                      ]
                   | (argName, tyParts) <- sigArgs
                   ]
                 base = T.intercalate " " (argStrs ++ [renderNameBold (rcUseColor ctx) (T.pack sigName)])
@@ -688,7 +700,13 @@ instance Render CompilerMsg where
             (cache, fsm) <- requireCacheFsm
             (sigArgs, sigName) <- liftIO (renderFunctionSignatureParts cache fsm paramTyCons tyMods isInfinitive name args)
             let argStrs =
-                  [ T.concat ["(", T.pack argName, " ", colorizeTyParts (rcUseColor ctx) tyParts, ")"]
+                  [ T.concat
+                      [ "("
+                      , T.pack argName
+                      , if null argName then "" else " "
+                      , colorizeTyParts (rcUseColor ctx) tyParts
+                      , ")"
+                      ]
                   | (argName, tyParts) <- sigArgs
                   ]
                 base = T.intercalate " " (argStrs ++ [renderNameBold (rcUseColor ctx) (T.pack sigName)])

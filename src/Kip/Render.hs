@@ -30,7 +30,7 @@ module Kip.Render
 
 import Data.Char (isLetter, isLower, isDigit, isSpace)
 import Data.List (intercalate, maximumBy, find, isInfixOf, isSuffixOf, isPrefixOf, intersect, nub)
-import Data.Bifunctor (first)
+import qualified Data.Bifunctor as B
 import Data.Maybe (fromMaybe, catMaybes)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
@@ -349,12 +349,13 @@ renderTy cache fsm paramTyCons tyMods ty =
       renderIdentWithCase cache fsm name (annCase ann)
     TyApp ann (TyInd _ name) args -> do
       argStrs <- mapM (renderTy cache fsm paramTyCons tyMods) args
+      let nonEmptyArgStrs = filter (not . null) argStrs
       let nameCases =
             if name `elem` paramTyCons
               then if annCase ann == Nom then [P3s] else [P3s, annCase ann]
               else [annCase ann]
       nameStr <- renderIdentWithCases cache fsm name nameCases
-      return (unwords (argStrs ++ [nameStr]))
+      return (unwords (nonEmptyArgStrs ++ [nameStr]))
     TyApp ann ctor _ -> do
       ctorStr <- renderTy cache fsm paramTyCons tyMods ctor
       return (ctorStr ++ caseTag (annCase ann))
@@ -392,9 +393,10 @@ renderTyNom cache fsm paramTyCons tyMods ty =
       renderIdentWithCase cache fsm name Nom
     TyApp _ (TyInd _ name) args -> do
       argStrs <- mapM (renderTyNom cache fsm paramTyCons tyMods) args
+      let nonEmptyArgStrs = filter (not . null) argStrs
       let nameCases = if name `elem` paramTyCons then [P3s] else [Nom]
       nameStr <- renderIdentWithCases cache fsm name nameCases
-      return (unwords (argStrs ++ [nameStr]))
+      return (unwords (nonEmptyArgStrs ++ [nameStr]))
     TyApp _ ctor _ ->
       renderTyNom cache fsm paramTyCons tyMods ctor
     TyInt _ ->
@@ -439,13 +441,17 @@ renderTyParts cache fsm paramTyCons tyMods ty =
       return [(s, True)]
     TyApp ann (TyInd _ name) args -> do
       argPartsList <- mapM (renderTyParts cache fsm paramTyCons tyMods) args
+      let nonEmptyArgParts = filter (not . null) argPartsList
       let nameCases =
             if name `elem` paramTyCons
               then if annCase ann == Nom then [P3s] else [P3s, annCase ann]
               else [annCase ann]
-          argParts = intercalate [(" ", False)] argPartsList
       nameStr <- renderIdentWithCases cache fsm name nameCases
-      return (argParts ++ [(" ", False), (nameStr, False)])
+      if null nonEmptyArgParts
+        then return [(nameStr, False)]
+        else do
+          let argParts = intercalate [(" ", False)] nonEmptyArgParts
+          return (argParts ++ [(" ", False), (nameStr, False)])
     TyApp ann ctor _ -> do
       ctorStr <- renderTy cache fsm paramTyCons tyMods ctor
       return [(ctorStr ++ caseTag (annCase ann), False)]
@@ -470,12 +476,20 @@ renderArg :: RenderCache -- ^ Render cache.
           -> Arg Ann -- ^ Argument to render.
           -> IO String -- ^ Rendered argument.
 renderArg cache fsm paramTyCons tyMods ((argName, _), ty) = do
-  argStr <- renderIdentWithCase cache fsm argName Nom
-  tyStr <-
-    if shouldPossessiveArg argName
-      then renderTyPossessive cache fsm paramTyCons tyMods ty
-      else renderTy cache fsm paramTyCons tyMods ty
-  return ("(" ++ argStr ++ " " ++ tyStr ++ ")")
+  case ty of
+    Arr _ domTy imgTy | annCase (annTy domTy) /= Gen -> do
+      domStr <- renderTy cache fsm paramTyCons tyMods domTy
+      fnInf <- renderInfinitiveName cache fsm argName
+      imgStr <- renderTyPossessive cache fsm paramTyCons tyMods imgTy
+      let domStr' = T.unpack (T.strip (T.pack domStr))
+      return ("(" ++ domStr' ++ " (" ++ fnInf ++ " " ++ normalizePossIns imgStr ++ "))")
+    _ -> do
+      argStr <- renderIdentWithCase cache fsm argName Nom
+      tyStr <-
+        if shouldPossessiveArg argName
+          then renderTyPossessive cache fsm paramTyCons tyMods ty
+          else renderTy cache fsm paramTyCons tyMods ty
+      return ("(" ++ argStr ++ " " ++ tyStr ++ ")")
 
 -- | Render a typed argument into name and type parts.
 renderArgParts :: RenderCache -- ^ Render cache.
@@ -485,12 +499,21 @@ renderArgParts :: RenderCache -- ^ Render cache.
                -> Arg Ann -- ^ Argument to render.
                -> IO (String, [(String, Bool)]) -- ^ Rendered name and type parts.
 renderArgParts cache fsm paramTyCons tyMods ((argName, _), ty) = do
-  argStr <- renderIdentWithCase cache fsm argName Nom
-  tyParts <-
-    if shouldPossessiveArg argName
-      then renderTyPartsPossessive cache fsm paramTyCons tyMods ty
-      else renderTyParts cache fsm paramTyCons tyMods ty
-  return (argStr, tyParts)
+  case ty of
+    Arr _ domTy imgTy | annCase (annTy domTy) /= Gen -> do
+      domParts <- renderTyParts cache fsm paramTyCons tyMods domTy
+      fnInf <- renderInfinitiveName cache fsm argName
+      imgParts <- renderTyPartsPossessive cache fsm paramTyCons tyMods imgTy
+      let normalizedImgParts = map (B.first normalizePossIns) imgParts
+          tyParts = domParts ++ [(" (", False), (fnInf, False), (" ", False)] ++ normalizedImgParts ++ [(")", False)]
+      return ("", tyParts)
+    _ -> do
+      argStr <- renderIdentWithCase cache fsm argName Nom
+      tyParts <-
+        if shouldPossessiveArg argName
+          then renderTyPartsPossessive cache fsm paramTyCons tyMods ty
+          else renderTyParts cache fsm paramTyCons tyMods ty
+      return (argStr, tyParts)
 
 -- | Decide whether a typed argument should render its type with possessive case.
 shouldPossessiveArg :: Identifier -- ^ Argument name.
@@ -520,8 +543,9 @@ renderTyPossessive cache fsm paramTyCons tyMods ty =
       renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
     TyApp ann (TyInd _ name) args -> do
       argStrs <- mapM (renderTy cache fsm paramTyCons tyMods) args
+      let nonEmptyArgStrs = filter (not . null) argStrs
       nameStr <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
-      return (unwords (argStrs ++ [nameStr]))
+      return (unwords (nonEmptyArgStrs ++ [nameStr]))
     TyApp ann ctor _ -> do
       ctorStr <- renderTy cache fsm paramTyCons tyMods ctor
       return (ctorStr ++ caseTag (annCase ann))
@@ -545,12 +569,17 @@ renderTyPossessive cache fsm paramTyCons tyMods ty =
 -- | Normalize possessive+instrumental spellings like "b'si'yle" to "b'siyle".
 normalizePossIns :: String -> String
 normalizePossIns s =
-  let t = T.pack s
+  let t = normalizeQuoteChars (T.pack s)
       t1 = T.replace (T.pack "'si'yle") (T.pack "'siyle") t
       t2 = T.replace (T.pack "'sı'yla") (T.pack "'sıyla") t1
       t3 = T.replace (T.pack "'su'yla") (T.pack "'suyla") t2
       t4 = T.replace (T.pack "'sü'yle") (T.pack "'süyle") t3
   in T.unpack t4
+
+-- | Normalize quote-like apostrophes to plain ASCII apostrophe.
+normalizeQuoteChars :: Text -> Text
+normalizeQuoteChars =
+  T.map (\c -> if c `elem` ("'´`ʼ" :: String) then '\'' else c)
 
 -- | Render type parts with possessive suffixes before grammatical case.
 renderTyPartsPossessive :: RenderCache -- ^ Render cache.
@@ -572,9 +601,13 @@ renderTyPartsPossessive cache fsm paramTyCons tyMods ty =
       return [(s, True)]
     TyApp ann (TyInd _ name) args -> do
       argPartsList <- mapM (renderTyParts cache fsm paramTyCons tyMods) args
-      let argParts = intercalate [(" ", False)] argPartsList
+      let nonEmptyArgParts = filter (not . null) argPartsList
       nameStr <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
-      return (argParts ++ [(" ", False), (nameStr, False)])
+      if null nonEmptyArgParts
+        then return [(nameStr, False)]
+        else do
+          let argParts = intercalate [(" ", False)] nonEmptyArgParts
+          return (argParts ++ [(" ", False), (nameStr, False)])
     TyApp ann ctor _ -> do
       ctorStr <- renderTy cache fsm paramTyCons tyMods ctor
       return [(ctorStr ++ caseTag (annCase ann), False)]

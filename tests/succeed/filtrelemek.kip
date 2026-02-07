@@ -1,0 +1,10 @@
+(bu a listesini) (a'yı (test-etmek doğruluğuyla)) filtrelemek,
+  bu boşsa, 
+    boş;
+  ilkin devama ekiyse, 
+    koşul için ilki test-edip,
+    o için devamı test-etmekle filtreleyip,
+    koşul doğruysa,
+      ilkin ona eki,
+    değilse,
+      odur.

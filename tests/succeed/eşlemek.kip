@@ -1,0 +1,7 @@
+(bu a listesini) (a'yı (işlemek b'siyle)) eşlemek,
+  bu boşsa, 
+    boş;
+  ilkin devama ekiyse, 
+    şu için ilki işleyip,
+    o için devamı işlemekle eşleyip,
+    şunun ona ekidir.
