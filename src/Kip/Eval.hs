@@ -31,6 +31,7 @@ import Text.Read (readMaybe)
 import Data.Maybe (catMaybes)
 import Data.List (find, foldl', intersect, nub)
 import qualified Data.Map.Strict as Map
+import qualified Data.HashMap.Strict as HM
 import qualified Data.MultiMap as MultiMap
 import Data.Fixed (mod')
 
@@ -100,7 +101,7 @@ isResolvableInAppContext varCandidates st =
 -- | Continue: evaluate a new (env, exp) without growing the Haskell call stack.
 data EvalStep
   = Done (Exp Ann)
-  | Continue (Map.Map Identifier (Exp Ann)) (Exp Ann)
+  | Continue (HM.HashMap Identifier (Exp Ann)) (Exp Ann)
 
 -- | Evaluate an expression with a local environment.
 -- |
@@ -110,13 +111,13 @@ data EvalStep
 evalExpWith :: [(Identifier, Exp Ann)] -- ^ Local environment bindings.
             -> Exp Ann -- ^ Expression to evaluate.
             -> EvalM (Exp Ann) -- ^ Evaluated expression.
-evalExpWith bindings = evalExpLoop (Map.fromList bindings) 
+evalExpWith bindings = evalExpLoop (HM.fromList bindings) 
 
 -- | Main trampoline loop.
 -- |
 -- | The loop is strict in the next step: it only recurses in Haskell when the
 -- | evaluation cannot be in tail position (e.g., computing subexpressions).
-evalExpLoop :: Map.Map Identifier (Exp Ann) -- ^ Local environment bindings.
+evalExpLoop :: HM.HashMap Identifier (Exp Ann) -- ^ Local environment bindings.
             -> Exp Ann -- ^ Expression to evaluate.
             -> EvalM (Exp Ann) -- ^ Evaluated expression.
 evalExpLoop localEnv e = do
@@ -162,16 +163,16 @@ evalExpLoop localEnv e = do
 -- | 4) The trampoline structure is intentionally minimal: we only introduce
 -- |    iteration for tail positions, leaving non-tail recursion untouched. This
 -- |    preserves current behavior while eliminating stack growth for tail calls.
-evalStep :: Map.Map Identifier (Exp Ann) -- ^ Local environment bindings.
+evalStep :: HM.HashMap Identifier (Exp Ann) -- ^ Local environment bindings.
          -> Exp Ann -- ^ Expression to evaluate.
          -> EvalM EvalStep -- ^ Trampoline step.
 evalStep localEnv e =
   case e of
     Var {annExp, varName, varCandidates} ->
-      case lookupByCandidatesMap localEnv varCandidates of
+      case lookupByCandidatesHM localEnv varCandidates of
         Just v -> return (Done v)
         Nothing ->
-          case lookupBySuffixMap localEnv varName of
+          case lookupBySuffixHM localEnv varName of
             Just v -> return (Done v)
             Nothing -> do
               st@MkEvalState{evalVals} <- get
@@ -250,7 +251,7 @@ evalStep localEnv e =
         Bind {bindName, bindNameAnn, bindExp} -> do
           -- Tail position: continue with the extended environment and second.
           v <- evalExpLoop localEnv bindExp
-          return (Continue (Map.insert bindName v localEnv) second)
+          return (Continue (HM.insert bindName v localEnv) second)
         _ -> do
           -- Evaluate the first expression, then tail-continue into second.
           _ <- evalExpLoop localEnv first
@@ -261,7 +262,7 @@ evalStep localEnv e =
       case findClause scrutinee' clauses of
         Nothing -> throwError NoMatchingClause
         Just (Clause _ body, patBindings) -> do
-          let env = Map.fromList patBindings `Map.union` localEnv
+          let env = HM.fromList patBindings `HM.union` localEnv
           -- Tail position: continue with the clause body.
           return (Continue env body)
     Let {annExp, varName, body} ->
@@ -292,7 +293,7 @@ evalStep localEnv e =
 -- | 'Continue' step so the trampoline can evaluate the body without growing
 -- | the Haskell stack.
 applyFunctionStep :: Exp Ann -- ^ Function expression.
-                  -> Map.Map Identifier (Exp Ann) -- ^ Local environment bindings.
+                  -> HM.HashMap Identifier (Exp Ann) -- ^ Local environment bindings.
                   -> ([Arg Ann], [Clause Ann]) -- ^ Function signature and clauses.
                   -> [Exp Ann] -- ^ Evaluated arguments.
                   -> EvalM EvalStep -- ^ Trampoline step.
@@ -302,7 +303,7 @@ applyFunctionStep fn localEnv (args, clauses) values = do
   case findClause values clauses of
     Nothing -> return (Done (App (annExp fn) fn values))
     Just (Clause pat body, patBindings) -> do
-      let env = Map.fromList patBindings `Map.union` Map.fromList argBindings `Map.union` localEnv
+      let env = HM.fromList patBindings `HM.union` HM.fromList argBindings `HM.union` localEnv
       return (Continue env body)
   where
     -- | Find the first matching clause for argument values.
@@ -752,6 +753,39 @@ lookupBySuffixMap env (mods, word) =
     findMatch [] = Nothing
     findMatch (ident:rest) =
       case Map.lookup ident env of
+        Just v -> Just v
+        Nothing -> findMatch rest
+
+-- | Lookup by candidates in a HashMap-based environment (O(1) average).
+lookupByCandidatesHM :: forall a.
+                        HM.HashMap Identifier a -- ^ Candidate bindings.
+                     -> [(Identifier, Case)] -- ^ Candidate identifiers.
+                     -> Maybe a -- ^ Matching binding when found.
+lookupByCandidatesHM env candidates =
+  let names = map fst candidates
+  in go names
+  where
+    go [] = Nothing
+    go (n:ns) =
+      case HM.lookup n env of
+        Just v -> Just v
+        Nothing -> go ns
+
+-- | Heuristic fallback for matching inflected variables in HashMap-based local bindings (O(1) average).
+lookupBySuffixHM :: HM.HashMap Identifier a -- ^ Local environment bindings.
+                 -> Identifier -- ^ Surface identifier.
+                 -> Maybe a -- ^ Matching binding when found.
+lookupBySuffixHM env (mods, word) =
+  let stripped =
+        [ (mods, root)
+        | suf <- bareCaseSuffixes
+        , Just root <- [T.stripSuffix suf word]
+        ]
+  in findMatch stripped
+  where
+    findMatch [] = Nothing
+    findMatch (ident:rest) =
+      case HM.lookup ident env of
         Just v -> Just v
         Nothing -> findMatch rest
 
