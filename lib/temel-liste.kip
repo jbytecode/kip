@@ -24,3 +24,15 @@ temeli yükle.
     0;
   ilkin devama ekiyse,
     ilkin (devamın toplamıyla) toplamıdır.
+
+(bu a listesinin) (iş a'nın b'siyle) eşlemi,
+  bu boşsa, boş;
+  ilkin devama ekiyse, (ilkin işinin) (devamın işle eşlemine) ekidir.
+
+(bu a listesinin) (test a'nın doğruluğuyla) filtresi,
+  bu boşsa, boş;
+  ilkin devama ekiyse, 
+    (ilkin testi) doğruysa,
+      ilkin (devamın testle filtresine) ekidir;
+    değilse,
+      devamın testle filtresidir.
