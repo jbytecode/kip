@@ -62,6 +62,7 @@ library
     , containers
     , hashable
     , hashtables
+    , unordered-containers
     , megaparsec
     , multimap
     , split
