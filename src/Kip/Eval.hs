@@ -217,22 +217,14 @@ evalStep localEnv e =
                         then Done <$> primIntRandom allArgs
                         else return (Done (App annApp fnResolved allArgs)) -- Constructor application or unevaluated call.
                 else do
-                  let fromPartial = not (null preAppliedArgs)
-                      isFark = any (\(ident, _) -> ident == ([], T.pack "fark")) varCandidates
-                      preAppliedNeedsRightSection =
-                        case preAppliedArgs of
-                          [a] -> annCase (annExp a) /= Ins
-                          _ -> False
-                      partialArgs =
-                        case allArgs of
-                          [a, b] | isFark && preAppliedNeedsRightSection -> [b, a]
-                          _ -> allArgs
-                      pickPrim = if fromPartial then pickPrimByTypesPartial else pickPrimByTypes
-                      pickFn = if fromPartial then pickFunctionByTypesPartial else pickFunctionByTypes
-                  pickPrim primMatches partialArgs >>= \case
+                  let partialCall = not (null preAppliedArgs)
+                      callArgs = adjustSectionArgs varCandidates preAppliedArgs allArgs
+                      pickPrim = if partialCall then pickPrimByTypesPartial else pickPrimByTypes
+                      pickFn = if partialCall then pickFunctionByTypesPartial else pickFunctionByTypes
+                  pickPrim primMatches callArgs >>= \case
                     Just (primImpl, primArgs) -> Done <$> primImpl primArgs
                     Nothing ->
-                      pickFn matches partialArgs >>= \case
+                      pickFn matches callArgs >>= \case
                         Just (def, fnArgs) -> applyFunctionStep fnResolved localEnv def fnArgs
                         Nothing ->
                           case (selectorMatches, allArgs) of
@@ -498,6 +490,21 @@ applySelector idx arg fallback =
         else return fallback
     _ -> return fallback
 
+-- | Normalize argument order for partially-applied primitive sections.
+-- For @fark@, a non-instrumental fixed argument represents a right section.
+adjustSectionArgs :: [(Identifier, Case)] -- ^ Function candidates.
+                  -> [Exp Ann] -- ^ Pre-applied arguments.
+                  -> [Exp Ann] -- ^ Full argument list for this call.
+                  -> [Exp Ann] -- ^ Possibly reordered call arguments.
+adjustSectionArgs varCandidates preAppliedArgs args =
+  case (isDifferencePrimitive varCandidates, preAppliedArgs, args) of
+    (True, [fixed], [a, b])
+      | annCase (annExp fixed) /= Ins -> [b, a]
+    _ -> args
+  where
+    isDifferencePrimitive =
+      any (\(ident, _) -> ident == ([], T.pack "fark"))
+
 -- | Choose a function definition based on inferred argument types.
 pickFunctionByTypes :: [(Identifier, ([Arg Ann], [Clause Ann]))] -- ^ Candidate function definitions.
                     -> [Exp Ann] -- ^ Evaluated arguments.
@@ -557,8 +564,8 @@ pickFunctionByTypesPartial defs args = do
         , let tys = map snd args'
               expCases = map (annCase . annTy . snd) args'
         , length tys == length args
-        , Just argsForSig <- [reorderByCasesNomFallback expCases argCases args]
-        , Just argTysForSig <- [reorderByCasesNomFallback expCases argCases argTys]
+        , Just argsForSig <- [reorderByCasesForEval expCases argCases args]
+        , Just argTysForSig <- [reorderByCasesForEval expCases argCases argTys]
         , and (zipWith (typeMatches (Map.toList evalTyCons)) argTysForSig tys)
         ]
       fallback =
@@ -567,7 +574,7 @@ pickFunctionByTypesPartial defs args = do
         , let tys = map snd args'
               expCases = map (annCase . annTy . snd) args'
         , length tys == length args
-        , Just argsForSig <- [reorderByCasesNomFallback expCases argCases args]
+        , Just argsForSig <- [reorderByCasesForEval expCases argCases args]
         ]
   return $ case matches of
     d:_ -> Just d
@@ -589,8 +596,8 @@ pickPrimByTypesPartial defs args = do
         , let tys = map snd args'
               expCases = map (annCase . annTy . snd) args'
         , length tys == length args
-        , Just argsForSig <- [reorderByCasesNomFallback expCases argCases args]
-        , Just argTysForSig <- [reorderByCasesNomFallback expCases argCases argTys]
+        , Just argsForSig <- [reorderByCasesForEval expCases argCases args]
+        , Just argTysForSig <- [reorderByCasesForEval expCases argCases argTys]
         , and (zipWith (typeMatchesAllowUnknownPartial (Map.toList evalTyCons)) argTysForSig tys)
         ]
   return $ case matches of
@@ -608,12 +615,18 @@ typeMatchesAllowUnknownPartial tyCons mTy ty =
     Nothing -> True
     Just _ -> typeMatchesAllowUnknown tyCons mTy ty
 
--- | Reorder values to expected cases, allowing nominative to fill missing slots.
-reorderByCasesNomFallback :: [Case] -> [Case] -> [a] -> Maybe [a]
-reorderByCasesNomFallback expected actual xs
-  | length expected /= length actual || length actual /= length xs = Nothing
-  | otherwise = map snd <$> go (zip actual xs) expected
+-- | Reorder values for evaluator call matching.
+-- Uses shared nominative fallback and additionally allows instrumental slots
+-- to consume genitive values when no exact or nominative match exists.
+reorderByCasesForEval :: [Case] -> [Case] -> [a] -> Maybe [a]
+reorderByCasesForEval expected actual xs =
+  case reorderByCasesNomFallback expected actual xs of
+    Just reordered -> Just reordered
+    Nothing -> reorderInsFromGen expected actual xs
   where
+    reorderInsFromGen expCases actCases vals
+      | length expCases /= length actCases || length actCases /= length vals = Nothing
+      | otherwise = map snd <$> go (zip actCases vals) expCases
     go rems [] = Just []
     go rems (c:cs) =
       case pick c rems of
@@ -625,15 +638,14 @@ reorderByCasesNomFallback expected actual xs
         (_, []) ->
           if c == Nom
             then Nothing
-            else
-              case break (\(ac, _) -> ac == Nom) rems of
-                (before, m:after) -> Just (m, before ++ after)
-                (_, []) ->
-                  if c == Ins
-                    then case break (\(ac, _) -> ac == Gen) rems of
-                      (before, m:after) -> Just (m, before ++ after)
-                      (_, []) -> Nothing
-                    else Nothing
+            else case break (\(ac, _) -> ac == Nom) rems of
+              (before, m:after) -> Just (m, before ++ after)
+              (_, []) ->
+                if c == Ins
+                  then case break (\(ac, _) -> ac == Gen) rems of
+                    (before, m:after) -> Just (m, before ++ after)
+                    (_, []) -> Nothing
+                  else Nothing
 
 -- | Type comparison allowing unknowns for primitive resolution.
 typeMatchesAllowUnknown :: [(Identifier, Int)] -- ^ Type constructor arities.
@@ -695,19 +707,9 @@ lookupBySuffixList :: [(Identifier, a)] -- ^ Local environment bindings.
                    -> Identifier -- ^ Surface identifier.
                    -> Maybe a -- ^ Matching binding when found.
 lookupBySuffixList env (mods, word) =
-  let suffixes =
-        [ "yı", "yi", "yu", "yü"
-        , "ı", "i", "u", "ü"
-        , "ya", "ye", "a", "e"
-        , "dan", "den", "tan", "ten"
-        , "da", "de", "ta", "te"
-        , "nın", "nin", "nun", "nün"
-        , "ın", "in", "un", "ün"
-        , "la", "le"
-        ]
-      stripped =
+  let stripped =
         [ (mods, root)
-        | suf <- suffixes
+        | suf <- bareCaseSuffixes
         , Just root <- [T.stripSuffix suf word]
         ]
   in findMatch stripped
@@ -718,33 +720,17 @@ lookupBySuffixList env (mods, word) =
         Just v -> Just v
         Nothing -> findMatch rest
 
--- | Heuristic fallback for matching inflected variables in Map-based bindings.
-lookupBySuffix :: Map.Map Identifier a -- ^ Environment bindings.
-               -> Identifier -- ^ Surface identifier.
-               -> Maybe a -- ^ Matching binding when found.
-lookupBySuffix env (mods, word) =
-  let suffixes =
-        [ "yı", "yi", "yu", "yü"
-        , "ı", "i", "u", "ü"
-        , "ya", "ye", "a", "e"
-        , "dan", "den", "tan", "ten"
-        , "da", "de", "ta", "te"
-        , "nın", "nin", "nun", "nün"
-        , "ın", "in", "un", "ün"
-        , "la", "le"
-        ]
-      stripped =
-        [ (mods, root)
-        | suf <- suffixes
-        , Just root <- [T.stripSuffix suf word]
-        ]
-  in findMatch stripped
-  where
-    findMatch [] = Nothing
-    findMatch (ident:rest) =
-      case Map.lookup ident env of
-        Just v -> Just v
-        Nothing -> findMatch rest
+bareCaseSuffixes :: [Text]
+bareCaseSuffixes =
+  [ "yı", "yi", "yu", "yü"
+  , "ı", "i", "u", "ü"
+  , "ya", "ye", "a", "e"
+  , "dan", "den", "tan", "ten"
+  , "da", "de", "ta", "te"
+  , "nın", "nin", "nun", "nün"
+  , "ın", "in", "un", "ün"
+  , "la", "le"
+  ]
 
 -- | Lookup a constructor binding by candidates.
 lookupCtorByCandidates :: Map.Map Identifier a -- ^ Candidate constructors.

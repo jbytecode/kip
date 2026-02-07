@@ -641,15 +641,30 @@ renderCall fn args =
           Var {} -> codegenExp fn
           _ -> "(" <> codegenExp fn <> ")"
       argsCsv = T.intercalate ", " (map codegenExp args)
-  in case (fn, args) of
-       (Var {varCandidates}, [arg])
-         | any (\(ident, _) -> ident == ([], T.pack "fark")) varCandidates
-         ->
-             if annCase (annExp arg) == Gen
-               then "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [__kip_arg0, " <> codegenExp arg <> "])))"
-               else "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [" <> codegenExp arg <> ", __kip_arg0])))"
-       _ ->
-         "(await " <> fnText <> "(" <> argsCsv <> "))"
+  in case partialSectionCall fn fnText args of
+       Just sectionFn -> sectionFn
+       Nothing -> "(await " <> fnText <> "(" <> argsCsv <> "))"
+
+-- | Render a single-argument partial application that should become a section.
+-- For @fark@ we mirror evaluator behavior:
+-- * genitive fixed arg => right section:  x -> x - fixed
+-- * otherwise          => left section:   x -> fixed - x
+partialSectionCall :: Exp Ann -> Text -> [Exp Ann] -> Maybe Text
+partialSectionCall fn fnText args =
+  case (fn, args) of
+    (Var {varCandidates}, [arg])
+      | isDifferencePrimitive varCandidates ->
+          Just (renderDifferenceSection fnText arg)
+    _ -> Nothing
+  where
+    isDifferencePrimitive =
+      any (\(ident, _) -> ident == ([], T.pack "fark"))
+
+renderDifferenceSection :: Text -> Exp Ann -> Text
+renderDifferenceSection fnText arg =
+  if annCase (annExp arg) == Gen
+    then "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [__kip_arg0, " <> codegenExp arg <> "])))"
+    else "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [" <> codegenExp arg <> ", __kip_arg0])))"
 
 renderExpAsStmt :: Exp Ann -> [Text]
 renderExpAsStmt exp' =

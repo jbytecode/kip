@@ -122,6 +122,32 @@ flattenApplied exp =
       in (root, prefixArgs ++ appArgs)
     _ -> (exp, [])
 
+-- | Reorder values to expected cases, allowing nominative values to fill
+-- unmatched expected cases.
+-- This is useful for partially applied calls where one side remains nominative.
+reorderByCasesNomFallback :: [Case] -- ^ Expected cases.
+                         -> [Case] -- ^ Actual cases.
+                         -> [a] -- ^ Values to reorder.
+                         -> Maybe [a] -- ^ Reordered values when possible.
+reorderByCasesNomFallback expected actual xs
+  | length expected /= length actual || length actual /= length xs = Nothing
+  | otherwise = map snd <$> go (zip actual xs) expected
+  where
+    go rems [] = Just []
+    go rems (c:cs) =
+      case pick c rems of
+        Nothing -> Nothing
+        Just (v, rems') -> (v :) <$> go rems' cs
+    pick c rems =
+      case break (\(ac, _) -> ac == c) rems of
+        (before, m:after) -> Just (m, before ++ after)
+        (_, []) ->
+          if c == Nom
+            then Nothing
+            else case break (\(ac, _) -> ac == Nom) rems of
+              (before, m:after) -> Just (m, before ++ after)
+              (_, []) -> Nothing
+
 -- | Typed argument of a function.
 -- The annotation on the identifier captures the span of the parameter name for LSP.
 type Arg ann = ((Identifier, ann), Ty ann)

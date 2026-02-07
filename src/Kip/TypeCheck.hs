@@ -833,29 +833,6 @@ reorderByCases expected actual xs
          -> Maybe a -- ^ Selected value.
     pick cas = Map.lookup cas mapping
 
--- | Reorder values to expected cases, allowing nominative values to fill
--- unmatched expected cases. This is used in call matching where arguments
--- often stay in nominative form while a function expects an explicit case.
-reorderByCasesNomFallback :: [Case] -> [Case] -> [a] -> Maybe [a]
-reorderByCasesNomFallback expected actual xs
-  | length expected /= length actual || length actual /= length xs = Nothing
-  | otherwise = map snd <$> go (zip actual xs) expected
-  where
-    go rems [] = Just []
-    go rems (c:cs) =
-      case pick c rems of
-        Nothing -> Nothing
-        Just (v, rems') -> (v :) <$> go rems' cs
-    pick c rems =
-      case break (\(ac, _) -> ac == c) rems of
-        (before, m:after) -> Just (m, before ++ after)
-        (_, []) ->
-          if c == Nom
-            then Nothing
-            else case break (\(ac, _) -> ac == Nom) rems of
-              (before, m:after) -> Just (m, before ++ after)
-              (_, []) -> Nothing
-
 -- | Type-check a clause in the context of argument types.
 tcClause :: [Arg Ann] -- ^ Argument signature.
          -> Bool -- ^ Whether this is an infinitive function (allows effects).
