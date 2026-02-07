@@ -1,0 +1,10 @@
+(bu a listesinin) (şey a'nın doğruluğuyla) filtresi,
+  bu boşsa, boş;
+  ilkin devama ekiyse, 
+    (ilkin şeyi) doğruysa,
+      ilkin (devamın şeyle filtresine) ekidir;
+    değilse,
+      devamın şeyle filtresidir.
+
+(([1, 2, 3]'ün (2'ye bölünürlüğüyle) filtresinin) toplamını) yaz.
+(([1, 2, 3]'ün (3'e bölünürlüğüyle) filtresinin) toplamını) yaz.
