@@ -3098,15 +3098,18 @@ expToPat allowScrutinee argNames e = do
       case expItem of
         Var ann (mods, name) _ ->
           case stripCondSuffix name of
-            Just base -> return (Just (PCtor ((mods, base), ann) []))
+            Just base -> do
+              ctorName <- resolveCondCtorName (mods, base)
+              return (Just (PCtor (ctorName, ann) []))
             Nothing -> return Nothing
         App _ (Var ann (mods, name) _) es ->
           case stripCondSuffix name of
             Just base -> do
+              ctorName <- resolveCondCtorName (mods, base)
               es' <- if allowScrutinee' then dropScrutineeExp allowScrutinee' argNames' es else return es
               pats <- mapM expToPatArg es'
               pats' <- dropScrutineePat allowScrutinee' argNames' pats
-              return (Just (PCtor ((mods, base), ann) pats'))
+              return (Just (PCtor (ctorName, ann) pats'))
             Nothing -> return Nothing
         IntLit ann n ->
           if annCase ann == Cond
@@ -3136,6 +3139,28 @@ expToPat allowScrutinee argNames e = do
              in if T.length txt > len
                   then Just (T.take (T.length txt - len) txt)
                   else Nothing
+    resolveCondCtorName :: Identifier -> KipParser Identifier
+    resolveCondCtorName ident@(mods, surface) = do
+      MkParserState{parserCtors} <- getP
+      candidates <- estimateCandidates False ident
+      case selectCondNameInCtors parserCtors candidates of
+        Just ctorName -> return ctorName
+        Nothing -> do
+          -- Secondary pass: inspect raw TRmorph analyses directly and try
+          -- constructor roots from those analyses.
+          analyses <- upsCached surface
+          let morphCandidates =
+                [ ((mods, root), cas)
+                | analysis <- analyses
+                , Just (root, cas) <- [getPossibleCase analysis]
+                ]
+          case selectCondNameInCtors parserCtors morphCandidates of
+            Just ctorName -> return ctorName
+            Nothing -> do
+              mFallback <- condCtorFallback parserCtors (candidates ++ morphCandidates)
+              case mFallback of
+                Just ctorName -> return ctorName
+                Nothing -> return ident
     condCtorFallback :: [Identifier] -> [(Identifier, Case)] -> KipParser (Maybe Identifier)
     condCtorFallback ctors candidates = do
       let stripped = mapMaybe (stripCondSuffixIdent . fst) candidates

@@ -218,7 +218,7 @@ evalStep localEnv e =
                         else return (Done (App annApp fnResolved allArgs)) -- Constructor application or unevaluated call.
                 else do
                   let partialCall = not (null preAppliedArgs)
-                      callArgs = adjustSectionArgs varCandidates preAppliedArgs allArgs
+                      callArgs = reorderSectionArgs preAppliedArgs allArgs
                       pickPrim = if partialCall then pickPrimByTypesPartial else pickPrimByTypes
                       pickFn = if partialCall then pickFunctionByTypesPartial else pickFunctionByTypes
                   pickPrim primMatches callArgs >>= \case
@@ -424,7 +424,11 @@ matchCtor ctor pats v =
     roots :: Text -- ^ Surface word.
           -> [Text] -- ^ Candidate roots.
     roots txt =
-      nub (catMaybes [Just txt, dropTrailingVowel txt >>= dropTrailingSoftG])
+      nub
+        (catMaybes
+          [ Just txt
+          , dropTrailingVowel txt >>= dropTrailingSoftG
+          ])
 
     -- | Drop a trailing Turkish vowel for heuristic matching.
     dropTrailingVowel :: Text -- ^ Surface word.
@@ -490,20 +494,15 @@ applySelector idx arg fallback =
         else return fallback
     _ -> return fallback
 
--- | Normalize argument order for partially-applied primitive sections.
--- For @fark@, a non-instrumental fixed argument represents a right section.
-adjustSectionArgs :: [(Identifier, Case)] -- ^ Function candidates.
-                  -> [Exp Ann] -- ^ Pre-applied arguments.
-                  -> [Exp Ann] -- ^ Full argument list for this call.
-                  -> [Exp Ann] -- ^ Possibly reordered call arguments.
-adjustSectionArgs varCandidates preAppliedArgs args =
-  case (isDifferencePrimitive varCandidates, preAppliedArgs, args) of
-    (True, [fixed], [a, b])
-      | annCase (annExp fixed) /= Ins -> [b, a]
+-- | Reorder arguments for one-argument section applications.
+-- Instrumental fixed arguments are left sections; other fixed arguments are
+-- treated as right sections.
+reorderSectionArgs :: [Exp Ann] -> [Exp Ann] -> [Exp Ann]
+reorderSectionArgs preApplied args =
+  case (preApplied, args) of
+    ([fixed], [x, y])
+      | annCase (annExp fixed) /= Ins -> [y, x]
     _ -> args
-  where
-    isDifferencePrimitive =
-      any (\(ident, _) -> ident == ([], T.pack "fark"))
 
 -- | Choose a function definition based on inferred argument types.
 pickFunctionByTypes :: [(Identifier, ([Arg Ann], [Clause Ann]))] -- ^ Candidate function definitions.
@@ -517,7 +516,7 @@ pickFunctionByTypes defs args = do
         | (_, def@(args', _)) <- defs
         , let tys = map snd args'
         , length tys == length args
-        , and (zipWith (typeMatches (Map.toList evalTyCons)) argTys tys)
+        , and (zipWith (typeMatchesAllowUnknown (Map.toList evalTyCons)) argTys tys)
         ]
       fallback =
         [ (def, args)
@@ -566,7 +565,7 @@ pickFunctionByTypesPartial defs args = do
         , length tys == length args
         , Just argsForSig <- [reorderByCasesForEval expCases argCases args]
         , Just argTysForSig <- [reorderByCasesForEval expCases argCases argTys]
-        , and (zipWith (typeMatches (Map.toList evalTyCons)) argTysForSig tys)
+        , and (zipWith (typeMatchesAllowUnknown (Map.toList evalTyCons)) argTysForSig tys)
         ]
       fallback =
         [ (def, argsForSig)
@@ -644,7 +643,10 @@ reorderByCasesForEval expected actual xs =
                 if c == Ins
                   then case break (\(ac, _) -> ac == Gen) rems of
                     (before, m:after) -> Just (m, before ++ after)
-                    (_, []) -> Nothing
+                    (_, []) ->
+                      case rems of
+                        m:after -> Just (m, after)
+                        [] -> Nothing
                   else Nothing
 
 -- | Type comparison allowing unknowns for primitive resolution.

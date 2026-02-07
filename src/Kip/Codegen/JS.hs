@@ -24,8 +24,7 @@ operations (read/write/random) in a uniform async style.
 * Expressions are lowered to /awaitable/ JavaScript expressions.
 * Pattern matching is lowered to ordered @if/else if@ chains.
 * Kip ADTs become tagged JS objects: @{ tag, args }@.
-* Partial-application edge cases (notably @fark@ sections) are preserved by
-  dedicated lowering helpers.
+* Partial-application edge cases are preserved by dedicated lowering helpers.
 
 = Notes
 
@@ -43,8 +42,36 @@ import Data.Char (isLetter)
 import Data.List (intercalate, partition)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 
 import Kip.AST
+
+newtype CodegenCtx = MkCodegenCtx
+  { sectionableFns :: Set.Set Identifier
+  }
+
+emptyCodegenCtx :: CodegenCtx
+emptyCodegenCtx = MkCodegenCtx Set.empty
+
+buildCodegenCtx :: [Stmt Ann] -> CodegenCtx
+buildCodegenCtx stmts =
+  let arityMap = foldl collectArity Map.empty stmts
+      sectionable =
+        Set.fromList
+          [ ident
+          | (ident, arities) <- Map.toList arityMap
+          , any (> 1) arities
+          , 1 `notElem` arities
+          ]
+  in MkCodegenCtx sectionable
+  where
+    collectArity acc stmt =
+      case stmt of
+        Function ident args _ _ _ -> Map.insertWith mergeArities ident [length args] acc
+        PrimFunc ident args _ _ -> Map.insertWith mergeArities ident [length args] acc
+        _ -> acc
+    mergeArities new old = Set.toList (Set.fromList (new ++ old))
 
 -- | Codegen a list of statements into a JS-like program.
 -- Order: primitives, then async IIFE containing:
@@ -53,12 +80,13 @@ import Kip.AST
 --   - expression statements (executed)
 codegenProgram :: [Stmt Ann] -> Text
 codegenProgram stmts =
-  let -- Separate function definitions from other statements
+  let ctx = buildCodegenCtx stmts
+      -- Separate function definitions from other statements
       (funcDefs, otherStmts) = partition isFunctionDef stmts
       -- Function definitions first (they hoist anyway)
-      funcCode = T.intercalate "\n\n" (map codegenStmt funcDefs)
+      funcCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) funcDefs)
       -- Expression statements last
-      exprCode = T.intercalate "\n\n" (map codegenStmt otherStmts)
+      exprCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) otherStmts)
       -- All user code inside async IIFE with wrappers after functions
       wrapped = T.unlines
         [ "const __kip_run = async () => {"
@@ -368,19 +396,24 @@ jsOverloadWrappers = T.unlines
 -- This is mainly useful for tests or embedding scenarios where the caller
 -- manages prelude/wrapper injection manually.
 codegenStmts :: [Stmt Ann] -> Text
-codegenStmts = T.intercalate "\n\n" . map codegenStmt
+codegenStmts stmts =
+  let ctx = buildCodegenCtx stmts
+  in T.intercalate "\n\n" (map (codegenStmtWith ctx) stmts)
 
 -- | Generate JavaScript for a single top-level statement.
 --
 -- Function and type declarations are emitted as declarations, while expression
 -- statements are emitted in executable statement form.
 codegenStmt :: Stmt Ann -> Text
-codegenStmt stmt =
+codegenStmt = codegenStmtWith emptyCodegenCtx
+
+codegenStmtWith :: CodegenCtx -> Stmt Ann -> Text
+codegenStmtWith ctx stmt =
   case stmt of
     Defn name _ exp' ->
-      "const " <> toJsIdent name <> " = " <> codegenExp exp' <> ";"
+      "const " <> toJsIdent name <> " = " <> codegenExpWith ctx exp' <> ";"
     Function name args _ clauses _ ->
-      renderFunction name args clauses
+      renderFunction ctx name args clauses
     PrimFunc name args _ _ ->
       "// primitive function " <> identText name <> "(" <> renderArgNames args <> ")"
     Load name ->
@@ -390,14 +423,17 @@ codegenStmt stmt =
     PrimType name ->
       "// primitive type " <> identText name
     ExpStmt exp' ->
-      codegenExp exp' <> ";"
+      codegenExpWith ctx exp' <> ";"
 
 -- | Generate JavaScript for an expression.
 --
 -- The result is always expression-shaped so it can be embedded in larger
 -- contexts. Sequencing and local bindings are lowered through async IIFEs.
 codegenExp :: Exp Ann -> Text
-codegenExp exp' =
+codegenExp = codegenExpWith emptyCodegenCtx
+
+codegenExpWith :: CodegenCtx -> Exp Ann -> Text
+codegenExpWith ctx exp' =
   case exp' of
     Var {varName, varCandidates} ->
       case varCandidates of
@@ -410,21 +446,21 @@ codegenExp exp' =
     FloatLit {floatVal} ->
       "__kip_float(" <> T.pack (show floatVal) <> ")"
     App {fn, args} ->
-      renderCall fn args
+      renderCall ctx fn args
     Bind {bindName, bindExp} ->
       renderIife
-        [ "const " <> toJsIdent bindName <> " = " <> codegenExp bindExp <> ";"
+        [ "const " <> toJsIdent bindName <> " = " <> codegenExpWith ctx bindExp <> ";"
         , "return " <> toJsIdent bindName <> ";"
         ]
     Seq {first, second} ->
       renderIife
-        (renderExpAsStmt first ++ ["return " <> codegenExp second <> ";"])
+        (renderExpAsStmt ctx first ++ ["return " <> codegenExpWith ctx second <> ";"])
     Match {scrutinee, clauses} ->
-      renderMatch scrutinee clauses
+      renderMatch ctx scrutinee clauses
     Let {body} ->
-      codegenExp body
+      codegenExpWith ctx body
     Ascribe {ascExp} ->
-      codegenExp ascExp
+      codegenExpWith ctx ascExp
 
 -- | Render a Kip function definition as an async JS function.
 --
@@ -433,19 +469,19 @@ codegenExp exp' =
 --
 -- Single wildcard clauses are emitted as direct returns; multi-clause bodies
 -- are lowered through the pattern-matching chain renderer.
-renderFunction :: Identifier -> [Arg Ann] -> [Clause Ann] -> Text
-renderFunction name args clauses =
+renderFunction :: CodegenCtx -> Identifier -> [Arg Ann] -> [Clause Ann] -> Text
+renderFunction ctx name args clauses =
   let argsText = renderArgNames args
       bodyLines =
         case clauses of
           [Clause (PWildcard _) body] ->
-            ["return " <> codegenExp body <> ";"]
+            ["return " <> codegenExpWith ctx body <> ";"]
           _ ->
             let arg0 = case args of
                          [] -> "__arg0"
                          (((argName, _), _) : _) -> toJsIdent argName
             in ("const __scrut = " <> arg0 <> ";")
-               : renderClauseChain "__scrut" clauses
+               : renderClauseChain ctx "__scrut" clauses
   in
     T.unlines
       [ "async function " <> toJsIdent name <> "(" <> argsText <> ") {"
@@ -456,19 +492,19 @@ renderFunction name args clauses =
 -- | Clause-chain indirection.
 --
 -- This alias keeps call sites stable if we later switch the lowering strategy.
-renderClauseChain :: Text -> [Clause Ann] -> [Text]
+renderClauseChain :: CodegenCtx -> Text -> [Clause Ann] -> [Text]
 renderClauseChain = renderClauseIfChain
 
 -- | Render an if/else chain for ordered clause matching.
-renderClauseIfChain :: Text -> [Clause Ann] -> [Text]
-renderClauseIfChain scrutinee =
+renderClauseIfChain :: CodegenCtx -> Text -> [Clause Ann] -> [Text]
+renderClauseIfChain ctx scrutinee =
   go True
   where
     go _ [] =
       ["throw new Error(\"No match\");"]
     go isFirst (Clause pat body : rest) =
-      let (cond, binds) = renderPatMatchCond scrutinee pat
-          bodyLines = binds ++ ["return " <> codegenExp body <> ";"]
+      let (cond, binds) = renderPatMatchCond ctx scrutinee pat
+          bodyLines = binds ++ ["return " <> codegenExpWith ctx body <> ";"]
           header =
             if cond == ""
               then if isFirst then "{" else "else {"
@@ -538,44 +574,44 @@ renderPatternBindings scrutinee pats startIdx =
 --
 -- The scrutinee is evaluated once and captured in @__scrut@ to avoid repeated
 -- evaluation and preserve side-effect ordering.
-renderMatch :: Exp Ann -> [Clause Ann] -> Text
-renderMatch scrutinee clauses =
+renderMatch :: CodegenCtx -> Exp Ann -> [Clause Ann] -> Text
+renderMatch ctx scrutinee clauses =
   renderIife $
-    ("const __scrut = " <> codegenExp scrutinee <> ";")
-      : renderMatchClauses "__scrut" clauses
+    ("const __scrut = " <> codegenExpWith ctx scrutinee <> ";")
+      : renderMatchClauses ctx "__scrut" clauses
 
 -- | Render match clauses with the same ordered semantics as function clauses.
-renderMatchClauses :: Text -> [Clause Ann] -> [Text]
+renderMatchClauses :: CodegenCtx -> Text -> [Clause Ann] -> [Text]
 renderMatchClauses = renderClauseIfChain
 
 -- | Compatibility alias for pattern condition + bindings rendering.
-renderPatMatch :: Text -> Pat Ann -> (Text, [Text])
+renderPatMatch :: CodegenCtx -> Text -> Pat Ann -> (Text, [Text])
 renderPatMatch = renderPatMatchCond
 
 -- | Render both the boolean guard and binding statements for a pattern.
 --
 -- The guard determines whether the branch matches; bindings are emitted only
 -- for variables appearing in that branch.
-renderPatMatchCond :: Text -> Pat Ann -> (Text, [Text])
-renderPatMatchCond scrutinee pat =
+renderPatMatchCond :: CodegenCtx -> Text -> Pat Ann -> (Text, [Text])
+renderPatMatchCond ctx scrutinee pat =
   case pat of
     PWildcard _ -> ("", [])
     PVar n _ -> ("", ["const " <> toJsIdent n <> " = " <> scrutinee <> ";"])
     PCtor (ctor, _) pats ->
-      let cond = renderPatCond scrutinee pat
+      let cond = renderPatCond ctx scrutinee pat
           (binds, _) = renderPatternBindings scrutinee pats 0
       in (cond, binds)
-    PIntLit _ _ -> (renderPatCond scrutinee pat, [])
-    PFloatLit _ _ -> (renderPatCond scrutinee pat, [])
-    PStrLit _ _ -> (renderPatCond scrutinee pat, [])
-    PListLit _ -> (renderPatCond scrutinee pat, [])
+    PIntLit _ _ -> (renderPatCond ctx scrutinee pat, [])
+    PFloatLit _ _ -> (renderPatCond ctx scrutinee pat, [])
+    PStrLit _ _ -> (renderPatCond ctx scrutinee pat, [])
+    PListLit _ -> (renderPatCond ctx scrutinee pat, [])
 
 -- | Render a JavaScript boolean condition for a pattern.
 --
 -- Constructors are matched by tag and minimum arity; literal patterns are
 -- matched by JS equality against the lowered scrutinee.
-renderPatCond :: Text -> Pat Ann -> Text
-renderPatCond scrutinee pat =
+renderPatCond :: CodegenCtx -> Text -> Pat Ann -> Text
+renderPatCond ctx scrutinee pat =
   case pat of
     PWildcard _ -> "true"
     PVar _ _ -> "true"
@@ -584,7 +620,7 @@ renderPatCond scrutinee pat =
       -- 1) check the tag, 2) ensure args are long enough, and
       -- 3) evaluate subpattern guards using right-aligned indexing.
       let patLen = length pats
-          headCond = scrutinee <> ".tag === " <> renderString (normalizeCtorName ctor)
+          headCond = scrutinee <> ".tag === " <> renderString (normalizeCtorName ctx ctor)
           lenCond =
             if patLen > 0
               then scrutinee <> ".args.length >= " <> T.pack (show patLen)
@@ -592,7 +628,7 @@ renderPatCond scrutinee pat =
           argConds =
             [ cond
             | (p, idx) <- zip pats [0 ..]
-            , let cond = renderPatCond (patArgAccess scrutinee patLen idx) p
+            , let cond = renderPatCond ctx (patArgAccess scrutinee patLen idx) p
             , cond /= "true"
             ]
       in T.intercalate " && " (headCond : lenCond : argConds)
@@ -603,22 +639,22 @@ renderPatCond scrutinee pat =
     PStrLit s _ ->
       scrutinee <> " === " <> renderString s
     PListLit pats ->
-      renderListPatCond scrutinee pats
+      renderListPatCond ctx scrutinee pats
 
 -- | Render a boolean condition for a list pattern.
 --
 -- Kip lists are represented as nested @eki(head, tail)@ constructors ending in
 -- @boş@, so this function recursively emits constructor checks for that shape.
-renderListPatCond :: Text -> [Pat Ann] -> Text
-renderListPatCond scrutinee [] =
+renderListPatCond :: CodegenCtx -> Text -> [Pat Ann] -> Text
+renderListPatCond _ scrutinee [] =
   -- Empty list pattern matches 'boş'
   scrutinee <> ".tag === \"boş\""
-renderListPatCond scrutinee (p:ps) =
+renderListPatCond ctx scrutinee (p:ps) =
   -- Non-empty list pattern matches 'eki' with head and tail
   let headCond = scrutinee <> ".tag === \"eki\""
       lenCond = scrutinee <> ".args.length >= 2"
-      headMatch = renderPatCond (scrutinee <> ".args[0]") p
-      tailMatch = renderListPatCond (scrutinee <> ".args[1]") ps
+      headMatch = renderPatCond ctx (scrutinee <> ".args[0]") p
+      tailMatch = renderListPatCond ctx (scrutinee <> ".args[1]") ps
       conds = filter (/= "true") [headCond, lenCond, headMatch, tailMatch]
   in if null conds
        then "true"
@@ -642,12 +678,10 @@ patArgAccess scrutinee patLen idx =
 --
 -- This strips selected Turkish suffix forms that can appear in surface syntax
 -- and joins namespaced identifiers using underscores to match JS tags.
-normalizeCtorName :: Identifier -> Text
-normalizeCtorName (ns, name) =
-  let base = stripTurkishSuffixes name
-  in case ns of
-       [] -> base
-       _  -> T.intercalate "_" (map (T.filter (/= ' ')) ns ++ [base])
+normalizeCtorName :: CodegenCtx -> Identifier -> Text
+normalizeCtorName _ ident =
+  case ident of
+    (ns, name) -> toJsIdent (ns, stripTurkishSuffixes name)
 
 -- | Strip selected Turkish suffixes used in constructor surface forms.
 --
@@ -721,52 +755,53 @@ renderCtor ctorName args =
 --
 -- Most calls become @(await f(...))@. Section-like partial forms are handled
 -- by 'partialSectionCall' to preserve Kip semantics.
-renderCall :: Exp Ann -> [Exp Ann] -> Text
-renderCall fn args =
+renderCall :: CodegenCtx -> Exp Ann -> [Exp Ann] -> Text
+renderCall ctx fn args =
   let fnText =
         case fn of
-          Var {} -> codegenExp fn
-          _ -> "(" <> codegenExp fn <> ")"
-      argsCsv = T.intercalate ", " (map codegenExp args)
-  in case partialSectionCall fn fnText args of
+          Var {} -> codegenExpWith ctx fn
+          _ -> "(" <> codegenExpWith ctx fn <> ")"
+      argsCsv = T.intercalate ", " (map (codegenExpWith ctx) args)
+  in case partialSectionCall ctx fn fnText args of
        Just sectionFn -> sectionFn
        Nothing -> "(await " <> fnText <> "(" <> argsCsv <> "))"
 
 -- | Render a single-argument partial application that should become a section.
--- For @fark@ we mirror evaluator behavior:
--- * genitive fixed arg => right section:  x -> x - fixed
--- * otherwise          => left section:   x -> fixed - x
-partialSectionCall :: Exp Ann -> Text -> [Exp Ann] -> Maybe Text
-partialSectionCall fn fnText args =
-  case (fn, args) of
-    (Var {varCandidates}, [arg])
-      | isDifferencePrimitive varCandidates ->
-          Just (renderDifferenceSection fnText arg)
-    _ -> Nothing
-  where
-    isDifferencePrimitive =
-      any (\(ident, _) -> ident == ([], T.pack "fark"))
-
--- | Render the @fark@ section helper.
 --
--- * Genitive fixed argument: right section (@x - fixed@)
--- * Other fixed argument: left section (@fixed - x@)
-renderDifferenceSection :: Text -> Exp Ann -> Text
-renderDifferenceSection fnText arg =
-  if annCase (annExp arg) == Gen
-    then "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [__kip_arg0, " <> codegenExp arg <> "])))"
-    else "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [" <> codegenExp arg <> ", __kip_arg0])))"
+-- Section lowering is enabled only for function names proven section-capable in
+-- 'buildCodegenCtx' (has an arity > 1 overload and no unary overload).
+partialSectionCall :: CodegenCtx -> Exp Ann -> Text -> [Exp Ann] -> Maybe Text
+partialSectionCall ctx fn fnText args =
+  case (fn, args) of
+    (Var {annExp = annFn, varCandidates}, [arg])
+      | annCase annFn == Ins && isSectionableCall ctx varCandidates ->
+          Just (renderCaseDrivenSection ctx fnText arg)
+    _ -> Nothing
+
+-- | Render a generic case-driven section for binary calls.
+--
+-- Instrumental fixed args are treated as left sections; all other fixed-case
+-- args are treated as right sections.
+renderCaseDrivenSection :: CodegenCtx -> Text -> Exp Ann -> Text
+renderCaseDrivenSection ctx fnText arg =
+  if annCase (annExp arg) == Ins
+    then "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [" <> codegenExpWith ctx arg <> ", __kip_arg0])))"
+    else "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [__kip_arg0, " <> codegenExpWith ctx arg <> "])))"
+
+isSectionableCall :: CodegenCtx -> [(Identifier, Case)] -> Bool
+isSectionableCall ctx =
+  any (\(ident, _) -> ident `Set.member` sectionableFns ctx)
 
 -- | Render an expression in statement position.
 --
 -- Bindings become declarations; all other expressions become single statements.
-renderExpAsStmt :: Exp Ann -> [Text]
-renderExpAsStmt exp' =
+renderExpAsStmt :: CodegenCtx -> Exp Ann -> [Text]
+renderExpAsStmt ctx exp' =
   case exp' of
     Bind {bindName, bindExp} ->
-      ["const " <> toJsIdent bindName <> " = " <> codegenExp bindExp <> ";"]
+      ["const " <> toJsIdent bindName <> " = " <> codegenExpWith ctx bindExp <> ";"]
     _ ->
-      [codegenExp exp' <> ";"]
+      [codegenExpWith ctx exp' <> ";"]
 
 -- | Wrap a list of statements in an async IIFE expression.
 renderIife :: [Text] -> Text

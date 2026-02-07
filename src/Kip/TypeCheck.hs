@@ -289,12 +289,26 @@ tcExp1With allowEffect e =
             (ident, _) : _ -> unless allowEffect (rejectReadEffect annFn ident)
             _ -> return ()
           MkTCState{tcFuncSigs, tcTyCons, tcCtors, tcFuncSigRets, tcVarTys} <- get
-          let isHigherOrderVarCall =
+          let higherOrderResultTy =
                 case lookupByCandidates tcVarTys varCandidates of
-                  Just Arr {} -> True
-                  _ -> False
-          when (isHigherOrderVarCall && annCase annFn /= Gen) $
-            lift (throwE (NoType (annSpan annApp)))
+                  Just (Arr _ _ imgTy) -> Just imgTy
+                  _ -> Nothing
+              isConditionalResultTy ty =
+                let tyNorm = normalizePrimTy ty
+                    tyConsList = Map.toList tcTyCons
+                    nullaryCtorCount =
+                      length
+                        [ ()
+                        | (ctorArgs, resTy) <- Map.elems tcCtors
+                        , null ctorArgs
+                        , tyEq tyConsList resTy tyNorm || tyEq tyConsList tyNorm resTy
+                        ]
+                in nullaryCtorCount >= 2
+          case higherOrderResultTy of
+            Just imgTy
+              | annCase annFn /= Gen && not (isConditionalResultTy imgTy) ->
+                  lift (throwE (NoType (annSpan annApp)))
+            _ -> return ()
           let tyNames = Map.keys tcTyCons
               funcNames = MultiMap.keys tcFuncSigs
           case allArgs of
@@ -972,63 +986,69 @@ inferType e =
     App {fn, args} ->
       case fn of
         Var {annExp = annFn, varCandidates} -> do
-          MkTCState{tcCtors, tcTyCons, tcFuncSigRets, tcCtx, tcFuncSigs} <- get
-          case lookupByCandidatesMap tcCtors varCandidates of
-            Just (tys, resTy)
-              | length tys == length args -> do
-                  argTys <- mapM inferType args
-                  if Nothing `elem` argTys
-                    then return Nothing
-                    else do
-                      let actuals = catMaybes argTys
-                      case unifyTypes (Map.toList tcTyCons) tys actuals of
-                        Just subst -> return (Just (applySubst subst resTy))
-                        Nothing -> return Nothing
+          MkTCState{tcCtors, tcTyCons, tcFuncSigRets, tcCtx, tcFuncSigs, tcVarTys} <- get
+          case lookupByCandidates tcVarTys varCandidates of
+            Just fnTy@(Arr {}) ->
+              case applyFunTy (length args) fnTy of
+                Just retTy -> return (Just retTy)
+                Nothing -> return Nothing
             _ -> do
-              -- Find matching overload by argument types and return its return type
-              argTys <- mapM inferType args
-              let fnNames = map fst varCandidates
-                  argCount = length args
-                  exactSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig == argCount]
-                  partialSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig > argCount]
-                  matchExactSig (name, argsSig) =
-                    let tys = map snd argsSig
-                    in if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys tys)
-                         then Map.lookup (name, tys) tcFuncSigRets
-                         else Nothing
-                  matchPartialSig (name, argsSig) =
-                    let tys = map snd argsSig
-                        expCases = map (annCase . annTy . snd) argsSig
-                        actCases = map (annCase . annExp) args
-                    in case matchPartialCaseIndices expCases actCases of
-                         Just idxs ->
-                           let appliedTys = map (tys !!) idxs
-                               remainingIdxs = [i | i <- [0 .. length tys - 1], i `notElem` idxs]
-                               remainingTys = map (tys !!) remainingIdxs
-                               mkPartial retTy = foldr (Arr (mkAnn Nom NoSpan)) retTy remainingTys
-                           in if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys appliedTys)
-                                then fmap mkPartial (Map.lookup (name, tys) tcFuncSigRets)
-                                else Nothing
-                         Nothing -> Nothing
-                  matches = mapMaybe matchExactSig exactSigs ++ mapMaybe matchPartialSig partialSigs
-              case matches of
-                retTy:_ -> return (Just retTy)
-                [] ->
-                  -- Fallback: try to find any matching return type
-                  let actuals = catMaybes argTys
-                  in case lookupFuncRetMap tcTyCons tcFuncSigRets varCandidates actuals of
-                    Just retTy -> return (Just retTy)
-                    Nothing ->
-                      let inCtx = any (\(ident, _) -> Set.member ident tcCtx) varCandidates
-                          inSigs = any (\(ident, _) -> not (null (MultiMap.lookup ident tcFuncSigs))) varCandidates
-                      in case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
-                           Just (ident, _) -> return (Just (TyVar (mkAnn (annCase annFn) NoSpan) ident))
-                           Nothing ->
-                             if inCtx || inSigs
-                               then case varCandidates of
-                                 (ident, _):_ -> return (Just (TyVar (mkAnn (annCase annFn) NoSpan) ident))
-                                 [] -> return Nothing
-                               else return Nothing
+              case lookupByCandidatesMap tcCtors varCandidates of
+                Just (tys, resTy)
+                  | length tys == length args -> do
+                      argTys <- mapM inferType args
+                      if Nothing `elem` argTys
+                        then return Nothing
+                        else do
+                          let actuals = catMaybes argTys
+                          case unifyTypes (Map.toList tcTyCons) tys actuals of
+                            Just subst -> return (Just (applySubst subst resTy))
+                            Nothing -> return Nothing
+                _ -> do
+                  -- Find matching overload by argument types and return its return type
+                  argTys <- mapM inferType args
+                  let fnNames = map fst varCandidates
+                      argCount = length args
+                      exactSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig == argCount]
+                      partialSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig > argCount]
+                      matchExactSig (name, argsSig) =
+                        let tys = map snd argsSig
+                        in if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys tys)
+                             then Map.lookup (name, tys) tcFuncSigRets
+                             else Nothing
+                      matchPartialSig (name, argsSig) =
+                        let tys = map snd argsSig
+                            expCases = map (annCase . annTy . snd) argsSig
+                            actCases = map (annCase . annExp) args
+                        in case matchPartialCaseIndices expCases actCases of
+                             Just idxs ->
+                               let appliedTys = map (tys !!) idxs
+                                   remainingIdxs = [i | i <- [0 .. length tys - 1], i `notElem` idxs]
+                                   remainingTys = map (tys !!) remainingIdxs
+                                   mkPartial retTy = foldr (Arr (mkAnn Nom NoSpan)) retTy remainingTys
+                               in if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys appliedTys)
+                                    then fmap mkPartial (Map.lookup (name, tys) tcFuncSigRets)
+                                    else Nothing
+                             Nothing -> Nothing
+                      matches = mapMaybe matchExactSig exactSigs ++ mapMaybe matchPartialSig partialSigs
+                  case matches of
+                    retTy:_ -> return (Just retTy)
+                    [] ->
+                      -- Fallback: try to find any matching return type
+                      let actuals = catMaybes argTys
+                      in case lookupFuncRetMap tcTyCons tcFuncSigRets varCandidates actuals of
+                        Just retTy -> return (Just retTy)
+                        Nothing ->
+                          let inCtx = any (\(ident, _) -> Set.member ident tcCtx) varCandidates
+                              inSigs = any (\(ident, _) -> not (null (MultiMap.lookup ident tcFuncSigs))) varCandidates
+                          in case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
+                               Just (ident, _) -> return (Just (TyVar (mkAnn (annCase annFn) NoSpan) ident))
+                               Nothing ->
+                                 if inCtx || inSigs
+                                   then case varCandidates of
+                                     (ident, _):_ -> return (Just (TyVar (mkAnn (annCase annFn) NoSpan) ident))
+                                     [] -> return Nothing
+                                   else return Nothing
         _ -> return Nothing
     Match {clauses} ->
       case clauses of
@@ -1037,6 +1057,16 @@ inferType e =
     Ascribe {ascType} -> return (Just ascType)
     _ -> return Nothing
   where
+    -- | Apply an n-argument application to a function type.
+    -- Returns the remaining result type when the application is valid.
+    applyFunTy :: Int -> Ty Ann -> Maybe (Ty Ann)
+    applyFunTy n ty
+      | n <= 0 = Just ty
+      | otherwise =
+          case ty of
+            Arr _ _ imgTy -> applyFunTy (n - 1) imgTy
+            _ -> Nothing
+
     inferFunctionValueType :: [(Identifier, Case)]
                            -> MultiMap.MultiMap Identifier [Arg Ann]
                            -> Map.Map (Identifier, [Ty Ann]) (Ty Ann)
