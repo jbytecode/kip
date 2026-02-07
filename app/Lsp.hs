@@ -1795,7 +1795,7 @@ parseErrorToDiagnostic source bundle =
           FancyError _ xs ->
             listToMaybe
               [ spanToRange sp
-              | ErrorCustom (ErrUnrecognizedTurkishWord _ sp) <- Set.toList xs
+              | ErrorCustom (ErrUnrecognizedTurkishWord _ sp _) <- Set.toList xs
               ]
           _ -> Nothing
       range = fromMaybe (Range pos pos) customRange

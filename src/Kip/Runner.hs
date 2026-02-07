@@ -218,15 +218,15 @@ emitMsgIO ctx msg = do
 renderParseError :: Lang -> ParseErrorBundle Text ParserError -> Text
 renderParseError lang err =
   case findUnrecognizedWordError err of
-    Just (wordTxt, sp, source) ->
+    Just (wordTxt, sp, suggestions, source) ->
       let header =
             case lang of
               LangTr -> "Sözdizim hatası:\n"
               LangEn -> "Syntax error:\n"
           msg =
             case lang of
-              LangTr -> renderParserErrorTr (ErrUnrecognizedTurkishWord wordTxt sp)
-              LangEn -> renderParserErrorEn (ErrUnrecognizedTurkishWord wordTxt sp)
+              LangTr -> renderParserErrorTr (ErrUnrecognizedTurkishWord wordTxt sp suggestions)
+              LangEn -> renderParserErrorEn (ErrUnrecognizedTurkishWord wordTxt sp suggestions)
       in header <> renderSpanSnippet source sp <> "\n" <> msg
     Nothing ->
       case lang of
@@ -238,17 +238,17 @@ renderParseError lang err =
           in "Syntax error:\n" <> T.pack (errorBundlePretty enBundle)
 
 -- | Find the custom unrecognized-word parser error, if present.
-findUnrecognizedWordError :: ParseErrorBundle Text ParserError -> Maybe (Text, Span, Text)
+findUnrecognizedWordError :: ParseErrorBundle Text ParserError -> Maybe (Text, Span, [Text], Text)
 findUnrecognizedWordError (ParseErrorBundle errs posState) = do
-  (w, sp) <- listToMaybe (concatMap extract (NE.toList errs))
-  return (w, sp, pstateInput posState)
+  (w, sp, suggestions) <- listToMaybe (concatMap extract (NE.toList errs))
+  return (w, sp, suggestions, pstateInput posState)
   where
-    extract :: ParseError Text ParserError -> [(Text, Span)]
+    extract :: ParseError Text ParserError -> [(Text, Span, [Text])]
     extract parseErr =
       case parseErr of
         FancyError _ xs ->
-          [ (w, sp)
-          | ErrorCustom (ErrUnrecognizedTurkishWord w sp) <- Set.toList xs
+          [ (w, sp, suggestions)
+          | ErrorCustom (ErrUnrecognizedTurkishWord w sp suggestions) <- Set.toList xs
           ]
         _ -> []
 

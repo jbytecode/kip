@@ -109,7 +109,7 @@ import Kip.AST
 data ParserError
   = ErrKeywordAsIdent
   | ErrNoMatchingNominative
-  | ErrUnrecognizedTurkishWord Text Span
+  | ErrUnrecognizedTurkishWord Text Span [Text]
   | ErrMatchPatternExpected
   | ErrDefinitionName
   | ErrDefinitionBodyMissing
@@ -130,8 +130,13 @@ renderParserErrorTr err =
   case err of
     ErrKeywordAsIdent -> "Anahtar kelime isim yerine kullanılamaz."
     ErrNoMatchingNominative -> "Buraya uyan yalın halde bir isim bulunamadı."
-    ErrUnrecognizedTurkishWord w _ ->
-      "'" <> w <> "' Türkçe bir kelime olarak tanınmadığı için burada kullanılamaz."
+    ErrUnrecognizedTurkishWord w _ suggestions ->
+      let base = "'" <> w <> "' Türkçe bir kelime olarak tanınmadığı için burada kullanılamaz."
+      in case suggestions of
+           [] -> base
+           _ ->
+             base <> " Şunlardan birini mi demek istediniz: "
+               <> T.intercalate ", " (map (\s -> "'" <> s <> "'") suggestions) <> "?"
     ErrMatchPatternExpected -> "Eşleştirme için bir yapkı örüntüsü bekleniyordu."
     ErrDefinitionName -> "Tanımın ismi bir isim olmalıdır."
     ErrDefinitionBodyMissing -> "Tanımın gövdesi bulunamadı."
@@ -151,8 +156,13 @@ renderParserErrorEn err =
   case err of
     ErrKeywordAsIdent -> "A keyword cannot be used as an identifier."
     ErrNoMatchingNominative -> "No matching nominative identifier found here."
-    ErrUnrecognizedTurkishWord w _ ->
-      "'" <> w <> "' is not recognized as a Turkish word, so it cannot be used here."
+    ErrUnrecognizedTurkishWord w _ suggestions ->
+      let base = "'" <> w <> "' is not recognized as a Turkish word, so it cannot be used here."
+      in case suggestions of
+           [] -> base
+           _ ->
+             base <> " Did you mean one of: "
+               <> T.intercalate ", " (map (\s -> "'" <> s <> "'") suggestions) <> "?"
     ErrMatchPatternExpected -> "Expected a constructor pattern for matching."
     ErrDefinitionName -> "Definition name must be an identifier."
     ErrDefinitionBodyMissing -> "Definition body is missing."
@@ -1585,7 +1595,7 @@ parseExpWithCtx' useCtx allowMatch =
       mcomma <- optional (try (lookAhead (lexeme (char ','))))
       case mcomma of
         Nothing -> do
-          failOnUnknownWordBeforeSeparator
+          failOnUnknownWordAfterExpr
           return e1
         Just _ ->
           if allowMatch && useCtx
@@ -1612,25 +1622,28 @@ parseExpWithCtx' useCtx allowMatch =
               let ann = mkAnn (annCase (annExp e2)) (mergeSpan (annSpan (annExp e1')) (annSpan (annExp e2)))
               return (Seq ann e1' e2)
             else do
-              failOnUnknownWordBeforeSeparator
+              failOnUnknownWordAfterExpr
               return e1'
 
-        failOnUnknownWordBeforeSeparator :: KipParser ()
-        failOnUnknownWordBeforeSeparator = do
-          mWord <- optional (try (lookAhead parseWordBeforeSeparator))
+        failOnUnknownWordAfterExpr :: KipParser ()
+        failOnUnknownWordAfterExpr = do
+          mWord <- optional (try (lookAhead parseWordAfterExpr))
           case mWord of
             Nothing -> return ()
             Just (w, sp) -> do
               analyses <- upsCached w
-              when (null analyses) $
-                customFailure (ErrUnrecognizedTurkishWord w sp)
+              when (null analyses) $ do
+                MkParserState{fsm} <- getP
+                -- This branch is a use-site (after an expression), so favor
+                -- context-like morphology suggestions over raw edit-distance.
+                near <- liftIO (suggestContextLike fsm w)
+                let suggestions = take 5 near
+                customFailure (ErrUnrecognizedTurkishWord w sp suggestions)
 
-        parseWordBeforeSeparator :: KipParser (Text, Span)
-        parseWordBeforeSeparator = do
+        parseWordAfterExpr :: KipParser (Text, Span)
+        parseWordAfterExpr = do
           ws
           (w, sp) <- withSpan word
-          ws
-          _ <- char ','
           return (w, sp)
 
         parseMatchFromApp :: Exp Ann -> KipParser (Exp Ann)
@@ -2281,6 +2294,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     func = do
       args <- many (try (lexeme parseArgGroup <* notFollowedBy (lexeme (char ','))))
       (rawName, nameSpan, mRetTy) <- parseFuncHeader
+      validateDefinitionName rawName nameSpan
       let isInfinitive = isJust (infinitiveRoot rawName)
           baseName = fromMaybe rawName (infinitiveRoot rawName)
       (fname, _) <-
@@ -2335,6 +2349,16 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
               st' <- getP
               putP (st' {parserCtx = fname : parserCtx st})
               return (Function fname args retTy clauses isInfinitive)
+    -- | Ensure newly defined names are recognized Turkish surface forms.
+    -- For hyphenated identifiers, morphology applies to the head (last segment).
+    validateDefinitionName :: Identifier -> Span -> KipParser ()
+    validateDefinitionName (_mods, word) nameSpan = do
+      analyses <- upsCached word
+      when (null analyses) $ do
+        MkParserState{fsm} <- getP
+        near <- liftIO (suggestEditDistance1 fsm word)
+        let suggestions = take 15 near
+        customFailure (ErrUnrecognizedTurkishWord word nameSpan suggestions)
     -- | Parse a single parenthesized function argument group.
     --
     -- This also supports nested effectful higher-order argument syntax:
