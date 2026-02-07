@@ -375,3 +375,85 @@ prettyExp (Ascribe _ ty e) =
     prettyTySimple (TyInd _ name) = T.unpack (T.intercalate "-" (fst name ++ [snd name]))
     prettyTySimple (TyVar _ name) = T.unpack (T.intercalate "-" (fst name ++ [snd name]))
     prettyTySimple _ = "..."
+
+-- | Pretty-print an expression as an indented tree for debugging.
+ppExp :: Int -> Exp a -> String
+ppExp n e = indent n ++ case e of
+  Var _ name _ -> "Var " ++ ppIdent name
+  StrLit _ s -> "StrLit " ++ show s
+  IntLit _ i -> "IntLit " ++ show i
+  FloatLit _ f -> "FloatLit " ++ show f
+  App _ f args ->
+    "App\n" ++ ppExp (n+2) f ++ "\n" ++
+    indent (n+2) ++ "args:" ++
+    concatMap (\a -> "\n" ++ ppExp (n+4) a) args
+  Bind _ name _ body ->
+    "Bind " ++ ppIdent name ++ "\n" ++ ppExp (n+2) body
+  Seq _ a b ->
+    "Seq\n" ++ ppExp (n+2) a ++ "\n" ++ ppExp (n+2) b
+  Match _ scrut clauses ->
+    "Match\n" ++ ppExp (n+2) scrut ++ "\n" ++
+    indent (n+2) ++ "clauses:" ++
+    concatMap (\c -> "\n" ++ ppClause (n+4) c) clauses
+  Let _ name body ->
+    "Let " ++ ppIdent name ++ "\n" ++ ppExp (n+2) body
+  Ascribe _ ty body ->
+    "Ascribe " ++ ppTy ty ++ "\n" ++ ppExp (n+2) body
+  where
+    indent i = replicate i ' '
+
+-- | Pretty-print a clause.
+ppClause :: Int -> Clause a -> String
+ppClause n (Clause pat body) =
+  replicate n ' ' ++ ppPat pat ++ " =>\n" ++ ppExp (n+2) body
+
+-- | Pretty-print a pattern.
+ppPat :: Pat a -> String
+ppPat (PWildcard _) = "_"
+ppPat (PVar name _) = ppIdent name
+ppPat (PCtor (name, _) pats) =
+  ppIdent name ++ "(" ++ intercalate ", " (map ppPat pats) ++ ")"
+ppPat (PIntLit i _) = show i
+ppPat (PFloatLit f _) = show f
+ppPat (PStrLit s _) = show s
+ppPat (PListLit pats) = "[" ++ intercalate ", " (map ppPat pats) ++ "]"
+
+-- | Pretty-print an identifier.
+ppIdent :: Identifier -> String
+ppIdent (mods, name) = T.unpack (T.intercalate "." (mods ++ [name]))
+
+-- | Pretty-print a type (simple form).
+ppTy :: Ty a -> String
+ppTy (TyString _) = "dizge"
+ppTy (TyInt _) = "tam-sayı"
+ppTy (TyFloat _) = "ondalık-sayı"
+ppTy (TyInd _ name) = ppIdent name
+ppTy (TyVar _ name) = ppIdent name
+ppTy (TySkolem _ name) = "'" ++ ppIdent name
+ppTy (Arr _ d i) = "(" ++ ppTy d ++ " -> " ++ ppTy i ++ ")"
+ppTy (TyApp _ c args) = ppTy c ++ "(" ++ intercalate ", " (map ppTy args) ++ ")"
+
+-- | Pretty-print a statement as an indented tree.
+ppStmt :: Stmt a -> String
+ppStmt stmt = case stmt of
+  Defn name ty body ->
+    "Defn " ++ ppIdent name ++ " : " ++ ppTy ty ++ "\n" ++ ppExp 2 body
+  Function name args retTy clauses isInfix ->
+    "Function " ++ ppIdent name ++
+    " (" ++ intercalate ", " (map ppArg args) ++ ") : " ++ ppTy retTy ++
+    (if isInfix then " [infix]" else "") ++ "\n" ++
+    concatMap (\c -> ppClause 2 c ++ "\n") clauses
+  PrimFunc name args retTy isInfix ->
+    "PrimFunc " ++ ppIdent name ++
+    " (" ++ intercalate ", " (map ppArg args) ++ ") : " ++ ppTy retTy ++
+    (if isInfix then " [infix]" else "")
+  Load name -> "Load " ++ ppIdent name
+  NewType name params ctors ->
+    "NewType " ++ ppIdent name ++
+    " [" ++ intercalate ", " (map ppTy params) ++ "]\n" ++
+    concatMap (\c -> "  " ++ ppCtor c ++ "\n") ctors
+  PrimType name -> "PrimType " ++ ppIdent name
+  ExpStmt e -> "ExpStmt\n" ++ ppExp 2 e
+  where
+    ppArg ((name, _), ty) = ppIdent name ++ " : " ++ ppTy ty
+    ppCtor ((name, _), tys) = ppIdent name ++ "(" ++ intercalate ", " (map ppTy tys) ++ ")"

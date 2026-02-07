@@ -3443,6 +3443,35 @@ parseExpFromRepl st input = do
       eof
       return e
 
+-- | Parse for debugging - returns AST with any remaining input (no eof required).
+-- For statements, tries to parse without requiring eof.
+parseForDebug :: ParserState -> Text
+              -> Outer (Either (ParseErrorBundle Text ParserError) (Stmt Ann, Text))
+parseForDebug st input = do
+  (res, _) <- runStateT (runParserT p "Kip" (removeComments input)) st
+  return res
+  where
+    p = do
+      ws
+      stmt <- parseStmt
+      ws
+      remaining <- getInput
+      return (stmt, remaining)
+
+-- | Parse expression for debugging.
+parseExpForDebug :: ParserState -> Text
+                 -> Outer (Either (ParseErrorBundle Text ParserError) (Exp Ann, Text))
+parseExpForDebug st input = do
+  (res, _) <- runStateT (runParserT p "Kip" (removeComments input)) st
+  return res
+  where
+    p = do
+      ws
+      e <- parseExp
+      ws
+      remaining <- getInput
+      return (e, remaining)
+
 -- | Parse a full file into statements.
 parseFromFile :: ParserState -- ^ Initial parser state.
               -> Text
