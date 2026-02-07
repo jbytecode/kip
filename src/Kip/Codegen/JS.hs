@@ -1,6 +1,37 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NamedFieldPuns #-}
--- | JavaScript-ish code generator for Kip AST.
+{- |
+JavaScript code generator for Kip.
+
+= Design
+
+This backend emits JavaScript text directly from the typed Kip AST. The output is
+intended for execution in environments that support top-level @await@ (Node ESM
+and the browser playground loader), so generated code can keep Kip's effectful
+operations (read/write/random) in a uniform async style.
+
+= Output layout
+
+'codegenProgram' always emits:
+
+1. A primitive prelude ('jsPrimitives').
+2. An async runner function containing user code.
+3. Overload wrappers ('jsOverloadWrappers') installed after function
+   declarations so wrappers can capture library implementations.
+
+= Semantics choices
+
+* Expressions are lowered to /awaitable/ JavaScript expressions.
+* Pattern matching is lowered to ordered @if/else if@ chains.
+* Kip ADTs become tagged JS objects: @{ tag, args }@.
+* Partial-application edge cases (notably @fark@ sections) are preserved by
+  dedicated lowering helpers.
+
+= Notes
+
+This module prefers explicit textual codegen over an intermediate JS AST to keep
+debuggability high and to keep generated code close to the source language model.
+-}
 module Kip.Codegen.JS
   ( codegenProgram
   , codegenStmts
@@ -332,11 +363,17 @@ jsOverloadWrappers = T.unlines
   , "};"
   ]
 
--- | Codegen a list of statements (no prelude).
+-- | Generate JavaScript for a list of statements without the runtime prelude.
+--
+-- This is mainly useful for tests or embedding scenarios where the caller
+-- manages prelude/wrapper injection manually.
 codegenStmts :: [Stmt Ann] -> Text
 codegenStmts = T.intercalate "\n\n" . map codegenStmt
 
--- | Codegen a single statement into JS-like code.
+-- | Generate JavaScript for a single top-level statement.
+--
+-- Function and type declarations are emitted as declarations, while expression
+-- statements are emitted in executable statement form.
 codegenStmt :: Stmt Ann -> Text
 codegenStmt stmt =
   case stmt of
@@ -355,7 +392,10 @@ codegenStmt stmt =
     ExpStmt exp' ->
       codegenExp exp' <> ";"
 
--- | Codegen an expression into a JS-like expression string.
+-- | Generate JavaScript for an expression.
+--
+-- The result is always expression-shaped so it can be embedded in larger
+-- contexts. Sequencing and local bindings are lowered through async IIFEs.
 codegenExp :: Exp Ann -> Text
 codegenExp exp' =
   case exp' of
@@ -386,6 +426,13 @@ codegenExp exp' =
     Ascribe {ascExp} ->
       codegenExp ascExp
 
+-- | Render a Kip function definition as an async JS function.
+--
+-- Generated functions are always async so all call sites can uniformly use
+-- @await@, even for logically pure functions.
+--
+-- Single wildcard clauses are emitted as direct returns; multi-clause bodies
+-- are lowered through the pattern-matching chain renderer.
 renderFunction :: Identifier -> [Arg Ann] -> [Clause Ann] -> Text
 renderFunction name args clauses =
   let argsText = renderArgNames args
@@ -406,6 +453,9 @@ renderFunction name args clauses =
       , "}"
       ]
 
+-- | Clause-chain indirection.
+--
+-- This alias keeps call sites stable if we later switch the lowering strategy.
 renderClauseChain :: Text -> [Clause Ann] -> [Text]
 renderClauseChain = renderClauseIfChain
 
@@ -432,7 +482,15 @@ renderClauseIfChain scrutinee =
            then block
            else block ++ go False rest
 
--- | Render pattern bindings for nested patterns, avoiding duplicate JS declarations.
+-- | Render variable bindings implied by a pattern.
+--
+-- Returns:
+--
+-- * emitted binding statements
+-- * next argument index
+--
+-- Bindings are right-aligned with constructor arguments to match Kip's pattern
+-- semantics for nested constructor/list patterns.
 renderPatternBindings :: Text -> [Pat Ann] -> Int -> ([Text], Int)
 renderPatternBindings scrutinee pats startIdx =
   -- Note: constructor arguments in Kip patterns are matched from the right.
@@ -476,19 +534,28 @@ renderPatternBindings scrutinee pats startIdx =
           let (binds, nextIx, seen') = renderPatBinding scrut patLen ix seenAcc p
           in (acc ++ binds, nextIx, seen')
 
+-- | Lower a Kip @Match@ expression into an async IIFE expression.
+--
+-- The scrutinee is evaluated once and captured in @__scrut@ to avoid repeated
+-- evaluation and preserve side-effect ordering.
 renderMatch :: Exp Ann -> [Clause Ann] -> Text
 renderMatch scrutinee clauses =
   renderIife $
     ("const __scrut = " <> codegenExp scrutinee <> ";")
       : renderMatchClauses "__scrut" clauses
 
+-- | Render match clauses with the same ordered semantics as function clauses.
 renderMatchClauses :: Text -> [Clause Ann] -> [Text]
 renderMatchClauses = renderClauseIfChain
 
+-- | Compatibility alias for pattern condition + bindings rendering.
 renderPatMatch :: Text -> Pat Ann -> (Text, [Text])
 renderPatMatch = renderPatMatchCond
 
--- | Render pattern condition and bindings for nested patterns.
+-- | Render both the boolean guard and binding statements for a pattern.
+--
+-- The guard determines whether the branch matches; bindings are emitted only
+-- for variables appearing in that branch.
 renderPatMatchCond :: Text -> Pat Ann -> (Text, [Text])
 renderPatMatchCond scrutinee pat =
   case pat of
@@ -503,7 +570,10 @@ renderPatMatchCond scrutinee pat =
     PStrLit _ _ -> (renderPatCond scrutinee pat, [])
     PListLit _ -> (renderPatCond scrutinee pat, [])
 
--- | Render a boolean condition for a pattern.
+-- | Render a JavaScript boolean condition for a pattern.
+--
+-- Constructors are matched by tag and minimum arity; literal patterns are
+-- matched by JS equality against the lowered scrutinee.
 renderPatCond :: Text -> Pat Ann -> Text
 renderPatCond scrutinee pat =
   case pat of
@@ -536,7 +606,9 @@ renderPatCond scrutinee pat =
       renderListPatCond scrutinee pats
 
 -- | Render a boolean condition for a list pattern.
--- Lists are represented as nested 'eki' constructors with 'boş' at the end.
+--
+-- Kip lists are represented as nested @eki(head, tail)@ constructors ending in
+-- @boş@, so this function recursively emits constructor checks for that shape.
 renderListPatCond :: Text -> [Pat Ann] -> Text
 renderListPatCond scrutinee [] =
   -- Empty list pattern matches 'boş'
@@ -552,7 +624,10 @@ renderListPatCond scrutinee (p:ps) =
        then "true"
        else T.intercalate " && " conds
 
--- | Access constructor arguments aligned from the right.
+-- | Access a constructor argument using right-aligned pattern indexing.
+--
+-- If @patLen == 2@ and @idx == 0@, this points to the first element of the
+-- last two constructor arguments.
 patArgAccess :: Text -> Int -> Int -> Text
 patArgAccess scrutinee patLen idx =
   let idxText = T.pack (show idx)
@@ -563,8 +638,10 @@ patArgAccess scrutinee patLen idx =
        then scrutinee <> ".args[" <> idxText <> "]"
        else scrutinee <> ".args[(" <> scrutinee <> ".args.length - " <> lenText <> " + " <> idxText <> ")]"
 
--- | Normalize a constructor name by stripping Turkish suffixes.
--- Handles conditional (-sa/-se with apostrophe) and possessive (-ı/-i/-u/-ü) forms.
+-- | Normalize constructor names for runtime tag comparison.
+--
+-- This strips selected Turkish suffix forms that can appear in surface syntax
+-- and joins namespaced identifiers using underscores to match JS tags.
 normalizeCtorName :: Identifier -> Text
 normalizeCtorName (ns, name) =
   let base = stripTurkishSuffixes name
@@ -572,10 +649,12 @@ normalizeCtorName (ns, name) =
        [] -> base
        _  -> T.intercalate "_" (map (T.filter (/= ' ')) ns ++ [base])
 
--- | Strip common Turkish suffixes from a word.
--- This is a conservative heuristic that handles:
--- 1. Conditional suffix with apostrophe ('sa, 'se, etc.)
--- 2. Possessive suffix after soft-g (ğı, ği, ğu, ğü → k)
+-- | Strip selected Turkish suffixes used in constructor surface forms.
+--
+-- This is intentionally conservative and currently handles:
+--
+-- * conditional suffixes after apostrophe
+-- * possessive suffixes after soft-g alternation
 stripTurkishSuffixes :: Text -> Text
 stripTurkishSuffixes txt =
   let -- Strip conditional suffix with apostrophe ('sa, 'se, etc.)
@@ -599,6 +678,10 @@ stripSoftGPossessive txt =
             _ -> txt  -- Keep original if not after soft-g
     _ -> txt
 
+-- | Emit JavaScript for a Kip ADT declaration.
+--
+-- Constructors are emitted as tagged value/factory bindings. For single nullary
+-- constructors we additionally alias the type name to the constructor.
 renderNewType :: Identifier -> [Ctor Ann] -> Text
 renderNewType name ctors =
   let ctorLines =
@@ -634,6 +717,10 @@ renderCtor ctorName args =
     _ -> "var " <> jsName <> " = (...args) => ({ tag: "
             <> renderString jsName <> ", args });"
 
+-- | Lower function application.
+--
+-- Most calls become @(await f(...))@. Section-like partial forms are handled
+-- by 'partialSectionCall' to preserve Kip semantics.
 renderCall :: Exp Ann -> [Exp Ann] -> Text
 renderCall fn args =
   let fnText =
@@ -660,12 +747,19 @@ partialSectionCall fn fnText args =
     isDifferencePrimitive =
       any (\(ident, _) -> ident == ([], T.pack "fark"))
 
+-- | Render the @fark@ section helper.
+--
+-- * Genitive fixed argument: right section (@x - fixed@)
+-- * Other fixed argument: left section (@fixed - x@)
 renderDifferenceSection :: Text -> Exp Ann -> Text
 renderDifferenceSection fnText arg =
   if annCase (annExp arg) == Gen
     then "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [__kip_arg0, " <> codegenExp arg <> "])))"
     else "(async (__kip_arg0) => (await __kip_call(" <> fnText <> ", [" <> codegenExp arg <> ", __kip_arg0])))"
 
+-- | Render an expression in statement position.
+--
+-- Bindings become declarations; all other expressions become single statements.
 renderExpAsStmt :: Exp Ann -> [Text]
 renderExpAsStmt exp' =
   case exp' of
@@ -674,6 +768,7 @@ renderExpAsStmt exp' =
     _ ->
       [codegenExp exp' <> ";"]
 
+-- | Wrap a list of statements in an async IIFE expression.
 renderIife :: [Text] -> Text
 renderIife lines' =
   T.unlines
@@ -682,13 +777,19 @@ renderIife lines' =
     , "})())"
     ]
 
+-- | Render comma-separated JavaScript argument names.
 renderArgNames :: [Arg Ann] -> Text
 renderArgNames args =
   T.intercalate ", " (map (toJsIdent . argIdent) args)
 
+-- | Extract the terminal segment of an identifier.
 identText :: Identifier -> Text
 identText (_, name) = name
 
+-- | Convert a Kip identifier into a JavaScript-safe identifier.
+--
+-- Namespace pieces are joined with underscores; dashes are rewritten to
+-- underscores; apostrophes are removed; reserved words are prefixed.
 toJsIdent :: Identifier -> Text
 toJsIdent ident =
   let raw = baseIdent ident
@@ -713,6 +814,7 @@ toJsIdent ident =
     replaceDash c = if c == '-' then '_' else c
     isIdentStart c = isLetter c || c == '_' || c == '$'
 
+-- | JavaScript reserved words blocked from raw identifier emission.
 jsReserved :: [Text]
 jsReserved =
   [ "break", "case", "catch", "class", "const", "continue", "debugger"
@@ -724,10 +826,12 @@ jsReserved =
   , "private", "protected", "public", "static", "undefined"
   ]
 
+-- | Render a JavaScript string literal with escaping.
 renderString :: Text -> Text
 renderString txt =
   "\"" <> T.concatMap escapeChar txt <> "\""
 
+-- | Escape one character in JS string context.
 escapeChar :: Char -> Text
 escapeChar c =
   case c of
@@ -738,6 +842,7 @@ escapeChar c =
     '\t' -> "\\t"
     _ -> T.singleton c
 
+-- | Indent each non-empty line by @n@ spaces.
 indent :: Int -> Text -> Text
 indent n =
   T.unlines . map (T.replicate n " " <>) . filter (not . T.null) . T.lines
