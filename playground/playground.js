@@ -141,6 +141,7 @@ const keywordList = [
   "olsun",
   "olarak",
   "dersek",
+  "için",
   "yerleşik",
 ];
 
@@ -552,13 +553,25 @@ function highlightNonString(text) {
             eligible,
             wordIndices: [],
             hasNumber: false,
+            hasEligibleChild: false,
           });
         } else if (parenStack.length) {
           const top = parenStack.pop();
+          const parent = parenStack.length ? parenStack[parenStack.length - 1] : null;
+          if (parent && top.eligible) {
+            parent.hasEligibleChild = true;
+          }
           if (top.eligible && !top.hasNumber && top.wordIndices.length > 1) {
             for (let k = 1; k < top.wordIndices.length; k += 1) {
               typeWordIndices.add(top.wordIndices[k]);
             }
+          } else if (
+            top.eligible &&
+            !top.hasNumber &&
+            top.wordIndices.length === 1 &&
+            top.hasEligibleChild
+          ) {
+            typeWordIndices.add(top.wordIndices[0]);
           }
         }
         continue;
@@ -750,6 +763,8 @@ let codegenLines = [];
 let isFullscreen = false;
 let activeAction = null;
 let workerInitialized = false;
+// Optimization: ensure runtime preload is requested at most once per worker lifetime.
+let runtimePreloadRequested = false;
 
 function setRunState(isRunning) {
   runBtn.disabled = isRunning;
@@ -804,6 +819,7 @@ function terminateWorker() {
     activeWorker = null;
     workerInitialized = false;
   }
+  runtimePreloadRequested = false;
   inputSignalView = null;
   inputBufferView = null;
   pendingInput = false;
@@ -844,9 +860,24 @@ function createInputBuffers() {
   return { signal, buffer };
 }
 
+function requestRuntimePreload() {
+  if (runtimePreloadRequested) {
+    return;
+  }
+  // Optimization: initialize worker and warm heavy runtime assets before Run.
+  runtimePreloadRequested = true;
+  const worker = ensureWorker();
+  worker.postMessage({ type: "preload" });
+}
+
 function handleWorkerMessage(event) {
   const { type, line, error } = event.data || {};
   switch (type) {
+    case "preloaded":
+      break;
+    case "preload-error":
+      console.warn("Playground preload failed:", error ?? "unknown error");
+      break;
     case "stdout":
       setBusyCursor(false);
       if (activeMode === "codegen") {
@@ -1128,6 +1159,15 @@ if (stopBtn) {
     setRunState(false);
     setActiveAction(null);
   });
+}
+
+if (playgroundShellEl) {
+  // Optimization: warm caches on first interaction so first Run avoids large fetch latency.
+  playgroundShellEl.addEventListener("pointerdown", requestRuntimePreload, { capture: true, once: true });
+  // Optimization: keyboard navigation can trigger focus without pointer events.
+  playgroundShellEl.addEventListener("focusin", requestRuntimePreload, { capture: true, once: true });
+  // Optimization: click fallback for environments where pointer/focus events do not fire first.
+  playgroundShellEl.addEventListener("click", requestRuntimePreload, { capture: true, once: true });
 }
 
 if (fullscreenBtn) {

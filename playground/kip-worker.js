@@ -37,6 +37,7 @@ async function loadBinary(path) {
 
 async function loadLibFile(file) {
   if (libFileCache.has(file)) {
+    // Optimization: reuse cached lib payloads and cached misses (null).
     return libFileCache.get(file);
   }
 
@@ -46,6 +47,8 @@ async function loadLibFile(file) {
       const data = await loadBinary(`./assets/lib/${file}`);
       fileObj = new File(data, { readonly: true });
     } catch (err) {
+      // Memoize missing .iz files so we don't refetch/404 on every run.
+      libFileCache.set(file, null);
       return null;
     }
   } else {
@@ -131,9 +134,12 @@ class EmptyStdin extends Fd {
 }
 
 let wasmModulePromise = null;
+// Optimization: keep a single in-flight/fulfilled preload promise across runs.
+let runtimePreloadPromise = null;
 
 async function loadWasmModule() {
   if (wasmModulePromise) {
+    // Optimization: compile the WASM module once and reuse it.
     return wasmModulePromise;
   }
   wasmModulePromise = (async () => {
@@ -145,6 +151,22 @@ async function loadWasmModule() {
     }
   })();
   return wasmModulePromise;
+}
+
+async function preloadRuntime() {
+  if (runtimePreloadPromise) {
+    // Optimization: dedupe concurrent preload requests.
+    return runtimePreloadPromise;
+  }
+  runtimePreloadPromise = (async () => {
+    // Optimization: warm the largest assets ahead of run execution.
+    await loadWasmModule();
+    if (!libFileCache.has("trmorph.fst")) {
+      const fst = await loadBinary("./assets/vendor/trmorph.fst");
+      libFileCache.set("trmorph.fst", new File(fst, { readonly: true }));
+    }
+  })();
+  return runtimePreloadPromise;
 }
 
 async function runWasm({ args, source, signal, buffer }) {
@@ -160,9 +182,13 @@ async function runWasm({ args, source, signal, buffer }) {
     }
   }
 
+  // Optimization: guarantee warmed heavy assets for low-latency runs.
+  await preloadRuntime();
+
   // Cache vendor files as well
   let fst;
   if (libFileCache.has("trmorph.fst")) {
+    // Optimization: reuse cached trmorph payload across runs.
     fst = libFileCache.get("trmorph.fst").data;
   } else {
     fst = await loadBinary("./assets/vendor/trmorph.fst");
@@ -198,6 +224,15 @@ async function runWasm({ args, source, signal, buffer }) {
 
 self.addEventListener("message", async (event) => {
   const { type, args, source, signal, buffer } = event.data || {};
+  if (type === "preload") {
+    try {
+      await preloadRuntime();
+      postMessage({ type: "preloaded" });
+    } catch (err) {
+      postMessage({ type: "preload-error", error: String(err) });
+    }
+    return;
+  }
   if (type !== "run") {
     return;
   }
