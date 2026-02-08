@@ -6,6 +6,7 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#numbers" },
+    { "include": "#types" },
     { "include": "#keywords" },
     { "include": "#identifiers" }
   ],
@@ -54,7 +55,7 @@
       "patterns": [
         {
           "name": "keyword.declaration.kip",
-          "match": "\\b(?:Bir|yerleşiktir|olsun)\\b"
+          "match": "\\b(?:Bir|bir|yerleşik|yerleşiktir|olsun)\\b"
         },
         {
           "name": "keyword.control.kip",
@@ -62,7 +63,78 @@
         },
         {
           "name": "keyword.control.kip",
-          "match": "\\b(?:ya|olabilir|var|için|olarak|dersek)\\b"
+          "match": "\\b(?:ya|da|olabilir|var|olamaz|değilse|için|olarak|dersek)\\b"
+        },
+        {
+          "name": "keyword.control.kip",
+          "match": "[,.]"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "meta.type.declaration.bir.kip",
+          "begin": "\\bBir\\b",
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.declaration.kip"
+            }
+          },
+          "end": "\\bya\\b",
+          "endCaptures": {
+            "0": {
+              "name": "keyword.control.kip"
+            }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.type.kip",
+              "match": "[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
+            }
+          ]
+        },
+        {
+          "name": "meta.type.declaration.alt.kip",
+          "begin": "\\bya\\s+bir\\b",
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.control.kip"
+            }
+          },
+          "end": "\\bya\\b",
+          "endCaptures": {
+            "0": {
+              "name": "keyword.control.kip"
+            }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.type.kip",
+              "match": "[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
+            }
+          ]
+        },
+        {
+          "name": "meta.type.union.kip",
+          "begin": "\\bya(?:\\s+da)?\\b",
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.control.kip"
+            }
+          },
+          "end": "\\b(?:ya|olabilir)\\b",
+          "endCaptures": {
+            "0": {
+              "name": "keyword.control.kip"
+            }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.type.kip",
+              "match": "[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
+            }
+          ]
         }
       ]
     },

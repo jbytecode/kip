@@ -1,10 +1,30 @@
 {
   "name": "kip",
   "displayName": "Kip",
-  "description": "Kip language support with the kip-lsp language server.",
-  "version": "0.1.0",
+  "description": "Language support for Kip with LSP features and procedural type highlighting.",
+  "version": "0.1.6",
   "publisher": "kip",
+  "author": {
+    "name": "Kip Contributors",
+    "email": "joomy@type.systems"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kip-dili/kip.git"
+  },
+  "homepage": "https://github.com/kip-dili/kip/tree/main/vscode-plugin",
+  "bugs": {
+    "url": "https://github.com/kip-dili/kip/issues"
+  },
+  "icon": "media/icon.png",
+  "keywords": [
+    "kip",
+    "programming-language",
+    "lsp",
+    "turkish",
+    "type-system"
+  ],
   "engines": {
     "vscode": "^1.84.0"
   },
@@ -12,8 +32,9 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "*"
+    "onLanguage:kip",
+    "onCommand:kip.showOutput",
+    "onCommand:kip.restartLanguageServer"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -51,8 +72,23 @@
     ],
     "commands": [
       {
+        "command": "kip.goToDefinition",
+        "title": "Kip: Go to Definition",
+        "category": "Kip"
+      },
+      {
         "command": "kip.goToTypeDefinition",
         "title": "Kip: Go to Type Definition",
+        "category": "Kip"
+      },
+      {
+        "command": "kip.showOutput",
+        "title": "Kip: Show Output",
+        "category": "Kip"
+      },
+      {
+        "command": "kip.restartLanguageServer",
+        "title": "Kip: Restart Language Server",
         "category": "Kip"
       }
     ],
@@ -62,7 +98,7 @@
         "kip.languageServerPath": {
           "type": "string",
           "default": "kip-lsp",
-          "description": "Path to the kip-lsp executable (must be on PATH or an absolute path)."
+          "description": "Path to the kip-lsp executable. If left as default, the extension also checks ~/.local/bin, ~/.cabal/bin, and ~/.stack/bin."
         },
         "kip.languageServerArgs": {
           "type": "array",
@@ -81,6 +117,17 @@
           ],
           "default": "off",
           "description": "Trace LSP communication to the Kip output channel."
+        },
+        "kip.proceduralTypeHighlight.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable local procedural type highlighting (no LSP semantic tokens)."
+        },
+        "kip.proceduralTypeHighlight.maxDocumentChars": {
+          "type": "number",
+          "default": 200000,
+          "minimum": 1000,
+          "description": "Skip procedural type highlighting for files above this character count."
         }
       }
     }
@@ -88,7 +135,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -w -p ./",
-    "package": "vsce package",
+    "package": "npm run compile && vsce package",
     "lint": "eslint src --ext .ts"
   },
   "devDependencies": {
