@@ -8,6 +8,7 @@ import Control.Monad
 import qualified Data.Map.Strict as Map
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar)
 import System.IO.Unsafe (unsafePerformIO)
+import Data.List (find, partition, sort)
 import Foreign.C
 import Foreign.Ptr (Ptr, FunPtr, nullPtr)
 import Foreign.Marshal
@@ -17,7 +18,9 @@ import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Data.Set as Set
 
 -- | Opaque handle for a Foma finite state machine.
 newtype FSM = FSM (Ptr ())
@@ -212,3 +215,124 @@ batchCallWithHandle fsm pickHandle initHandle ffi inputs = do
                     return txt
             freeBatch_ffi res (fromIntegral count)
             return results
+
+-- | Suggest dictionary words that are exactly one edit away from the input.
+-- Candidate surfaces are generated locally and validated through TRmorph.
+suggestEditDistance1 ::
+  FSM -- ^ Morphology finite state machine.
+  -> Text -- ^ Input word.
+  -> IO [Text] -- ^ Dictionary words at edit distance 1.
+suggestEditDistance1 = suggestFromEditDistanceOnly
+
+-- | Suggest usage-site hints by stripping repeated case-like suffixes.
+-- This favors context-like fixes such as @tersininin -> tersi@.
+suggestContextLike ::
+  FSM -- ^ Morphology finite state machine.
+  -> Text -- ^ Input word.
+  -> IO [Text] -- ^ TRmorph-valid stripped candidates.
+suggestContextLike _ word | T.null word = return []
+suggestContextLike fsm word = do
+  let strippedCandidates = generateSuffixStrips word
+  strippedAnalyses <- upsBatch fsm strippedCandidates
+  let strippedValid =
+        [ cand
+        | (cand, as) <- zip strippedCandidates strippedAnalyses
+        , not (null as)
+        ]
+  return (take 50 (sort (dedupStable strippedValid)))
+
+-- | Generate one-edit surface candidates and validate them with TRmorph analysis.
+suggestFromEditDistanceOnly ::
+  FSM -- ^ Morphology finite state machine.
+  -> Text -- ^ Misspelled word.
+  -> IO [Text] -- ^ Valid dictionary surface forms.
+suggestFromEditDistanceOnly _ word | T.null word = return []
+suggestFromEditDistanceOnly fsm word = do
+  let candidates = generateEditDistance1 word
+  analyses <- upsBatch fsm candidates
+  let valid =
+        [ cand
+        | (cand, as) <- zip candidates analyses
+        , not (null as)
+        ]
+      (sameLength, differentLength) = partition (\cand -> T.length cand == T.length word) valid
+      ordered = sameLength ++ differentLength
+  return (take 50 (sort (dedupStable ordered)))
+
+-- | Generate unique candidates at Levenshtein distance 1.
+generateEditDistance1 ::
+  Text -- ^ Source word.
+  -> [Text] -- ^ Unique candidates, in stable order.
+generateEditDistance1 word =
+  dedupStable (deletes ++ transposes ++ replaces ++ inserts)
+  where
+    turkishAlphabet :: [Char]
+    turkishAlphabet = T.unpack (T.pack "abcçdefgğhıijklmnoöprsştuüvyzqwx")
+
+    n = T.length word
+
+    deletes =
+      [ T.take i word <> T.drop (i + 1) word
+      | i <- [0 .. n - 1]
+      ]
+
+    transposes =
+      [ T.take i word
+          <> T.singleton (T.index word (i + 1))
+          <> T.singleton (T.index word i)
+          <> T.drop (i + 2) word
+      | i <- [0 .. n - 2]
+      ]
+
+    replaces =
+      [ T.take i word <> T.singleton c <> T.drop (i + 1) word
+      | i <- [0 .. n - 1]
+      , c <- turkishAlphabet
+      , c /= T.index word i
+      ]
+
+    inserts =
+      [ T.take i word <> T.singleton c <> T.drop i word
+      | i <- [0 .. n]
+      , c <- turkishAlphabet
+      ]
+
+-- | Generate candidates by repeatedly stripping common case-like suffixes.
+-- Candidates are validated via TRmorph before use.
+generateSuffixStrips :: Text -> [Text]
+generateSuffixStrips = go 0 []
+  where
+    -- Ordered longest-first to prefer removing the most specific suffix.
+    suffixes =
+      map T.pack
+        [ "nının", "ninin", "nunun", "nünün"
+        , "ının", "inin", "unun", "ünün"
+        , "nın", "nin", "nun", "nün"
+        , "den", "dan", "ten", "tan"
+        , "ın", "in", "un", "ün"
+        , "de", "da", "te", "ta"
+        ]
+    maxDepth = 4 :: Int
+
+    go depth acc txt
+      | depth >= maxDepth = reverse acc
+      | otherwise =
+          case firstStrip txt of
+            Nothing -> reverse acc
+            Just next
+              | T.length next < 2 -> reverse acc
+              | next `elem` acc -> reverse acc
+              | otherwise -> go (depth + 1) (next : acc) next
+
+    firstStrip txt = do
+      suff <- find (\suff -> T.isSuffixOf suff txt && T.length txt > T.length suff) suffixes
+      return (T.dropEnd (T.length suff) txt)
+
+-- | Keep first occurrence of each item while preserving order.
+dedupStable :: Ord a => [a] -> [a]
+dedupStable = go Set.empty
+  where
+    go _ [] = []
+    go seen (x:xs)
+      | Set.member x seen = go seen xs
+      | otherwise = x : go (Set.insert x seen) xs
