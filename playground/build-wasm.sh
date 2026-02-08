@@ -24,7 +24,9 @@ WASM_OPT_FLAGS="-O3"
 
 pushd "${ROOT_DIR}" >/dev/null
 
-"${WASM_CABAL}" build kip-playground \
+# Build the reactor executable so the browser worker can reuse one WASM instance
+# and call the exported `kip_run` function across multiple playground runs.
+"${WASM_CABAL}" build kip-playground-reactor \
   --with-compiler="${WASM_GHC}" \
   --with-hc-pkg="${WASM_GHC_PKG}" \
   --with-gcc="${WASM_CC}" \
@@ -34,7 +36,7 @@ pushd "${ROOT_DIR}" >/dev/null
   --extra-lib-dirs="${FOMA_WASM_PREFIX}/lib" \
   --extra-lib-dirs="${ZLIB_WASM_PREFIX}/lib"
 
-BIN_PATH="$(cabal list-bin kip-playground --with-compiler="${WASM_GHC}")"
+BIN_PATH="$(cabal list-bin kip-playground-reactor --with-compiler="${WASM_GHC}")"
 cp "${BIN_PATH}" "${DIST_DIR}/kip-playground.wasm"
 
 popd >/dev/null

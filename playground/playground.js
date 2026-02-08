@@ -763,8 +763,13 @@ let codegenLines = [];
 let isFullscreen = false;
 let activeAction = null;
 let workerInitialized = false;
-// Optimization: ensure runtime preload is requested at most once per worker lifetime.
+// Optimization: ensure warmup is requested only once per worker lifecycle.
 let runtimePreloadRequested = false;
+// Runtime mode reported by worker after wasm export inspection.
+// Values:
+// - "command": start/exit process model per run
+// - "reactor": reusable `kip_run` entrypoint on a persistent instance
+let workerRuntimeMode = null;
 
 function setRunState(isRunning) {
   runBtn.disabled = isRunning;
@@ -815,6 +820,7 @@ function setCodegenVisible(isVisible) {
 
 function terminateWorker() {
   if (activeWorker) {
+    // Explicitly dropping the worker resets all worker-side caches and singleton state.
     activeWorker.terminate();
     activeWorker = null;
     workerInitialized = false;
@@ -827,6 +833,7 @@ function terminateWorker() {
 
 function ensureWorker() {
   if (!activeWorker) {
+    // Optimization: worker is long-lived and reused across Run/Codegen requests.
     const worker = new Worker(workerUrl, { type: "module" });
     activeWorker = worker;
     worker.addEventListener("message", handleWorkerMessage);
@@ -864,16 +871,19 @@ function requestRuntimePreload() {
   if (runtimePreloadRequested) {
     return;
   }
-  // Optimization: initialize worker and warm heavy runtime assets before Run.
+  // Optimization: start worker + preload on first user interaction so
+  // first Run avoids paying full download/compile/init latency.
   runtimePreloadRequested = true;
   const worker = ensureWorker();
   worker.postMessage({ type: "preload" });
 }
 
 function handleWorkerMessage(event) {
-  const { type, line, error } = event.data || {};
+  const { type, line, error, runtimeMode } = event.data || {};
   switch (type) {
     case "preloaded":
+      // Recorded for diagnostics/future UX tuning; execution logic remains worker-driven.
+      workerRuntimeMode = runtimeMode ?? workerRuntimeMode;
       break;
     case "preload-error":
       console.warn("Playground preload failed:", error ?? "unknown error");
@@ -1162,11 +1172,12 @@ if (stopBtn) {
 }
 
 if (playgroundShellEl) {
-  // Optimization: warm caches on first interaction so first Run avoids large fetch latency.
+  // Optimization: warm caches on earliest likely interaction signal.
+  // `pointerdown` usually fires before `click`, so this starts preload sooner.
   playgroundShellEl.addEventListener("pointerdown", requestRuntimePreload, { capture: true, once: true });
-  // Optimization: keyboard navigation can trigger focus without pointer events.
+  // Optimization: keyboard-only users should also trigger preload.
   playgroundShellEl.addEventListener("focusin", requestRuntimePreload, { capture: true, once: true });
-  // Optimization: click fallback for environments where pointer/focus events do not fire first.
+  // Fallback path for user agents where prior events are not delivered as expected.
   playgroundShellEl.addEventListener("click", requestRuntimePreload, { capture: true, once: true });
 }
 
