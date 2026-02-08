@@ -1,0 +1,40 @@
+{
+  "hover": false,
+  "hoverChecks": [
+    {
+      "at": { "line": 20, "character": 8 },
+      "equals": "tam-sayı",
+      "notContains": ["asalları"]
+    },
+    {
+      "at": { "line": 20, "character": 14 },
+      "equals": "tam-sayı",
+      "notContains": ["asalları"]
+    },
+    {
+      "at": { "line": 20, "character": 20 },
+      "contains": ["bu", "tam-sayıyla", "şu", "tam-sayının", "toplamı", "tam-sayısı"],
+      "notContains": ["asalları"]
+    },
+    {
+      "at": { "line": 20, "character": 34 },
+      "equals": "tam-sayı",
+      "notContains": ["asalları"]
+    },
+    {
+      "at": { "line": 20, "character": 40 },
+      "equals": "tam-sayı",
+      "notContains": ["asalları"]
+    },
+    {
+      "at": { "line": 20, "character": 45 },
+      "equals": "tam-sayı",
+      "notContains": ["asalları"]
+    },
+    {
+      "at": { "line": 20, "character": 51 },
+      "contains": ["bu", "tam-sayıyla", "şu", "tam-sayının", "toplamı", "tam-sayısı"],
+      "notContains": ["asalları"]
+    }
+  ]
+}

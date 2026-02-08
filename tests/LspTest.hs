@@ -40,6 +40,9 @@ data LspSpec = LspSpec
   , specHover :: Bool
   , specHoverAt :: Maybe PositionQuery
   , specHoverContains :: [T.Text]
+  , specHoverEquals :: Maybe T.Text
+  , specHoverNotContains :: [T.Text]
+  , specHoverChecks :: [HoverCheck]
   , specCompletionIncludes :: [T.Text]
   , specCompletionAt :: Maybe PositionQuery
   , specCache :: Bool
@@ -65,6 +68,9 @@ instance A.FromJSON LspSpec where
     specHover <- obj A..:? "hover" A..!= False
     specHoverAt <- obj A..:? "hoverAt"
     specHoverContains <- obj A..:? "hoverContains" A..!= []
+    specHoverEquals <- obj A..:? "hoverEquals"
+    specHoverNotContains <- obj A..:? "hoverNotContains" A..!= []
+    specHoverChecks <- obj A..:? "hoverChecks" A..!= []
     specCompletionIncludes <- obj A..:? "completionIncludes" A..!= []
     specCompletionAt <- obj A..:? "completionAt"
     specCache <- obj A..:? "cache" A..!= False
@@ -86,6 +92,9 @@ instance A.FromJSON LspSpec where
       , specHover = specHover
       , specHoverAt = specHoverAt
       , specHoverContains = specHoverContains
+      , specHoverEquals = specHoverEquals
+      , specHoverNotContains = specHoverNotContains
+      , specHoverChecks = specHoverChecks
       , specCompletionIncludes = specCompletionIncludes
       , specCompletionAt = specCompletionAt
       , specCache = specCache
@@ -106,6 +115,14 @@ data DefinitionQuery = DefinitionQuery
   , defExpectedLine :: Maybe Int
   , defExpectedCharacter :: Maybe Int
   , defUriContains :: Maybe T.Text
+  }
+
+-- | Hover query with per-position assertions.
+data HoverCheck = HoverCheck
+  { hoverCheckAt :: PositionQuery
+  , hoverCheckContains :: [T.Text]
+  , hoverCheckEquals :: Maybe T.Text
+  , hoverCheckNotContains :: [T.Text]
   }
 
 -- | Document highlight query with expected highlight positions.
@@ -131,6 +148,19 @@ instance A.FromJSON DefinitionQuery where
       , defExpectedLine = defExpectedLine
       , defExpectedCharacter = defExpectedCharacter
       , defUriContains = defUriContains
+      }
+
+instance A.FromJSON HoverCheck where
+  parseJSON = A.withObject "HoverCheck" $ \obj -> do
+    hoverCheckAt <- obj A..: "at"
+    hoverCheckContains <- obj A..:? "contains" A..!= []
+    hoverCheckEquals <- obj A..:? "equals"
+    hoverCheckNotContains <- obj A..:? "notContains" A..!= []
+    return HoverCheck
+      { hoverCheckAt = hoverCheckAt
+      , hoverCheckContains = hoverCheckContains
+      , hoverCheckEquals = hoverCheckEquals
+      , hoverCheckNotContains = hoverCheckNotContains
       }
 
 -- | Decode highlight query from JSON.
@@ -208,6 +238,9 @@ loadSpec path = do
       , specHover = False
       , specHoverAt = Nothing
       , specHoverContains = []
+      , specHoverEquals = Nothing
+      , specHoverNotContains = []
+      , specHoverChecks = []
       , specCompletionIncludes = []
       , specCompletionAt = Nothing
       , specCache = False
@@ -289,7 +322,9 @@ runSession lspPath uri content spec doSave = do
       when (specHover spec) $ do
         let (line, col) = positionOrDefault (specHoverAt spec)
         sendMessage inH (hoverRequest 3 uri line col)
-        expectHover outH 3 (specHoverContains spec)
+        expectHover outH 3 (specHoverContains spec) (specHoverEquals spec) (specHoverNotContains spec)
+      unless (null (specHoverChecks spec)) $
+        mapM_ (runHoverCheck inH outH uri) (zip [30..] (specHoverChecks spec))
       unless (null (specCompletionIncludes spec)) $ do
         let (line, col) = positionOrDefault (specCompletionAt spec)
         sendMessage inH (completionRequest 4 uri line col)
@@ -465,23 +500,38 @@ expectEmptyEdits h target = do
       unless (null edits) (assertFailure "expected no formatting edits")
     _ -> assertFailure "expected no formatting edits"
 
--- | Ensure hover returns content and matches substrings if provided.
-expectHover :: Handle -> Int -> [T.Text] -> IO ()
-expectHover h target contains = do
+-- | Ensure hover returns content and satisfies string assertions.
+expectHover :: Handle -> Int -> [T.Text] -> Maybe T.Text -> [T.Text] -> IO ()
+expectHover h target contains mEquals notContains = do
   obj <- awaitResponseId h target
   case lookupKey "result" obj of
     Just A.Null -> assertFailure "expected hover result"
     Just val ->
-      unless (null contains) $
-        case hoverText val of
-          Nothing -> assertFailure "missing hover contents"
-          Just text -> mapM_ (assertHoverContains text) contains
+      case hoverText val of
+        Nothing -> assertFailure "missing hover contents"
+        Just text -> do
+          mapM_ (assertHoverContains text) contains
+          mapM_ (assertHoverNotContains text) notContains
+          case mEquals of
+            Nothing -> return ()
+            Just expected -> assertEqual "hover text mismatch" expected text
     Nothing -> assertFailure "missing hover result"
 
 -- | Assert a hover string contains a substring.
 assertHoverContains :: T.Text -> T.Text -> IO ()
 assertHoverContains text needle =
   unless (T.isInfixOf needle text) (assertFailure $ "hover missing expected text '" ++ T.unpack needle ++ "' in: " ++ T.unpack text)
+
+-- | Assert a hover string does not contain a substring.
+assertHoverNotContains :: T.Text -> T.Text -> IO ()
+assertHoverNotContains text needle =
+  when (T.isInfixOf needle text) (assertFailure $ "hover unexpectedly contains text '" ++ T.unpack needle ++ "' in: " ++ T.unpack text)
+
+runHoverCheck :: Handle -> Handle -> T.Text -> (Int, HoverCheck) -> IO ()
+runHoverCheck inH outH uri (reqId, hoverCheck) = do
+  let (line, col) = positionOrDefault (Just (hoverCheckAt hoverCheck))
+  sendMessage inH (hoverRequest reqId uri line col)
+  expectHover outH reqId (hoverCheckContains hoverCheck) (hoverCheckEquals hoverCheck) (hoverCheckNotContains hoverCheck)
 
 -- | Extract hover contents text when present.
 hoverText :: A.Value -> Maybe T.Text

@@ -641,11 +641,11 @@ spanInfoAtPosition pos idx =
         SpanKey sp -> spanSizeForSort sp
         RangeKey range -> rangeSizeForSort range
 
-rangeSizeForSort :: Range -> Int
+rangeSizeForSort :: Range -> (Int, Int)
 rangeSizeForSort (Range (Position sl sc) (Position el ec)) =
   let lines = fromIntegral el - fromIntegral sl
       cols = if lines == 0 then fromIntegral ec - fromIntegral sc else maxBound :: Int
-  in lines * 10000 + cols
+  in (lines, cols)
 
 -- | Generic “smallest enclosing span” lookup for arbitrary indices.
 --
@@ -848,6 +848,11 @@ onHover req respond = do
               docInfinitives = tcInfinitives tcSt
               allInfinitives = Set.union baseInfinitives docInfinitives
           let nonEmpty t = if T.null t then Nothing else Just t
+              cursorVarNames =
+                case raVar resolved of
+                  Just (name, candidates) -> name : map fst candidates
+                  Nothing -> []
+              cursorMatchesSig sigName = sigName `elem` cursorVarNames
               renderTyNomMaybe ty = do
                 t <- liftIO $ renderTyNomTextCached doc (lsCache st) (lsFsm st) paramTyCons tyMods ty
                 return (nonEmpty t)
@@ -857,16 +862,16 @@ onHover req respond = do
           let hoverFromDefinition =
                 case raDefIdent resolved of
                   Just (ident, _) -> do
-                    let mFnDef = findFunctionStmt ident (dsStmts doc)
-                        isInfBySet = Set.member ident allInfinitives
-                    case mFnDef of
-                      Just (fnName, args, parsedRetTy, stmtInf) -> do
-                        let argTys = map snd args
-                            mInferredRetTy = Map.lookup (fnName, argTys) (tcFuncSigRets tcSt)
-                            retTy = fromMaybe parsedRetTy mInferredRetTy
-                            isInfinitive = stmtInf || isInfBySet
-                        renderHoverSignatureMaybe fnName args retTy isInfinitive
-                      Nothing -> return Nothing
+                      let mFnDef = findFunctionStmt ident (dsStmts doc)
+                          isInfBySet = Set.member ident allInfinitives
+                      case mFnDef of
+                        Just (fnName, args, parsedRetTy, stmtInf) -> do
+                          let argTys = map snd args
+                              mInferredRetTy = Map.lookup (fnName, argTys) (tcFuncSigRets tcSt)
+                              retTy = fromMaybe parsedRetTy mInferredRetTy
+                              isInfinitive = stmtInf || isInfBySet
+                          renderHoverSignatureMaybe fnName args retTy isInfinitive
+                        Nothing -> return Nothing
                   Nothing -> return Nothing
           let hoverFromBindDefinition =
                 case findBindExpAt pos (Just tokenIdent) doc of
@@ -883,27 +888,29 @@ onHover req respond = do
                   Nothing -> return Nothing
           let hoverFromResolvedSig =
                 case raSpanInfo resolved >>= siSig of
-                  Just (sigName, argTys) -> do
-                    let mRetTy = Map.lookup (sigName, argTys) (tcFuncSigRets tcSt)
-                        matchingArgs = [args | args <- MultiMap.lookup sigName (tcFuncSigs tcSt), map snd args == argTys]
-                        mArgs = listToMaybe matchingArgs
-                        candidatePool = infinitiveCandidates [sigName]
-                        defInf = findInfinitiveDef candidatePool (dsStmts doc)
-                        isInfinitive =
-                          case defInf of
-                            Just _ -> True
-                            Nothing -> any (`Set.member` allInfinitives) candidatePool
-                        infinitiveName =
-                          case defInf of
-                            Just inf -> inf
-                            Nothing ->
-                              case filter (`Set.member` allInfinitives) candidatePool of
-                                (inf:_) -> inf
-                                [] -> sigName
-                    case (mArgs, mRetTy) of
-                      (Just args, Just retTy) ->
-                        renderHoverSignatureMaybe infinitiveName args retTy isInfinitive
-                      _ -> return Nothing
+                  Just (sigName, argTys)
+                    | cursorMatchesSig sigName -> do
+                      let mRetTy = Map.lookup (sigName, argTys) (tcFuncSigRets tcSt)
+                          matchingArgs = [args | args <- MultiMap.lookup sigName (tcFuncSigs tcSt), map snd args == argTys]
+                          mArgs = listToMaybe matchingArgs
+                          candidatePool = infinitiveCandidates [sigName]
+                          defInf = findInfinitiveDef candidatePool (dsStmts doc)
+                          isInfinitive =
+                            case defInf of
+                              Just _ -> True
+                              Nothing -> any (`Set.member` allInfinitives) candidatePool
+                          infinitiveName =
+                            case defInf of
+                              Just inf -> inf
+                              Nothing ->
+                                case filter (`Set.member` allInfinitives) candidatePool of
+                                  (inf:_) -> inf
+                                  [] -> sigName
+                      case (mArgs, mRetTy) of
+                        (Just args, Just retTy) ->
+                          renderHoverSignatureMaybe infinitiveName args retTy isInfinitive
+                        _ -> return Nothing
+                  Just _ -> return Nothing
                   Nothing -> return Nothing
           let tryRenderSignature exp' varExp = do
                 let
@@ -919,8 +926,24 @@ onHover req respond = do
                         -- Fallback: try all candidate names
                         listToMaybe (varName : map fst candidates)
                       _ -> Nothing
+                  sigMatchesCursorVar sigName =
+                    case varExp of
+                      Var _ varName candidates ->
+                        sigName `elem` (varName : map fst candidates)
+                      _ ->
+                        maybe False (== sigName) mResolvedIdent
+                  fallbackToType = do
+                    case mResolvedType of
+                      Just ty -> renderTyNomMaybe ty
+                      Nothing -> do
+                        let tcSt' = dsTC doc
+                        res <- liftIO (runTCM (inferType exp') tcSt')
+                        case res of
+                          Right (Just ty, _) -> renderTyNomMaybe ty
+                          _ -> return Nothing
                 case (mResolvedIdent, mResolvedSig) of
-                  (Just resolvedName, Just (sigName, argTys)) -> do
+                  (Just resolvedName, Just (sigName, argTys))
+                    | sigMatchesCursorVar sigName -> do
                     -- We have the resolved signature with specific argument types (overload info)
                     let tcSt = dsTC doc
                         mFnDef = findFunctionDef resolvedName (dsStmts doc)
@@ -962,13 +985,9 @@ onHover req respond = do
                         -- Prelude function with signature and return type matching the overload
                         -- Use infinitiveName for correct infinitive form
                         renderHoverSignatureMaybe infinitiveName args retTy isInfinitive
-                      _ -> do
-                        -- Fall back to type inference
-                        let tcSt' = dsTC doc
-                        res <- liftIO (runTCM (inferType exp') tcSt')
-                        case res of
-                          Right (Just ty, _) -> renderTyNomMaybe ty
-                          _ -> return Nothing
+                      _ -> fallbackToType
+                  (Just _, Just _) ->
+                    fallbackToType
                   (Just resolvedName, Nothing) -> do
                     -- No resolved signature, try to find function definition
                     let tcSt = dsTC doc
@@ -1007,35 +1026,10 @@ onHover req respond = do
                           Just retTy -> do
                             renderHoverSignatureMaybe infinitiveName args retTy isInfinitive
                           Nothing -> do
-                            -- Check if we have a resolved type first
-                            case mResolvedType of
-                              Just ty -> renderTyNomMaybe ty
-                              Nothing -> do
-                                let tcSt' = dsTC doc
-                                res <- liftIO (runTCM (inferType exp') tcSt')
-                                case res of
-                                  Right (Just ty, _) -> renderTyNomMaybe ty
-                                  _ -> return Nothing
-                      _ -> do
-                        case mResolvedType of
-                          Just ty -> renderTyNomMaybe ty
-                          Nothing -> do
-                            let tcSt' = dsTC doc
-                            res <- liftIO (runTCM (inferType exp') tcSt')
-                            case res of
-                              Right (Just ty, _) -> renderTyNomMaybe ty
-                              _ -> return Nothing
-                  (Nothing, _) -> do
-                    -- No resolved name, check if we have a resolved type
-                    case mResolvedType of
-                      Just ty -> renderTyNomMaybe ty
-                      Nothing -> do
-                        -- Fall back to inferring the type
-                        let tcSt' = dsTC doc
-                        res <- liftIO (runTCM (inferType exp') tcSt')
-                        case res of
-                          Right (Just ty, _) -> renderTyNomMaybe ty
-                          _ -> return Nothing
+                            fallbackToType
+                      _ -> fallbackToType
+                  (Nothing, _) ->
+                    fallbackToType
           let hoverFromConstructor =
                 case raCtor resolved of
                   Just (ctorIdent, _, pats, mScrutinee) -> do
@@ -1147,26 +1141,15 @@ onHover req respond = do
                               case mPatTy of
                                 Just ty -> renderTyNomMaybe ty
                                 Nothing -> return Nothing
-                    App _ fn _ ->
-                      -- For App expressions, check if the function is a Var and render its signature
-                      case fn of
-                        var@Var{} -> do
-                          sig <- tryRenderSignature exp' var
-                          case sig of
-                            Just sigText -> return (Just sigText)
-                            Nothing ->
-                              case raResolvedType resolved of
-                                Just ty -> renderTyNomMaybe ty
-                                Nothing -> return Nothing
-                        _ -> do
-                          case raResolvedType resolved of
-                            Just ty -> renderTyNomMaybe ty
-                            Nothing -> do
-                              let tcSt' = dsTC doc
-                              res <- liftIO (runTCM (inferType exp') tcSt')
-                              case res of
-                                Right (Just ty, _) -> renderTyNomMaybe ty
-                                _ -> return Nothing
+                    App {} -> do
+                      case raResolvedType resolved of
+                        Just ty -> renderTyNomMaybe ty
+                        Nothing -> do
+                          let tcSt' = dsTC doc
+                          res <- liftIO (runTCM (inferType exp') tcSt')
+                          case res of
+                            Right (Just ty, _) -> renderTyNomMaybe ty
+                            _ -> return Nothing
                     _ -> do
                       case raResolvedType resolved of
                         Just ty -> renderTyNomMaybe ty
@@ -2118,7 +2101,7 @@ findBindExpAt pos mWord doc =
     thd3 (_, _, c) = c
     spanKey sp =
       case sp of
-        NoSpan -> maxBound :: Int
+        NoSpan -> (maxBound :: Int, maxBound :: Int)
         _ -> spanSizeForSort sp
     candidateSortKey (bindSp, expSp, _) = (spanKey bindSp, spanKey expSp)
     collectStmt stt =
@@ -2566,15 +2549,15 @@ posInSpan (Position l c) (Span s e) =
   in (l > sl || (l == sl && c >= sc)) && (l < el || (l == el && c <= ec))
 
 -- | Compute an ordering key for spans (smaller spans sort first).
-spanSizeForSort :: Span -> Int
+spanSizeForSort :: Span -> (Int, Int)
 spanSizeForSort sp = case sp of
-  NoSpan -> maxBound :: Int
+  NoSpan -> (maxBound :: Int, maxBound :: Int)
   Span start end ->
     let SourcePos _ startLine startCol = start
         SourcePos _ endLine endCol = end
         lines = unPos endLine - unPos startLine
         cols = if lines == 0 then unPos endCol - unPos startCol else maxBound :: Int
-    in lines * 10000 + cols
+    in (lines, cols)
 
 -- | Find the smallest resolved type span that contains the given position.
 resolvedTypeAt :: Position -> Map.Map Span (Ty Ann) -> Maybe (Ty Ann)
