@@ -20,7 +20,7 @@ jobs:
         with:
           path: |
             /tmp/.stack-root
-          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock') }}-${{ hashFiles('kip.cabal') }}
+          key: ${{ runner.os }}-stack-lts-21_25-v1
           restore-keys: |
             ${{ runner.os }}-stack-
 
