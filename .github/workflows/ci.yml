@@ -19,8 +19,14 @@ jobs:
       - name: Stack install
         run: stack install
 
-      - name: HLint
-        run: stack exec --package hlint -- hlint app src tests
+      - name: Setup HLint
+        uses: haskell-actions/hlint-setup@v2
+
+      - name: Run HLint
+        uses: haskell-actions/hlint-run@v2
+        with:
+          path: '["app","src","tests"]'
+          fail-on: warning
 
       - name: Stack test
         run: stack test
