@@ -7,14 +7,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: fpco/stack-build:lts-21.25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run install script
+      - name: Install Foma
         run: |
-          chmod +x ./install.sh
-          ./install.sh
+          apt-get update
+          apt-get install -y --no-install-recommends foma libfoma-dev
 
       - name: Stack install
         run: stack install
