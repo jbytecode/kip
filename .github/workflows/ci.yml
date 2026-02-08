@@ -10,18 +10,37 @@ jobs:
     container:
       image: fpco/stack-build:lts-21.25
     env:
-      STACK_ROOT: /tmp/.stack
+      STACK_ROOT: ${{ github.workspace }}/.stack-root
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache Stack artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .stack-root
+            .stack-work
+          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock', 'kip.cabal') }}
+          restore-keys: |
+            ${{ runner.os }}-stack-
+
       - name: Install Foma
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends foma libfoma-dev
+          apt-get install -y --no-install-recommends ca-certificates curl gnupg foma libfoma-dev
 
-      - name: Stack install
-        run: stack --allow-different-user install
+      - name: Install Node.js 20
+        run: |
+          mkdir -p /etc/apt/keyrings
+          curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          node --version
+
+      - name: Build Haskell dependencies
+        run: stack --allow-different-user build --test --no-run-tests --only-dependencies
 
       - name: Setup HLint
         uses: haskell-actions/hlint-setup@v2
