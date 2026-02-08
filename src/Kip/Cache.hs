@@ -9,7 +9,9 @@ import GHC.Generics (Generic)
 import Data.Binary
 import Data.Word
 import Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
+import Data.Version (showVersion)
 import System.FilePath
 import System.Directory
 import System.Environment (getExecutablePath)
@@ -32,6 +34,7 @@ import Kip.TypeCheck (TCState(..))
 import Kip.Eval (EvalState(..))
 import Language.Foma (FSM)
 import Kip.Render (RenderCache, renderExpValue)
+import Paths_kip (version)
 
 -- | Memoized file hash cache for the current process.
 -- Stores (mtime in microseconds, hash) so we can skip re-hashing unchanged files.
@@ -299,8 +302,17 @@ getCompilerHash = do
     Nothing -> do
       res <- try getExecutablePath
       case res of
-        Left (_ :: SomeException) -> return Nothing
+        Left (_ :: SomeException) -> do
+          let digest = hash (BS8.pack ("kip-" ++ showVersion version))
+          writeIORef compilerHashCache (Just digest)
+          return (Just digest)
         Right exePath -> do
           digest <- hashFile exePath
-          writeIORef compilerHashCache digest
-          return digest
+          case digest of
+            Just _ -> do
+              writeIORef compilerHashCache digest
+              return digest
+            Nothing -> do
+              let fallback = hash (BS8.pack ("kip-" ++ showVersion version))
+              writeIORef compilerHashCache (Just fallback)
+              return (Just fallback)
