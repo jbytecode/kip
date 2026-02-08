@@ -792,7 +792,7 @@ estimateCandidates useCtx (ss, s) = do
                       then downsCached (stem <> "<p3s>")
                       else return []
                   let roots = ordNub (forms ++ p3sForms ++ [baseRoot])
-                      matches = filter (\ident -> ident `Set.member` ctx) [(mods, root) | root <- roots]
+                      matches = filter (`Set.member` ctx) [(mods, root) | root <- roots]
                   return [(match, cas) | match <- matches]
               restMatches <- collectAllMatches rest
               return (ordNub (directMatches ++ restMatches))
@@ -1280,7 +1280,7 @@ matchCtxByInflection ctx ident candidates = do
                       then downsCached (stem <> "<p3s>")
                       else return []
                   let roots = ordNub (forms ++ p3sForms ++ [baseRoot])
-                      matches = filter (\ident' -> ident' `Set.member` ctxFiltered) [(mods, root) | root <- roots]
+                      matches = filter (`Set.member` ctxFiltered) [(mods, root) | root <- roots]
                   case matches of
                     (match:_) -> return (Just (match, cas))
                     [] -> goAnalyses mods ctxFiltered rest cases

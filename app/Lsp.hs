@@ -931,7 +931,7 @@ onHover req respond = do
                       Var _ varName candidates ->
                         sigName `elem` (varName : map fst candidates)
                       _ ->
-                        maybe False (== sigName) mResolvedIdent
+                        Just sigName == mResolvedIdent
                   fallbackToType = do
                     case mResolvedType of
                       Just ty -> renderTyNomMaybe ty
