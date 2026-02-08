@@ -10,7 +10,7 @@ jobs:
     container:
       image: fpco/stack-build:lts-21.25
     env:
-      STACK_ROOT: ${{ github.workspace }}/.stack-root
+      STACK_ROOT: /tmp/.stack-root
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,8 +19,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            .stack-root
-            .stack-work
+            /tmp/.stack-root
+            /tmp/.stack-work
           key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock', 'kip.cabal') }}
           restore-keys: |
             ${{ runner.os }}-stack-
@@ -40,7 +40,7 @@ jobs:
           node --version
 
       - name: Build Haskell dependencies
-        run: stack --allow-different-user build --test --no-run-tests --only-dependencies
+        run: stack --allow-different-user --work-dir /tmp/.stack-work build --test --no-run-tests --only-dependencies
 
       - name: Setup HLint
         uses: haskell-actions/hlint-setup@v2
@@ -52,4 +52,4 @@ jobs:
           fail-on: warning
 
       - name: Stack test
-        run: stack --allow-different-user test
+        run: stack --allow-different-user --work-dir /tmp/.stack-work test
