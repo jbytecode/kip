@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: fpco/stack-build:lts-21.25
+    env:
+      STACK_ROOT: /tmp/.stack
     steps:
       - name: Checkout
         uses: actions/checkout@v4
