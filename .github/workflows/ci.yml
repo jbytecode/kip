@@ -20,7 +20,6 @@ jobs:
         with:
           path: |
             /tmp/.stack-root
-            /tmp/.stack-work
           key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock', 'kip.cabal') }}
           restore-keys: |
             ${{ runner.os }}-stack-
@@ -40,7 +39,7 @@ jobs:
           node --version
 
       - name: Build Haskell dependencies
-        run: stack --allow-different-user --work-dir /tmp/.stack-work build --test --no-run-tests --only-dependencies
+        run: stack --allow-different-user build --test --no-run-tests --only-dependencies
 
       - name: Setup HLint
         uses: haskell-actions/hlint-setup@v2
@@ -52,4 +51,4 @@ jobs:
           fail-on: warning
 
       - name: Stack test
-        run: stack --allow-different-user --work-dir /tmp/.stack-work test
+        run: stack --allow-different-user test
