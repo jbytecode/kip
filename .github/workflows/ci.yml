@@ -21,7 +21,7 @@ jobs:
           apt-get install -y --no-install-recommends foma libfoma-dev
 
       - name: Stack install
-        run: stack install
+        run: stack --allow-different-user install
 
       - name: Setup HLint
         uses: haskell-actions/hlint-setup@v2
@@ -33,4 +33,4 @@ jobs:
           fail-on: warning
 
       - name: Stack test
-        run: stack test
+        run: stack --allow-different-user test
