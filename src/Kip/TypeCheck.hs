@@ -513,13 +513,33 @@ tcExp1With allowEffect e =
     Ascribe {annExp, ascType, ascExp} -> do
       exp' <- tcExp1With allowEffect ascExp
       mExpTy <- inferType exp'
-      MkTCState{tcTyCons} <- get
+      MkTCState{tcTyCons, tcFuncSigs} <- get
+      when (containsTyVars tcTyCons ascType) $
+        lift (throwE (NoType (annSpan annExp)))
+      let tcList = Map.toList tcTyCons
+          nAsc = normalizeTy tcList ascType
+          expIsAppToOverload =
+            case exp' of
+              App {fn = Var {varCandidates}, args} ->
+                let fnNames = map fst varCandidates
+                    exactSigs =
+                      [ sig
+                      | name <- fnNames
+                      , sig <- MultiMap.lookup name tcFuncSigs
+                      , length sig == length args
+                      ]
+                in length exactSigs > 1
+              _ -> False
+          matchesKnownType expTy = tyEq tcList nAsc (normalizeTy tcList expTy)
       case mExpTy of
-        Just expTy -> do
-          case unifyTypes (Map.toList tcTyCons) [ascType] [expTy] of
-            Just _ -> return (Ascribe annExp ascType exp')
-            Nothing -> lift (throwE (PatternTypeMismatch ([], T.pack "ascribe") ascType expTy (annSpan annExp)))
-        Nothing -> return (Ascribe annExp ascType exp')
+        Just expTy
+          | matchesKnownType expTy -> return (Ascribe annExp ascType exp')
+          | expIsAppToOverload && typeMatchesAllowUnknown tcTyCons (Just expTy) nAsc ->
+              return (Ascribe annExp ascType exp')
+          | otherwise ->
+              lift (throwE (PatternTypeMismatch ([], T.pack "ascribe") ascType expTy (annSpan annExp)))
+        Nothing ->
+          lift (throwE (NoType (annSpan annExp)))
 
 -- | Reject pure uses of effectful read primitives and infinitive functions.
 rejectReadEffect :: Ann -- ^ Expression annotation.

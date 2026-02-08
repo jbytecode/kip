@@ -1,0 +1,2 @@
+(* Yanlış tip ataması: ondalık-sayı olarak tam-sayı *)
+ondalık-sayı olarak 5.

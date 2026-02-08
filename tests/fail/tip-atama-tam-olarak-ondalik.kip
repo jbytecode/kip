@@ -1,0 +1,2 @@
+(* Yanlış tip ataması: tam-sayı olarak ondalık-sayı *)
+tam-sayı olarak 3.14.

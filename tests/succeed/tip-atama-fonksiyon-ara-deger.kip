@@ -1,0 +1,7 @@
+(* Fonksiyon içinde tip atama ve örüntü eşleşmesi *)
+
+(bu dizgeyle) (tam-sayıya-varsayımlı tam-sayısı),
+  (bu tam-sayı-hali) n'nin varlığıysa,
+    tam-sayı olarak n;
+  yokluksa,
+    tam-sayı olarak 0.

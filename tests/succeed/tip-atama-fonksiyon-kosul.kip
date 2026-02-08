@@ -1,0 +1,7 @@
+(* Fonksiyon içinde koşul dallarında tip atama *)
+
+(bu tam-sayıyı) (işaret tam-sayısı),
+  (bunla 0'ın eşitliği) doğruysa,
+    tam-sayı olarak 1;
+  değilse,
+    tam-sayı olarak 0.

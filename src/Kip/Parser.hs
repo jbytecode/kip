@@ -1521,23 +1521,18 @@ parseExpWithCtx' useCtx allowMatch =
           (rawIdent, sp'') <- withSpan identifierNotKeyword
           candidates <- estimateCandidates False rawIdent
           let ann'' = mkAnn (pickCase False candidates) sp''
-              nameForTy =
-                case candidates of
-                  (ident, _):_ -> ident
-                  [] -> rawIdent
           MkParserState{parserPrimTypes, parserTyCons} <- getP
           let tyNames = map fst parserTyCons
-          case candidates of
-            (ident, _):_
-              | ident `elem` parserPrimTypes && isIntType ident -> return (TyInt ann'')
-            (ident, _):_
-              | ident `elem` parserPrimTypes && isFloatType ident -> return (TyFloat ann'')
-            (ident, _):_
-              | ident `elem` parserPrimTypes && isStringType ident -> return (TyString ann'')
-            _ ->
-              if nameForTy `elem` tyNames
-                then return (TyInd ann'' nameForTy)
-                else return (TyVar ann'' nameForTy)
+              isPrim ident = ident `elem` parserPrimTypes
+              knownCandidate = find (`elem` tyNames) (map fst candidates)
+              resolvedName = fromMaybe rawIdent knownCandidate
+          case resolvedName of
+            ident
+              | isPrim ident && isIntType ident -> return (TyInt ann'')
+              | isPrim ident && isFloatType ident -> return (TyFloat ann'')
+              | isPrim ident && isStringType ident -> return (TyString ann'')
+              | ident `elem` tyNames -> return (TyInd ann'' ident)
+              | otherwise -> return (TyInd ann'' ident)
     -- | Parse a let expression with "dersek".
     letExp :: KipParser (Exp Ann) -- ^ Parsed let expression.
     letExp = try $ do
@@ -1584,23 +1579,18 @@ parseExpWithCtx' useCtx allowMatch =
           (rawIdent, sp') <- withSpan identifierNotKeyword
           candidates <- estimateCandidates False rawIdent
           let ann' = mkAnn (pickCase False candidates) sp'
-              nameForTy =
-                case candidates of
-                  (ident, _):_ -> ident
-                  [] -> rawIdent
           MkParserState{parserPrimTypes, parserTyCons} <- getP
           let tyNames = map fst parserTyCons
-          case candidates of
-            (ident, _):_
-              | ident `elem` parserPrimTypes && isIntType ident -> return (TyInt ann')
-            (ident, _):_
-              | ident `elem` parserPrimTypes && isFloatType ident -> return (TyFloat ann')
-            (ident, _):_
-              | ident `elem` parserPrimTypes && isStringType ident -> return (TyString ann')
-            _ ->
-              if nameForTy `elem` tyNames
-                then return (TyInd ann' nameForTy)
-                else return (TyVar ann' nameForTy)
+              isPrim ident = ident `elem` parserPrimTypes
+              knownCandidate = find (`elem` tyNames) (map fst candidates)
+              resolvedName = fromMaybe rawIdent knownCandidate
+          case resolvedName of
+            ident
+              | isPrim ident && isIntType ident -> return (TyInt ann')
+              | isPrim ident && isFloatType ident -> return (TyFloat ann')
+              | isPrim ident && isStringType ident -> return (TyString ann')
+              | ident `elem` tyNames -> return (TyInd ann' ident)
+              | otherwise -> return (TyInd ann' ident)
     -- | Parse comma-separated sequence expressions.
     seqExp :: KipParser (Exp Ann) -- ^ Parsed sequence expression.
     seqExp = do

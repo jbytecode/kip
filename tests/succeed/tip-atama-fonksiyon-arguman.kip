@@ -1,0 +1,2 @@
+(* Tip atama ifadesi fonksiyon argümanı olarak kullanılır *)
+((tam-sayı olarak 5'le) 2'nin toplamını) yaz.
