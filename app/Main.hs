@@ -56,7 +56,7 @@ import Data.Version (showVersion)
 -- | REPL runtime state (parser/type context + evaluator).
 data ReplState =
   ReplState
-    { replCtx :: [Identifier]
+    { replCtx :: Set.Set Identifier
     , replCtors :: [Identifier]
     , replTyParams :: [Identifier]
     , replTyCons :: [(Identifier, Int)]

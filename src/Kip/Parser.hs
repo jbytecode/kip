@@ -81,6 +81,7 @@ module Kip.Parser where
 import Data.List
 import Data.Maybe (maybeToList, mapMaybe, listToMaybe, isJust, isNothing, fromMaybe)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as Set
 import Control.Applicative (optional)
 import Control.Monad (forM, forM_, guard, unless, when)
 import Control.Monad.IO.Class
@@ -224,7 +225,7 @@ The parser state is updated as we parse to track:
 data ParserState =
   MkParserState
     { fsm :: FSM
-    , parserCtx :: [Identifier]
+    , parserCtx :: !(Set.Set Identifier)
     , parserCtors :: [Identifier]
     , parserTyParams :: [Identifier]
     , parserTyCons :: [(Identifier, Int)]
@@ -296,11 +297,11 @@ newParserState :: FSM -- ^ Morphology FSM.
 newParserState fsm' = do
   upsCache <- HT.new
   populateDemonstrativeCache upsCache
-  MkParserState fsm' [] [] [] [] [] [] M.empty upsCache <$> HT.new
+  MkParserState fsm' Set.empty [] [] [] [] [] M.empty upsCache <$> HT.new
 
 -- | Create a parser state with a given context and fresh caches.
 newParserStateWithCtx :: FSM -- ^ Morphology FSM.
-                      -> [Identifier] -- ^ Initial identifier context.
+                      -> Set.Set Identifier -- ^ Initial identifier context.
                       -> [Identifier] -- ^ Initial constructor identifiers.
                       -> [Identifier] -- ^ Initial type parameters.
                       -> [(Identifier, Int)] -- ^ Type constructor arities.
@@ -318,11 +319,11 @@ newParserStateWithCaches :: FSM -- ^ Morphology FSM.
                          -> MorphCache -- ^ Shared downs cache.
                          -> ParserState -- ^ Parser state.
 newParserStateWithCaches fsm' =
-  MkParserState fsm' [] [] [] [] [] [] M.empty
+  MkParserState fsm' Set.empty [] [] [] [] [] M.empty
 
 -- | Create a parser state with context and shared caches.
 newParserStateWithCtxAndCaches :: FSM -- ^ Morphology FSM.
-                               -> [Identifier] -- ^ Initial identifier context.
+                               -> Set.Set Identifier -- ^ Initial identifier context.
                                -> [Identifier] -- ^ Initial constructor identifiers.
                                -> [Identifier] -- ^ Initial type parameters.
                                -> [(Identifier, Int)] -- ^ Type constructor arities.
@@ -368,10 +369,19 @@ withPatVars :: [Identifier] -- ^ Pattern variable names to add.
             -> KipParser a -- ^ Parsed result.
 withPatVars patVars p = do
   MkParserState{parserCtx} <- getP
-  modifyP (\s -> s{parserCtx = patVars ++ parserCtx})
+  modifyP (\s -> s{parserCtx = Set.fromList patVars `Set.union` parserCtx})
   result <- p
   modifyP (\s -> s{parserCtx = parserCtx})
   return result
+
+-- | O(n log n) duplicate removal preserving first-occurrence order.
+ordNub :: Ord a => [a] -> [a]
+ordNub = go Set.empty
+  where
+    go _ [] = []
+    go seen (x:xs)
+      | x `Set.member` seen = go seen xs
+      | otherwise = x : go (Set.insert x seen) xs
 
 -- | Whitespace parser.
 ws :: KipParser () -- ^ No result.
@@ -557,7 +567,7 @@ estimateCandidates useCtx (ss, s) = do
       mBareCase = stripBareCaseSuffix (ss, s)
   -- Fast path when the surface form is already in scope and not a bare case
   -- form (e.g. "varlığı" could also be bare acc); skip morphology entirely.
-  if useCtx && directIdent `elem` parserCtx && isNothing mBareCase
+  if useCtx && directIdent `Set.member` parserCtx && isNothing mBareCase
     -- Fast path: already in scope, avoid morphology round-trips.
     then return [(directIdent, Nom)]
     else do
@@ -586,11 +596,11 @@ estimateCandidates useCtx (ss, s) = do
                       case T.unsnoc txt of
                         Just (pref, 'y') | not (T.null pref) -> Just pref
                         _ -> Nothing
-                    fallbackRoots = nub (stripped : maybeToList (stripBufferY stripped))
+                    fallbackRoots = ordNub (stripped : maybeToList (stripBufferY stripped))
                     matches =
                       [ ((ss, root), Nom)
                       | root <- fallbackRoots
-                      , (ss, root) `elem` parserCtx
+                      , (ss, root) `Set.member` parserCtx
                       ]
                     pickLongest xs =
                       case xs of
@@ -614,25 +624,25 @@ estimateCandidates useCtx (ss, s) = do
               -- disambiguate P3s vs Acc for forms like "varlığı".
               let bareCaseCandidates =
                     case mBareCase of
-                      Just (base, Acc) | base `elem` parserCtx ->
+                      Just (base, Acc) | base `Set.member` parserCtx ->
                         (base, Acc) :
-                        [(possBase, P3s) | possBase /= (ss, s) && possBase `elem` parserCtx] ++
+                        [(possBase, P3s) | possBase /= (ss, s) && possBase `Set.member` parserCtx] ++
                         [(base, P3s)]
-                      Just (base, cas) | base `elem` parserCtx -> [(base, cas)]
+                      Just (base, cas) | base `Set.member` parserCtx -> [(base, cas)]
                       _ -> []
                   -- Also allow a candidate inferred from the surface suffix
                   -- when morphology doesn't provide a case.
                   candidates0' = addSurfaceCaseCandidate s candidates0
-                  candidates0'' = nub (bareCaseCandidates ++ candidates0')
+                  candidates0'' = ordNub (bareCaseCandidates ++ candidates0')
                   hasCond = any (\(_, cas) -> cas == Cond) candidates0'
               -- Conditional (-sa/-se) gets special casing to avoid losing
               -- constructor matches when morphology is ambiguous.
               condExtra0 <- condCandidatesM s
-              let candidates = nub (candidates0'' ++ condExtra0)
-                  filtered0 = filter (\(ident, _) -> ident `elem` parserCtx) candidates
+              let candidates = ordNub (candidates0'' ++ condExtra0)
+                  filtered0 = filter (\(ident, _) -> ident `Set.member` parserCtx) candidates
                   filtered =
                     if any (\(_, cas) -> cas == Cond) candidates
-                      then nub (filtered0 ++ filter (\(_, cas) -> cas == Cond) candidates)
+                      then ordNub (filtered0 ++ filter (\(_, cas) -> cas == Cond) candidates)
                       else filtered0
               if useCtx && not isIpSurface && not (null filtered)
                 then return filtered
@@ -641,7 +651,7 @@ estimateCandidates useCtx (ss, s) = do
                   -- Prefer TRmorph analyses; keep suffix stripping only as a
                   -- fallback when analyses are missing.
                   let ipRootsFromAnalyses =
-                        nub
+                        ordNub
                           [ T.takeWhile (/= '<') analysis
                           | analysis <- sAnalyses
                           , "<cv:ip>" `T.isInfixOf` analysis
@@ -649,7 +659,7 @@ estimateCandidates useCtx (ss, s) = do
                       ipCandidatesFromAnalyses =
                         [ ((ss, root), Nom)
                         | root <- ipRootsFromAnalyses
-                        , (ss, root) `elem` parserCtx
+                        , (ss, root) `Set.member` parserCtx
                         ]
                       ipMatch = do
                         stripped <- stripIpSuffix s
@@ -657,13 +667,13 @@ estimateCandidates useCtx (ss, s) = do
                               case T.unsnoc txt of
                                 Just (pref, 'y') | not (T.null pref) -> Just pref
                                 _ -> Nothing
-                            fallbackRoots = nub (stripped : maybeToList (stripBufferY stripped))
+                            fallbackRoots = ordNub (stripped : maybeToList (stripBufferY stripped))
                             fallbackMatches =
                               [ ((ss, root), Nom)
                               | root <- fallbackRoots
-                              , (ss, root) `elem` parserCtx
+                              , (ss, root) `Set.member` parserCtx
                               ]
-                            allMatches = nub (ipCandidatesFromAnalyses ++ fallbackMatches)
+                            allMatches = ordNub (ipCandidatesFromAnalyses ++ fallbackMatches)
                             pickLongest xs =
                               case xs of
                                 [] -> []
@@ -680,7 +690,7 @@ estimateCandidates useCtx (ss, s) = do
                       case mCopula of
                         Just stripped -> do
                           baseIdent <- normalizePossessive (ss, stripped)
-                          if useCtx && baseIdent `elem` parserCtx
+                          if useCtx && baseIdent `Set.member` parserCtx
                             then return [(baseIdent, Nom)]
                             else do
                               strippedAnalyses <- case mCopulaAnalyses of
@@ -688,24 +698,27 @@ estimateCandidates useCtx (ss, s) = do
                                 Nothing -> upsCached stripped
                               possBase1 <- normalizePossessive (ss, stripped)
                               (candidates1, filtered1) <- candidatesForWithAnalyses stripped parserCtx strippedAnalyses
+                              -- Same bare-case synthesis for the copula-stripped
+                              -- variant; this keeps P3s/Acc ambiguity visible.
                               let bareCaseCandidates1 =
                                     case stripBareCaseSuffix (ss, stripped) of
-                                      Just (base, Acc) | base `elem` parserCtx ->
-                                        (base, Acc)
-                                          : [(possBase1, P3s) | possBase1 /= (ss, stripped) && possBase1 `elem` parserCtx]
-                                          ++ [(base, P3s)]
-                                      Just (base, cas) | base `elem` parserCtx -> [(base, cas)]
+                                      Just (base, Acc) | base `Set.member` parserCtx ->
+                                        (base, Acc) :
+                                        [(possBase1, P3s) | possBase1 /= (ss, stripped) && possBase1 `Set.member` parserCtx] ++
+                                        [(base, P3s)]
+                                      Just (base, cas) | base `Set.member` parserCtx -> [(base, cas)]
                                       _ -> []
                                   candidates1' = addSurfaceCaseCandidate stripped candidates1
-                                  candidates1'' = nub (bareCaseCandidates1 ++ candidates1')
+                                  candidates1'' = ordNub (bareCaseCandidates1 ++ candidates1')
+                                  hasCond1 = any (\(_, cas) -> cas == Cond) candidates1'
                               condExtra1 <- condCandidatesM stripped
-                              let candidates' = nub (candidates1'' ++ condExtra1)
-                                  filtered1 = filter (\(ident, _) -> ident `elem` parserCtx) candidates'
+                              let candidates' = ordNub (candidates1'' ++ condExtra1)
+                                  filtered1 = filter (\(ident, _) -> ident `Set.member` parserCtx) candidates'
                                   filtered' =
                                     if any (\(_, cas) -> cas == Cond) candidates'
-                                      then nub (filtered1 ++ filter (\(_, cas) -> cas == Cond) candidates')
+                                      then ordNub (filtered1 ++ filter (\(_, cas) -> cas == Cond) candidates')
                                       else filtered1
-                                  candidatesForMatch =
+                              let candidatesForMatch =
                                     if null candidates'
                                       then [((ss, stripped), cas) | cas <- allCases]
                                       else candidates'
@@ -739,7 +752,7 @@ estimateCandidates useCtx (ss, s) = do
     -- Returns Nothing when multiple matches exist (ambiguity) to allow full enumeration.
     findCtxCandidate :: [Text] -- ^ Identifier modifiers.
                      -> Text -- ^ Surface root.
-                     -> [Identifier] -- ^ Context identifiers.
+                     -> Set.Set Identifier -- ^ Context identifiers.
                      -> KipParser (Maybe (Identifier, Case)) -- ^ Unique context match, if any.
     findCtxCandidate mods surfaceRoot ctx = do
       analyses <- upsCached surfaceRoot
@@ -748,7 +761,7 @@ estimateCandidates useCtx (ss, s) = do
     -- | Find a matching identifier in context using pre-fetched analyses.
     findCtxCandidateWithAnalyses :: [Text] -- ^ Identifier modifiers.
                                  -> Text -- ^ Surface root.
-                                 -> [Identifier] -- ^ Context identifiers.
+                                 -> Set.Set Identifier -- ^ Context identifiers.
                                  -> [Text] -- ^ Morphology analyses for the surface form.
                                  -> KipParser (Maybe (Identifier, Case)) -- ^ Unique context match, if any.
     findCtxCandidateWithAnalyses mods _surfaceRoot ctx analyses = do
@@ -769,7 +782,7 @@ estimateCandidates useCtx (ss, s) = do
             Nothing -> collectAllMatches rest
             Just (baseRoot, cas) -> do
               let direct = (mods, baseRoot)
-              directMatches <- if direct `elem` ctx
+              directMatches <- if direct `Set.member` ctx
                 then return [(direct, cas)]
                 else do
                   let stem = stripCaseTags analysis
@@ -778,28 +791,28 @@ estimateCandidates useCtx (ss, s) = do
                     if "<p3s>" `T.isInfixOf` analysis && cas /= P3s
                       then downsCached (stem <> "<p3s>")
                       else return []
-                  let roots = nub (forms ++ p3sForms ++ [baseRoot])
-                      matches = filter (`elem` ctx) [(mods, root) | root <- roots]
+                  let roots = ordNub (forms ++ p3sForms ++ [baseRoot])
+                      matches = filter (\ident -> ident `Set.member` ctx) [(mods, root) | root <- roots]
                   return [(match, cas) | match <- matches]
               restMatches <- collectAllMatches rest
-              return (nub (directMatches ++ restMatches))
+              return (ordNub (directMatches ++ restMatches))
     allCases = [Nom, Acc, Dat, Gen, Loc, Abl, Ins, Cond, P3s]
     candidatesFor :: Text -- ^ Surface form.
-                  -> [Identifier] -- ^ Context identifiers.
+                  -> Set.Set Identifier -- ^ Context identifiers.
                   -> KipParser ([(Identifier, Case)], [(Identifier, Case)]) -- ^ All candidates and context-filtered ones.
     candidatesFor surface ctx = do
       morphAnalyses <- upsCached surface
       candidatesForWithAnalyses surface ctx morphAnalyses
 
     candidatesForWithAnalyses :: Text -- ^ Surface form.
-                              -> [Identifier] -- ^ Context identifiers.
+                              -> Set.Set Identifier -- ^ Context identifiers.
                               -> [Text] -- ^ Morphology analyses.
                               -> KipParser ([(Identifier, Case)], [(Identifier, Case)]) -- ^ All candidates and context-filtered ones.
     candidatesForWithAnalyses _surface ctx morphAnalyses = do
       let stems = map stripCaseTags morphAnalyses
-          uniqueStems = nub stems
+          uniqueStems = ordNub stems
           -- Collect stems that need a possessive form so we can batch downs.
-          p3sStems = nub
+          p3sStems = ordNub
             [ stem <> "<p3s>"
             | (analysis, stem) <- zip morphAnalyses stems
             , "<p3s>" `T.isInfixOf` analysis
@@ -818,7 +831,7 @@ estimateCandidates useCtx (ss, s) = do
             let baseRoot = T.takeWhile (/= '<') y
                 direct = (ss, baseRoot)
             -- Fast path: if the base root is already in context, avoid costly downs.
-            if direct `elem` ctx
+            if direct `Set.member` ctx
               then return [(direct, cas)]
               else do
                 let forms = fromMaybe [] (M.lookup stem stemMap)
@@ -830,15 +843,15 @@ estimateCandidates useCtx (ss, s) = do
                       case forms ++ p3sFormsFor of
                         [] -> [baseRoot]
                         xs -> xs ++ [baseRoot]
-                return [((ss, root), cas) | root <- nub roots])
-      let candidatesDedup = nub candidatesRaw
+                return [((ss, root), cas) | root <- ordNub roots])
+      let candidatesDedup = ordNub candidatesRaw
           candidates =
             if not hasCompoundP3sAcc
               then
                 let (p3s, rest) = partition (\(_, cas) -> cas == P3s) candidatesDedup
                 in if null p3s then candidatesDedup else p3s ++ rest
               else candidatesDedup
-          filtered = filter (\(ident, _) -> ident `elem` ctx) candidates
+          filtered = filter (\(ident, _) -> ident `Set.member` ctx) candidates
       return (candidates, filtered)
     -- | Conditional suffix candidates are generated outside morphology to
     -- keep "ise" variants available even when analyses are missing.
@@ -967,7 +980,7 @@ resolveCandidate useCtx ident = do
       case find (\(cand, _) -> cand == root) candidates of
         Just match -> return match
         Nothing ->
-          if root `elem` parserCtx
+          if root `Set.member` parserCtx
             then return (root, Nom)
             else pickFromCandidates candidates
     Nothing -> pickFromCandidates candidates
@@ -986,7 +999,7 @@ resolveCandidatePreferCtx :: Identifier -- ^ Surface identifier.
 resolveCandidatePreferCtx ident = do
   MkParserState{parserCtx} <- getP
   candidates <- estimateCandidates False ident
-  let filtered = filter (\(ident', _) -> ident' `elem` parserCtx) candidates
+  let filtered = filter (\(ident', _) -> ident' `Set.member` parserCtx) candidates
   case preferInflected filtered of
     x:_ -> return x
     [] ->
@@ -1070,7 +1083,7 @@ resolveTypeCandidatePreferCtx ident = do
           case preferInflected filtered of
             x:_ -> normalizeCandidate x
             [] -> do
-              mMatch <- matchCtxByInflection tyNames ident candidates
+              mMatch <- matchCtxByInflection (Set.fromList tyNames) ident candidates
               case mMatch of
                 Just matched -> normalizeCandidate matched
                 Nothing -> resolveCandidatePreferCtx ident
@@ -1183,7 +1196,7 @@ pickCase allowP3s candidates =
 -- | Find a case that has multiple distinct identifiers (potential ambiguity).
 findAmbiguousCase :: [(Identifier, Case)] -> Maybe Case
 findAmbiguousCase candidates =
-  let groupedByCases = [(cas, nub [ident | (ident, c) <- candidates, c == cas]) | cas <- nub (map snd candidates)]
+  let groupedByCases = [(cas, ordNub [ident | (ident, c) <- candidates, c == cas]) | cas <- ordNub (map snd candidates)]
       ambiguousCases = [cas | (cas, idents) <- groupedByCases, length idents > 1]
   in case ambiguousCases of
        (cas:_) -> Just cas
@@ -1202,18 +1215,18 @@ identRoot :: Identifier -- ^ Identifier to inspect.
 identRoot (_, x) = x
 
 -- | Match a context identifier by inflected surface forms.
-matchCtxByInflection :: [Identifier] -- ^ Context identifiers.
+matchCtxByInflection :: Set.Set Identifier -- ^ Context identifiers.
                      -> Identifier -- ^ Surface identifier.
                      -> [(Identifier, Case)] -- ^ Candidate identifiers.
                      -> KipParser (Maybe (Identifier, Case)) -- ^ Matched candidate, if any.
 matchCtxByInflection ctx ident candidates = do
   let (mods, surfaceRoot) = ident
-      cases = nub (map snd candidates)
+      cases = ordNub (map snd candidates)
       ctxFiltered =
         if null mods
           then ctx
-          else filter (\(ms, _) -> ms == mods) ctx
-  if ident `elem` ctxFiltered
+          else Set.filter (\(ms, _) -> ms == mods) ctx
+  if ident `Set.member` ctxFiltered
     -- Fast path: exact identifier already in scope.
     then return (Just (ident, Nom))
     else do
@@ -1245,7 +1258,7 @@ matchCtxByInflection ctx ident candidates = do
 
     -- | Try analyses against context identifiers.
     goAnalyses :: [Text] -- ^ Identifier modifiers.
-               -> [Identifier] -- ^ Context identifiers.
+               -> Set.Set Identifier -- ^ Context identifiers.
                -> [Text] -- ^ Morphology analyses for the surface form.
                -> [Case] -- ^ Candidate cases.
                -> KipParser (Maybe (Identifier, Case)) -- ^ Matched candidate.
@@ -1256,7 +1269,7 @@ matchCtxByInflection ctx ident candidates = do
         Just (baseRoot, cas)
           | cas `elem` cases -> do
               let direct = (mods, baseRoot)
-              if direct `elem` ctxFiltered
+              if direct `Set.member` ctxFiltered
                 -- Fast path: analysis root is already a context identifier.
                 then return (Just (direct, cas))
                 else do
@@ -1266,8 +1279,8 @@ matchCtxByInflection ctx ident candidates = do
                     if "<p3s>" `T.isInfixOf` analysis && cas /= P3s
                       then downsCached (stem <> "<p3s>")
                       else return []
-                  let roots = nub (forms ++ p3sForms ++ [baseRoot])
-                      matches = filter (`elem` ctxFiltered) [(mods, root) | root <- roots]
+                  let roots = ordNub (forms ++ p3sForms ++ [baseRoot])
+                      matches = filter (\ident' -> ident' `Set.member` ctxFiltered) [(mods, root) | root <- roots]
                   case matches of
                     (match:_) -> return (Just (match, cas))
                     [] -> goAnalyses mods ctxFiltered rest cases
@@ -1551,7 +1564,7 @@ parseExpWithCtx' useCtx allowMatch =
           lexeme (string "dersek")
           lexeme (char ',')
           st <- getP
-          putP st { parserCtx = name : parserCtx st }
+          putP st { parserCtx = Set.insert name (parserCtx st) }
           body <- parseExpWithCtx' useCtx allowMatch
           putP st
           let ann = mkAnn (annCase (annExp body)) (mergeSpan bindSpan (annSpan (annExp body)))
@@ -1614,7 +1627,7 @@ parseExpWithCtx' useCtx allowMatch =
               e2 <- case e1' of
                 Bind {bindName} -> do
                   st <- getP
-                  putP st { parserCtx = bindName : parserCtx st }
+                  putP st { parserCtx = Set.insert bindName (parserCtx st) }
                   res <- parseExpWithCtx' useCtx allowMatch
                   putP st
                   return res
@@ -1736,7 +1749,7 @@ parseExpWithCtx' useCtx allowMatch =
                            -> KipParser Identifier -- ^ Chosen scrutinee name.
     pickScrutineeNameCont Var{varName, varCandidates} = do
       MkParserState{parserCtx} <- getP
-      let inScope = [ident | (ident, _) <- varCandidates, ident `elem` parserCtx]
+      let inScope = [ident | (ident, _) <- varCandidates, ident `Set.member` parserCtx]
       case inScope of
         n:_ -> return n
         [] ->
@@ -1802,7 +1815,7 @@ parseExpWithCtx' useCtx allowMatch =
           let originalCase = annCase annY
               isInflected = originalCase `elem` [P3s, Acc, Gen, Dat, Loc, Abl]
           -- Check if any candidate is in context but NOT a type name (i.e., it's a function)
-          let isFuncCandidate = any (\(ident, _) -> ident `elem` parserCtx && ident `notElem` tyNames) candidates
+          let isFuncCandidate = any (\(ident, _) -> ident `Set.member` parserCtx && ident `notElem` tyNames) candidates
           -- Don't apply type cast if inflected OR if it's a function candidate
           if isInflected || isFuncCandidate
             then return Nothing  -- Don't apply type casting if it could be a function call
@@ -1964,7 +1977,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
       recordDefSpan name nameSpan
       lexeme (string "olsun")
       period
-      modifyP (\ps -> ps { parserCtx = name : parserCtx ps
+      modifyP (\ps -> ps { parserCtx = Set.insert name (parserCtx ps)
                          , parserTyCons = (name, 0) : parserTyCons ps
                          , parserPrimTypes = name : parserPrimTypes ps
                          })
@@ -2042,7 +2055,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
       recordDefSpan n nameSpan
       -- Extract parameter identifiers from TyVar nodes for parser state
       let paramIdents = map (\(TyVar _ ident) -> ident) params
-      modifyP (\ps -> ps { parserCtx = n : paramIdents ++ parserCtx ps
+      modifyP (\ps -> ps { parserCtx = Set.insert n (Set.fromList paramIdents `Set.union` parserCtx ps)
                              , parserTyParams = paramIdents ++ parserTyParams ps
                              , parserTyCons = (n, length params) : parserTyCons ps
                              , parserTyMods =
@@ -2064,7 +2077,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
             ["Constructor '", snd ctorName, "' normalizes to '", snd normalizedCtorName,
              "' which matches type name '", snd n, "' and creates parsing ambiguity"]))
       -- Extract constructor names (now from ((Identifier, Ann), [Ty Ann]))
-      modifyP (\ps -> ps { parserCtx = n : ctorNames ++ parserCtx ps
+      modifyP (\ps -> ps { parserCtx = Set.insert n (Set.fromList ctorNames `Set.union` parserCtx ps)
                          , parserCtors = ctorNames ++ parserCtors ps
                          })
       return (NewType n params ctors)
@@ -2326,19 +2339,19 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
           clauses <- parseBodyOnly []
           case clauses of
             [Clause (PWildcard _) body] -> do
-              modifyP (\ps -> ps {parserCtx = fname : parserCtx ps})
+              modifyP (\ps -> ps {parserCtx = Set.insert fname (parserCtx ps)})
               return (Defn fname (TyString (mkAnn Nom NoSpan)) body)
             _ -> customFailure ErrDefinitionBodyMissing
         else do
           st <- getP
           let argNames = map argIdent args
-          putP (st {parserCtx = fname : argNames ++ parserCtx st})
+          putP (st {parserCtx = Set.insert fname (Set.fromList argNames `Set.union` parserCtx st)})
           prim <- optional (try (lexeme (string "yerleşiktir") *> period))
           let retTy = fromMaybe (TyString (mkAnn Nom NoSpan)) mRetTy
           case prim of
             Just _ -> do
               st' <- getP
-              putP (st' {parserCtx = fname : parserCtx st})
+              putP (st' {parserCtx = Set.insert fname (parserCtx st)})
               return (PrimFunc fname args retTy isInfinitive)
             Nothing -> do
               isBindStart <- option False (try bindStartLookahead)
@@ -2347,7 +2360,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                   then parseBodyOnly argNames
                   else try (parseBodyOnly argNames) <|> parseClauses argNames
               st' <- getP
-              putP (st' {parserCtx = fname : parserCtx st})
+              putP (st' {parserCtx = Set.insert fname (parserCtx st)})
               return (Function fname args retTy clauses isInfinitive)
     -- | Ensure newly defined names are recognized Turkish surface forms.
     -- For hyphenated identifiers, morphology applies to the head (last segment).
@@ -2451,7 +2464,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
               let candidateNames = map fst varCandidates
                   isArg = any (`elem` argNames) (varName : candidateNames)
                   isCtor = any (`elem` parserCtors) candidateNames
-                  inScope = any (`elem` parserCtx) candidateNames
+                  inScope = any (`Set.member` parserCtx) candidateNames
               return (isArg || (isCtor && inScope))
             _ -> return False
         _ -> return False
@@ -2557,7 +2570,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
     argNameVariants :: [Identifier] -- ^ Declared argument names.
                     -> [Identifier] -- ^ Arguments plus modifier tokens.
     argNameVariants names =
-      nub (names ++ [([], m) | (mods, _) <- names, m <- mods])
+      ordNub (names ++ [([], m) | (mods, _) <- names, m <- mods])
     -- | Check if the next clause starts with a repeated argument name.
     -- This is a lightweight textual lookahead to catch "bu yanlışsa"
     -- style patterns before the main expression parser backtracks.
@@ -2957,6 +2970,10 @@ extractPatVars pat =
     PWildcard _ -> []
     PVar n _ -> [n]
     PCtor _ pats -> concatMap extractPatVars pats
+    PIntLit _ _ -> []
+    PFloatLit _ _ -> []
+    PStrLit _ _ -> []
+    PListLit pats -> concatMap extractPatVars pats
 
 -- | Parse a match expression with optional context filtering.
 parseMatchExpr :: Bool -- ^ Whether to use context when resolving names.
@@ -3043,7 +3060,7 @@ parseMatchExpr useCtx = do
                       -> KipParser Identifier -- ^ Chosen scrutinee name.
     pickScrutineeName Var{varName, varCandidates} = do
       MkParserState{parserCtx} <- getP
-      let inScope = [ident | (ident, _) <- varCandidates, ident `elem` parserCtx]
+      let inScope = [ident | (ident, _) <- varCandidates, ident `Set.member` parserCtx]
       case inScope of
         n:_ -> return n
         [] ->
@@ -3469,14 +3486,14 @@ selectCondNameInCtors ctors candidates =
                   else Nothing
 
 -- | Select a conditional constructor name from candidates.
-selectCondName :: [Identifier] -- ^ Context identifiers.
+selectCondName :: Set.Set Identifier -- ^ Context identifiers.
                -> [(Identifier, Case)] -- ^ Candidate identifiers.
                -> Maybe Identifier -- ^ Selected constructor.
 selectCondName ctx candidates =
-  case [name | (name, cas) <- candidates, cas == Cond, name `elem` ctx] of
+  case [name | (name, cas) <- candidates, cas == Cond, name `Set.member` ctx] of
     n:_ -> Just n
     [] ->
-      case [name | (name, _) <- candidates, name `elem` ctx] of
+      case [name | (name, _) <- candidates, name `Set.member` ctx] of
         n:_ -> Just n
         [] ->
           case strippedCondMatches of
@@ -3493,7 +3510,7 @@ selectCondName ctx candidates =
       [ base
       | (name, _) <- candidates
       , Just base <- [stripCondSuffixIdent name]
-      , base `elem` ctx
+      , base `Set.member` ctx
       ]
     stripCondSuffixIdent (mods, word) = do
       base <- stripCondSuffix word

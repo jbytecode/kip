@@ -1,0 +1,19 @@
+(* Örüntü değişkeni dıştaki bağlamı gölgeler. *)
+(bu tam-sayı listesinin) ilk-öğesi,
+  bu boşsa,
+    0;
+  başın devama ekiyse,
+    baştır.
+
+çalıştırmak,
+  100'e x dersek,
+  (1'in (2'nin (3'ün boşa ekine) ekine) eki)
+    x'in devama ekiyse,
+      (x'i) yazıp,
+      (devamın ilk-öğesine) x dersek,
+      (x'i) yazmaktır;
+    değilse,
+      0'ı yazmaktır.
+
+
+çalıştır.

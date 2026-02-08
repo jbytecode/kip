@@ -447,11 +447,26 @@ codegenExpWith ctx exp' =
       "__kip_float(" <> T.pack (show floatVal) <> ")"
     App {fn, args} ->
       renderCall ctx fn args
-    Bind {bindName, bindExp} ->
-      renderIife
-        [ "const " <> toJsIdent bindName <> " = " <> codegenExpWith ctx bindExp <> ";"
-        , "return " <> toJsIdent bindName <> ";"
-        ]
+    Bind {bindName, bindExp}
+      | expMentions bindName bindExp ->
+          let tmp = "__kip_shadow_" <> toJsIdent bindName
+          in renderIife
+               [ "const " <> tmp <> " = " <> codegenExpWith ctx bindExp <> ";"
+               , "const " <> toJsIdent bindName <> " = " <> tmp <> ";"
+               , "return " <> toJsIdent bindName <> ";"
+               ]
+      | otherwise ->
+          renderIife
+            [ "const " <> toJsIdent bindName <> " = " <> codegenExpWith ctx bindExp <> ";"
+            , "return " <> toJsIdent bindName <> ";"
+            ]
+    Seq {first = Bind {bindName, bindExp}, second}
+      | expMentions bindName bindExp ->
+          -- When a Bind shadows a name used in its own initializer, pass the
+          -- new value as an IIFE parameter so the initializer sees the outer
+          -- binding and the body sees the shadowed one.
+          let paramName = toJsIdent bindName
+          in "(await (async (" <> paramName <> ") => { return " <> codegenExpWith ctx second <> "; })(" <> codegenExpWith ctx bindExp <> "))"
     Seq {first, second} ->
       renderIife
         (renderExpAsStmt ctx first ++ ["return " <> codegenExpWith ctx second <> ";"])
@@ -792,9 +807,40 @@ isSectionableCall :: CodegenCtx -> [(Identifier, Case)] -> Bool
 isSectionableCall ctx =
   any (\(ident, _) -> ident `Set.member` sectionableFns ctx)
 
+-- | Check whether an identifier is mentioned anywhere in an expression.
+--
+-- This is used to detect self-referencing bindings that would hit JavaScript's
+-- temporal dead zone (TDZ) when emitted as @const x = ...x...@.
+expMentions :: Identifier -> Exp Ann -> Bool
+expMentions name expr =
+  let jsName = toJsIdent name
+  in expMentionsJs jsName expr
+
+-- | Check whether a JS identifier name appears in a compiled expression.
+expMentionsJs :: Text -> Exp Ann -> Bool
+expMentionsJs jsName expr =
+  case expr of
+    Var {varName, varCandidates} ->
+      let emitted = case varCandidates of
+                      ((ident, _):_) -> toJsIdent ident
+                      [] -> toJsIdent varName
+      in emitted == jsName
+    App {fn, args} -> expMentionsJs jsName fn || any (expMentionsJs jsName) args
+    Bind {bindExp} -> expMentionsJs jsName bindExp
+    Seq {first, second} -> expMentionsJs jsName first || expMentionsJs jsName second
+    Match {scrutinee, clauses} ->
+      expMentionsJs jsName scrutinee || any (\(Clause _ body) -> expMentionsJs jsName body) clauses
+    Let {body} -> expMentionsJs jsName body
+    Ascribe {ascExp} -> expMentionsJs jsName ascExp
+    StrLit {} -> False
+    IntLit {} -> False
+    FloatLit {} -> False
+
 -- | Render an expression in statement position.
 --
 -- Bindings become declarations; all other expressions become single statements.
+-- When a binding's name appears in its own initializer, a temporary variable is
+-- used to avoid JavaScript's temporal dead zone.
 renderExpAsStmt :: CodegenCtx -> Exp Ann -> [Text]
 renderExpAsStmt ctx exp' =
   case exp' of

@@ -17,6 +17,7 @@ import Control.Exception (try, SomeException)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import qualified Data.Map.Strict as Map
 import qualified Data.MultiMap as MultiMap
+import qualified Data.Set as Set
 import System.IO.Unsafe (unsafePerformIO)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -33,9 +34,9 @@ import Language.Foma (FSM)
 import Kip.Render (RenderCache, renderExpValue)
 
 -- | Memoized file hash cache for the current process.
--- Avoids repeated hashing when validating many modules in one run.
+-- Stores (mtime in microseconds, hash) so we can skip re-hashing unchanged files.
 {-# NOINLINE hashCache #-}
-hashCache :: IORef (Map.Map FilePath ByteString)
+hashCache :: IORef (Map.Map FilePath (Integer, ByteString))
 hashCache = unsafePerformIO (newIORef Map.empty)
 
 -- | Memoized compiler hash for the current process.
@@ -86,7 +87,7 @@ toCachedParserState ::
   -> CachedParserState -- ^ Compact cached payload.
 toCachedParserState ps =
   CachedParserState
-    { pctx = parserCtx ps
+    { pctx = Set.toList (parserCtx ps)
     , pctors = parserCtors ps
     , ptyParams = parserTyParams ps
     , ptyCons = parserTyCons ps
@@ -103,7 +104,7 @@ fromCachedParserState ::
   -> CachedParserState -- ^ Cached parser snapshot.
   -> ParserState -- ^ Rehydrated parser state.
 fromCachedParserState fsm upsCache downsCache CachedParserState{..} =
-  MkParserState fsm pctx pctors ptyParams ptyCons ptyMods pprimTypes pdefSpans upsCache downsCache
+  MkParserState fsm (Set.fromList pctx) pctors ptyParams ptyCons ptyMods pprimTypes pdefSpans upsCache downsCache
 
 -- | Cached wrapper for the type checker state.
 newtype CachedTCState = CachedTCState TCState
@@ -265,15 +266,27 @@ hashFile ::
   -> IO (Maybe ByteString) -- ^ Digest, or Nothing on error.
 hashFile path = do
   cached <- readIORef hashCache
-  case Map.lookup path cached of
-    Just digest -> return (Just digest)
-    Nothing -> do
+  mMeta <- getFileMeta path
+  case (Map.lookup path cached, mMeta) of
+    -- Cache hit and mtime unchanged: skip re-hashing.
+    (Just (cachedMtime, digest), Just (_, currentMtime))
+      | cachedMtime == currentMtime -> return (Just digest)
+    -- Otherwise re-hash.
+    (_, Just (_, currentMtime)) -> do
       res <- try (BL.readFile path)
       case res of
         Left (_ :: SomeException) -> return Nothing
         Right bytes -> do
           let digest = hashlazy bytes
-          modifyIORef' hashCache (Map.insert path digest)
+          modifyIORef' hashCache (Map.insert path (currentMtime, digest))
+          return (Just digest)
+    -- Can't get metadata, try hashing anyway.
+    _ -> do
+      res <- try (BL.readFile path)
+      case res of
+        Left (_ :: SomeException) -> return Nothing
+        Right bytes -> do
+          let digest = hashlazy bytes
           return (Just digest)
 
 -- | Hash the currently running compiler executable.
