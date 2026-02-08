@@ -1,0 +1,16 @@
+(* Dersek ile gölgeleme: iç bağlam dıştakini gölgeler. *)
+çalıştırmak,
+  5'e x dersek,
+  (x'i) yazıp,
+  (x'le 10'un toplamına) x dersek,
+  (x'i) yazmaktır.
+
+çalıştır.
+
+(bu tam-sayının) gölgelemesi,
+  buna x dersek,
+  (x'le 10'un toplamına) x dersek,
+  x'tir.
+
+5'in gölgelemesini yaz.
+

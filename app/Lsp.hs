@@ -1426,7 +1426,7 @@ onCompletion req respond = do
           ctxIdents = parserCtx pst
           typeNames = map fst (parserTyCons pst) ++ parserPrimTypes pst
           funcNames = MultiMap.keys (tcFuncSigs (dsTC doc))
-          candidates = Set.toList (Set.fromList (ctxIdents ++ typeNames ++ funcNames))
+          candidates = Set.toList (ctxIdents `Set.union` Set.fromList (typeNames ++ funcNames))
           items = map completionItem candidates
       respond (Right (InL items))
 
