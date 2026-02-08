@@ -349,7 +349,9 @@ renderTCError paramTyCons tyMods tcErr = do
           expStr <- liftIO (renderTyNomText cache fsm paramTyCons tyMods expectedTy)
           actStr <- liftIO (renderTyNomText cache fsm paramTyCons tyMods actualTy)
           let header =
-                T.pack (prettyIdent ctor) <> " yapıcısı " <> expStr <> " tipindendir, ancak burada " <> actStr <> " bekleniyor"
+                if ctor == ([], T.pack "ascribe")
+                  then "Tip ataması uyuşmuyor: beklenen tip " <> expStr <> ", bulunan tip " <> actStr
+                  else T.pack (prettyIdent ctor) <> " yapıcısı " <> expStr <> " tipindendir, ancak burada " <> actStr <> " bekleniyor"
           return header
         NonExhaustivePattern pats sp -> do
           missing <- renderMissingPatterns LangTr pats
@@ -394,7 +396,9 @@ renderTCError paramTyCons tyMods tcErr = do
           expStr <- liftIO (renderTyNomText cache fsm paramTyCons tyMods expectedTy)
           actStr <- liftIO (renderTyNomText cache fsm paramTyCons tyMods actualTy)
           let header =
-                T.pack (prettyIdent ctor) <> " constructor has type " <> expStr <> ", but " <> actStr <> " is expected here"
+                if ctor == ([], T.pack "ascribe")
+                  then "Type ascription mismatch: expected " <> expStr <> ", found " <> actStr
+                  else T.pack (prettyIdent ctor) <> " constructor has type " <> expStr <> ", but " <> actStr <> " is expected here"
           return header
         NonExhaustivePattern pats sp -> do
           missing <- renderMissingPatterns LangEn pats
