@@ -10,25 +10,24 @@ let s:kip_suffix = "'". s:kip_letter . '\+'
 let s:kip_cond_suffix = '\%(se\|sa\|yse\|ysa\)\?'
 let s:apos = "'"
 
-" Strings and string suffixes.
+" Strings: highlight exactly from opening quote to the next unescaped closing quote.
 syntax match kipEscape '\\.' contained
-syntax region kipString start='"' skip='\\.' end='"' contains=kipEscape containedin=ALLBUT,kipComment
-execute 'syntax match kipStringSuffix /\%("\)\@<=' . s:kip_suffix . '/ containedin=ALLBUT,kipComment'
+syntax region kipString start='"' skip='\\.' end='"' keepend contains=kipEscape containedin=ALLBUT,kipComment
 
 " Numbers and numeric suffixes.
-execute 'syntax match kipNumber /\<[0-9]\+\%(\.[0-9]\+\)\?\%(' . s:apos . '\|[[:space:],;.)]\|$\)\@=/ containedin=ALLBUT,kipComment'
-execute 'syntax match kipNumberSuffix /\<[0-9]\+\%(\.[0-9]\+\)\?\zs' . s:kip_suffix . '/ containedin=ALLBUT,kipComment'
+execute 'syntax match kipNumber /\<[0-9]\+\%(\.[0-9]\+\)\?\%(' . s:apos . '\|[[:space:],;.)]\|$\)\@=/ containedin=ALLBUT,kipComment,kipString'
+execute 'syntax match kipNumberSuffix /\<[0-9]\+\%(\.[0-9]\+\)\?\zs' . s:kip_suffix . '/ containedin=ALLBUT,kipComment,kipString'
 
 " Keywords (ported from VSCode grammar).
-syntax match kipKeywordDecl '\<\(Bir\|yerleşiktir\|olsun\)\>' containedin=ALLBUT,kipComment
-syntax match kipKeywordCtrl '\<ya\>\s\+\<da\>' containedin=ALLBUT,kipComment
-syntax match kipKeywordCtrl '\<\(ya\|olabilir\|var\|için\|olarak\|dersek\)\>' containedin=ALLBUT,kipComment
+syntax match kipKeywordDecl '\<\(Bir\|yerleşiktir\|olsun\)\>' containedin=ALLBUT,kipComment,kipString
+syntax match kipKeywordCtrl '\<ya\>\s\+\<da\>' containedin=ALLBUT,kipComment,kipString
+syntax match kipKeywordCtrl '\<\(ya\|olabilir\|var\|için\|olarak\|dersek\)\>' containedin=ALLBUT,kipComment,kipString
 
 " Identifiers.
-execute 'syntax match kipIdentifier /\<' . s:kip_ident_core . '\%(' . s:kip_suffix . '\)\?' . s:kip_cond_suffix . '\%(' . s:apos . '\|[[:space:],;.()]\|$\)\@=/ containedin=ALLBUT,kipComment'
+execute 'syntax match kipIdentifier /\<' . s:kip_ident_core . '\%(' . s:kip_suffix . '\)\?' . s:kip_cond_suffix . '\%(' . s:apos . '\|[[:space:],;.()]\|$\)\@=/ containedin=ALLBUT,kipComment,kipString'
 
 " Delimiters.
-syntax match kipDelimiter '[()[\],;.]' containedin=ALLBUT,kipComment
+syntax match kipDelimiter '[()[\],;.]' containedin=ALLBUT,kipComment,kipString
 
 " Comments (define late to ensure it wins over generic delimiters/identifiers).
 syntax keyword kipTodo TODO FIXME NOTE XXX contained
@@ -40,7 +39,6 @@ hi def link kipCommentDelim Comment
 hi def link kipTodo Todo
 hi def link kipEscape SpecialChar
 hi def link kipString String
-hi def link kipStringSuffix Special
 hi def link kipNumber Number
 hi def link kipNumberSuffix Special
 hi def link kipKeywordDecl Keyword
