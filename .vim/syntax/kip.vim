@@ -18,10 +18,16 @@ syntax region kipString start='"' skip='\\.' end='"' keepend contains=kipEscape 
 execute 'syntax match kipNumber /\<[0-9]\+\%(\.[0-9]\+\)\?\%(' . s:apos . '\|[[:space:],;.)]\|$\)\@=/ containedin=ALLBUT,kipComment,kipString'
 execute 'syntax match kipNumberSuffix /\<[0-9]\+\%(\.[0-9]\+\)\?\zs' . s:kip_suffix . '/ containedin=ALLBUT,kipComment,kipString'
 
-" Keywords (ported from VSCode grammar).
-syntax match kipKeywordDecl '\<\(Bir\|yerleşiktir\|olsun\)\>' containedin=ALLBUT,kipComment,kipString
+" Keywords (ported from VSCode grammar). Keep these before generic identifiers.
+syntax match kipKeywordDecl '\<\(Bir\|bir\|yerleşik\|yerleşiktir\|olsun\)\>' containedin=ALLBUT,kipComment,kipString
 syntax match kipKeywordCtrl '\<ya\>\s\+\<da\>' containedin=ALLBUT,kipComment,kipString
-syntax match kipKeywordCtrl '\<\(ya\|olabilir\|var\|için\|olarak\|dersek\)\>' containedin=ALLBUT,kipComment,kipString
+syntax match kipKeywordCtrl '\<\(ya\|da\|olabilir\|var\|olamaz\|değilse\|yazdır\|için\|olarak\|dersek\)\>' containedin=ALLBUT,kipComment,kipString
+
+" Type names in ascriptions: highlight words immediately before "olarak".
+execute 'syntax match kipTypeAscription /\<' . s:kip_ident_core . '\%(' . s:kip_suffix . '\)\?\ze\%(\s\+' . s:kip_ident_core . '\%(' . s:kip_suffix . '\)\?\)*\s\+olarak\>/ containedin=ALLBUT,kipComment,kipString'
+
+" Type names in primitive type declarations: "Bir ... olsun".
+execute 'syntax match kipTypeDecl /\<' . s:kip_ident_core . '\%(' . s:kip_suffix . '\)\?\ze\s\+olsun\>/ containedin=ALLBUT,kipComment,kipString'
 
 " Identifiers.
 execute 'syntax match kipIdentifier /\<' . s:kip_ident_core . '\%(' . s:kip_suffix . '\)\?' . s:kip_cond_suffix . '\%(' . s:apos . '\|[[:space:],;.()]\|$\)\@=/ containedin=ALLBUT,kipComment,kipString'
@@ -43,6 +49,8 @@ hi def link kipNumber Number
 hi def link kipNumberSuffix Special
 hi def link kipKeywordDecl Keyword
 hi def link kipKeywordCtrl Keyword
+hi def link kipTypeDecl Type
+hi def link kipTypeAscription Type
 hi def link kipIdentifier Identifier
 hi def link kipDelimiter Delimiter
 

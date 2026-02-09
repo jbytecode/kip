@@ -6,8 +6,8 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#numbers" },
-    { "include": "#types" },
     { "include": "#keywords" },
+    { "include": "#types" },
     { "include": "#identifiers" }
   ],
   "repository": {
@@ -90,7 +90,7 @@
           "patterns": [
             {
               "name": "entity.name.type.kip",
-              "match": "[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
+              "match": "(?!(?:Bir|bir|ya|da|olabilir|var|olamaz|değilse|yazdır|için|olarak|dersek|yerleşik|yerleşiktir|olsun)\\b)[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
             }
           ]
         },
@@ -111,7 +111,7 @@
           "patterns": [
             {
               "name": "entity.name.type.kip",
-              "match": "[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
+              "match": "(?!(?:Bir|bir|ya|da|olabilir|var|olamaz|değilse|yazdır|için|olarak|dersek|yerleşik|yerleşiktir|olsun)\\b)[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
             }
           ]
         },
@@ -132,9 +132,18 @@
           "patterns": [
             {
               "name": "entity.name.type.kip",
-              "match": "[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
+              "match": "(?!(?:Bir|bir|ya|da|olabilir|var|olamaz|değilse|yazdır|için|olarak|dersek|yerleşik|yerleşiktir|olsun)\\b)[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
             }
           ]
+        },
+        {
+          "name": "meta.type.ascription.kip",
+          "match": "(?!(?:Bir|bir|ya|da|olabilir|var|olamaz|değilse|yazdır|için|olarak|dersek|yerleşik|yerleşiktir|olsun)\\b)[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?(?=\\s+(?:(?!(?:Bir|bir|ya|da|olabilir|var|olamaz|değilse|yazdır|için|olarak|dersek|yerleşik|yerleşiktir|olsun)\\b)[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?\\s+)*olarak\\b)",
+          "captures": {
+            "0": {
+              "name": "entity.name.type.kip"
+            }
+          }
         }
       ]
     },

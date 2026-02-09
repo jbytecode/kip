@@ -527,6 +527,17 @@ function highlightNonString(text) {
     }
   }
 
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i].kind !== "word" || tokens[i].token !== "olarak") {
+      continue;
+    }
+    let j = i - 1;
+    while (j >= 0 && tokens[j].kind === "word") {
+      typeWordIndices.add(j);
+      j -= 1;
+    }
+  }
+
   let defStart = 0;
   for (let i = 0; i <= tokens.length; i += 1) {
     if (i < tokens.length && tokens[i].kind !== "period") {

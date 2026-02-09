@@ -254,7 +254,8 @@ function! s:compute_type_indices(tokens) abort
     if a:tokens[l:i].kind ==# 'word' && a:tokens[l:i].token ==# 'Bir'
       let l:j = l:i + 1
       while l:j < l:n
-        if a:tokens[l:j].kind ==# 'word' && a:tokens[l:j].token ==# 'ya'
+        if a:tokens[l:j].kind ==# 'word'
+              \ && (a:tokens[l:j].token ==# 'ya' || a:tokens[l:j].token ==# 'olsun')
           let l:k = l:i + 1
           while l:k < l:j
             if a:tokens[l:k].kind ==# 'word'
@@ -279,13 +280,22 @@ function! s:compute_type_indices(tokens) abort
       let l:j = l:i + 2
       while l:j < l:n
         if a:tokens[l:j].kind ==# 'word' && a:tokens[l:j].token ==# 'ya'
+          let l:word_indices = []
           let l:k = l:i + 2
           while l:k < l:j
             if a:tokens[l:k].kind ==# 'word'
-              call s:add_type_index(l:type_indices, l:k)
+              call add(l:word_indices, l:k)
             endif
             let l:k += 1
           endwhile
+          if len(l:word_indices) >= 2
+            let l:last = l:word_indices[len(l:word_indices) - 1]
+            for l:idx in l:word_indices
+              if l:idx != l:last
+                call s:add_type_index(l:type_indices, l:idx)
+              endif
+            endfor
+          endif
           break
         endif
         let l:j += 1
