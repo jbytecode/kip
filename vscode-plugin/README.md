@@ -1,6 +1,6 @@
-# Kip VS Code Extension
+# Kip Visual Studio Code Extension
 
-VS Code support for the Kip programming language, powered by `kip-lsp`.
+Visual Studio Code support for the Kip programming language, powered by `kip-lsp`.
 
 ## Features
 - Syntax highlighting
@@ -14,7 +14,7 @@ VS Code support for the Kip programming language, powered by `kip-lsp`.
 - Install `kip-lsp`. The extension auto-detects common install paths (`~/.local/bin`, `~/.cabal/bin`, `~/.stack/bin`), or you can set `kip.languageServerPath` explicitly.
 
 ## Setup
-If VS Code cannot find `kip-lsp`, set this in settings:
+If Visual Studio Code cannot find `kip-lsp`, set this in settings:
 
 ```json
 {
@@ -45,4 +45,4 @@ npm run compile
 code --extensionDevelopmentPath=.
 ```
 
-Use "Run Extension" in VS Code or `npm run package` to build a `.vsix`.
+Use "Run Extension" in Visual Studio Code or `npm run package` to build a `.vsix`.

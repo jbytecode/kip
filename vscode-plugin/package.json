@@ -2,7 +2,7 @@
   "name": "kip",
   "displayName": "Kip",
   "description": "Language support for Kip with LSP features and procedural type highlighting.",
-  "version": "0.1.6",
+  "version": "0.1.0",
   "publisher": "kip",
   "author": {
     "name": "Kip Contributors",
@@ -73,22 +73,22 @@
     "commands": [
       {
         "command": "kip.goToDefinition",
-        "title": "Kip: Go to Definition",
+        "title": "Go to Definition",
         "category": "Kip"
       },
       {
         "command": "kip.goToTypeDefinition",
-        "title": "Kip: Go to Type Definition",
+        "title": "Go to Type Definition",
         "category": "Kip"
       },
       {
         "command": "kip.showOutput",
-        "title": "Kip: Show Output",
+        "title": "Show Output",
         "category": "Kip"
       },
       {
         "command": "kip.restartLanguageServer",
-        "title": "Kip: Restart Language Server",
+        "title": "Restart Language Server",
         "category": "Kip"
       }
     ],

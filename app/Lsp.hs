@@ -1212,6 +1212,11 @@ onDefinition req respond = do
         _ -> do
           let resolved = resolveAtPosition pos doc
               mIdent = raVar resolved
+              respondEmptyOrTypeFallback = do
+                mLoc <- definitionTypeFallbackLocation st doc uri pos token resolved
+                case mLoc of
+                  Just loc -> respond (Right (InL (Definition (InR [loc]))))
+                  Nothing -> respond (Right (InL (Definition (InR []))))
           case mIdent of
             Nothing -> do
               case raPatVar resolved of
@@ -1238,9 +1243,9 @@ onDefinition req respond = do
                                   idx <- liftIO (buildDefinitionIndex st uri currentDefs)
                                   withState $ \s -> return (s { lsDefIndex = idx }, ())
                                   case lookupDefLocPreferExternal uri keysCtor idx of
-                                    Nothing -> respond (Right (InL (Definition (InR []))))
+                                    Nothing -> respondEmptyOrTypeFallback
                                     Just loc -> respond (Right (InL (Definition (InR [loc]))))
-                        Nothing -> respond (Right (InL (Definition (InR []))))
+                        Nothing -> respondEmptyOrTypeFallback
                 Nothing ->
                   case raCtor resolved of
                     Just (ctorIdent, _, _, _) -> do
@@ -1257,12 +1262,12 @@ onDefinition req respond = do
                               idx <- liftIO (buildDefinitionIndex st uri currentDefs)
                               withState $ \s -> return (s { lsDefIndex = idx }, ())
                               case lookupDefLocPreferExternal uri keysCtor idx of
-                                Nothing -> respond (Right (InL (Definition (InR []))))
+                                Nothing -> respondEmptyOrTypeFallback
                                 Just loc -> respond (Right (InL (Definition (InR [loc]))))
                     Nothing ->
                       case definitionForArgKeyword uri pos doc of
                         Just loc -> respond (Right (InL (Definition (InR [loc]))))
-                        Nothing -> respond (Right (InL (Definition (InR []))))
+                        Nothing -> respondEmptyOrTypeFallback
             Just (ident, candidates) -> do
               -- First check if this is a bound variable (pattern variable or let/bind binding)
               let keys = dedupeIdents (ident : map fst candidates)
@@ -1305,7 +1310,7 @@ onDefinition req respond = do
                               idx <- liftIO (buildDefinitionIndex st uri currentDefs)
                               withState $ \s -> return (s { lsDefIndex = idx }, ())
                               case lookupDefLocPreferExternal uri resolvedKeys idx of
-                                Nothing -> respond (Right (InL (Definition (InR []))))
+                                Nothing -> respondEmptyOrTypeFallback
                                 Just loc -> respond (Right (InL (Definition (InR [loc]))))
 
 #if MIN_VERSION_lsp_types(2,3,0)
@@ -1378,6 +1383,63 @@ typeDefinitionLocationsByKeys st doc uri keys =
           case lookupDefLocPreferExternal uri keys (lsDefIndex st) of
             Just loc -> [loc]
             Nothing -> []
+
+-- | Fallback go-to-definition resolution for type tokens.
+--
+-- This is used by "go to definition" when normal symbol lookup fails,
+-- so type-ascription tokens (e.g. @tam-sayı@ in @tam-sayı olarak 5@)
+-- can jump to the type definition just like "go to type definition".
+definitionTypeFallbackLocation :: LspState -> DocState -> Uri -> Position -> Maybe TokenAtPosition -> ResolvedAt -> LspM Config (Maybe Location)
+definitionTypeFallbackLocation st doc uri _pos token resolved = do
+  let mTyFromCtor =
+        case raCtor resolved of
+          Just (ctorIdent, _, _, _) ->
+            snd <$> Map.lookup ctorIdent (tcCtors (dsTC doc))
+          Nothing -> Nothing
+      mTy = mTyFromCtor <|> raResolvedType resolved
+      mTokenIdent =
+        case token of
+          Just (TokenIdent tokenIdent) -> Just tokenIdent
+          _ -> Nothing
+      keysFromToken =
+        case mTokenIdent of
+          Nothing -> []
+          Just tokenIdent ->
+            let numericToken = maybe False (isDigit . fst) (T.uncons tokenIdent)
+                sayıLikeToken = T.pack "sayı" `T.isInfixOf` tokenIdent
+                parsedTypeToken = maybeToList (identifierFromTypeToken tokenIdent)
+                sayıLikeKeys =
+                  [ ([T.pack "tam"], T.pack "sayı")
+                  , ([T.pack "ondalık"], T.pack "sayı")
+                  ]
+                numericKeys = [([T.pack "tam"], T.pack "sayı")]
+            in dedupeIdents (parsedTypeToken ++ if numericToken then numericKeys else if sayıLikeToken then sayıLikeKeys else [])
+      keys =
+        case mTy of
+          Just ty -> dedupeIdents (typeConstructorsFromTy ty)
+          Nothing -> keysFromToken
+  if null keys
+    then return Nothing
+    else do
+      locs <- resolveTypeDefinitionLocations st doc uri keys
+      return (listToMaybe locs)
+
+-- | Parse a hyphenated type token into a Kip identifier.
+--
+-- Examples:
+--   @tam-sayı@ -> @([\"tam\"], \"sayı\")@
+--   @dizge@    -> @([], \"dizge\")@
+identifierFromTypeToken :: Text -> Maybe Identifier
+identifierFromTypeToken raw =
+  let stripped = T.takeWhile (\c -> c /= '\'' && c /= '’') raw
+      parts = filter (not . T.null) (T.splitOn (T.pack "-") stripped)
+  in case parts of
+      [] -> Nothing
+      [x] -> Just ([], x)
+      _ ->
+        case reverse parts of
+          (name:modsRev) -> Just (reverse modsRev, name)
+          [] -> Nothing
 
 
 resolveTypeDefinitionLocations :: LspState -> DocState -> Uri -> [Identifier] -> LspM Config [Location]

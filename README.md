@@ -216,12 +216,12 @@ absolute path from `stack exec -- which kip-lsp`.
 ## Editor Plugins
 
 This repository includes:
-- a VSCode extension in `vscode-plugin/`
+- a Visual Studio Code extension in `vscode-plugin/`
 - a Vim/Neovim plugin in `.vim/`
 
 Both use `kip-lsp`.
 
-### VSCode Plugin
+### Visual Studio Plugin
 
 Prerequisites:
 - `kip-lsp` installed and available on `PATH`, or an absolute executable path
@@ -236,7 +236,7 @@ npm run compile
 code --extensionDevelopmentPath=.
 ```
 
-In the VSCode Extension Development Host, open a `.kip` file.
+In the Visual Studio Code Extension Development Host, open a `.kip` file.
 
 Package and install as a normal extension:
 
@@ -248,7 +248,7 @@ npx vsce package
 code --install-extension kip-0.1.0.vsix
 ```
 
-Useful VSCode settings:
+Useful Visual Studio Code settings:
 
 ```json
 {

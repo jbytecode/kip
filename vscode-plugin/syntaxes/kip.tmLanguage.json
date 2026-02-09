@@ -95,6 +95,27 @@
           ]
         },
         {
+          "name": "meta.type.declaration.primitive.kip",
+          "begin": "\\bBir\\b",
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.declaration.kip"
+            }
+          },
+          "end": "\\bolsun\\b",
+          "endCaptures": {
+            "0": {
+              "name": "keyword.declaration.kip"
+            }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.type.kip",
+              "match": "(?!(?:Bir|bir|ya|da|olabilir|var|olamaz|değilse|yazdır|için|olarak|dersek|yerleşik|yerleşiktir|olsun)\\b)[\\p{L}\\p{M}][\\p{L}\\p{M}]*(?:-[\\p{L}\\p{M}]+)*(?:'[\\p{L}\\p{M}]+)?"
+            }
+          ]
+        },
+        {
           "name": "meta.type.declaration.alt.kip",
           "begin": "\\bya\\s+bir\\b",
           "beginCaptures": {

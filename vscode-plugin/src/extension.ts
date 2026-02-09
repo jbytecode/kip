@@ -163,7 +163,10 @@ function typeWordIndices(tokens: KipToken[]): Set<number> {
       continue;
     }
     for (let j = i + 1; j < tokens.length; j += 1) {
-      if (tokens[j].kind === "word" && tokens[j].token === "ya") {
+      if (
+        tokens[j].kind === "word" &&
+        (tokens[j].token === "ya" || tokens[j].token === "olsun")
+      ) {
         for (let k = i + 1; k < j; k += 1) {
           if (tokens[k].kind === "word") {
             indices.add(k);
