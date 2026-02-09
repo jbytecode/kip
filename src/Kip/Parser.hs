@@ -232,6 +232,7 @@ data ParserState =
     , parserTyMods :: [(Identifier, [Identifier])]
     , parserPrimTypes :: [Identifier]
     , parserDefSpans :: M.Map Identifier [Span]
+    , parserFilePath :: Maybe FilePath
     , parserUpsCache :: !MorphCache
     , parserDownsCache :: !MorphCache
     }
@@ -292,12 +293,12 @@ populateDemonstrativeCache cache = do
   mapM_ (uncurry (HT.insert cache)) entries
 
 -- | Create a new empty parser state with fresh caches.
-newParserState :: FSM -- ^ Morphology FSM.
-               -> IO ParserState -- ^ Fresh parser state.
-newParserState fsm' = do
-  upsCache <- HT.new
-  populateDemonstrativeCache upsCache
-  MkParserState fsm' Set.empty [] [] [] [] [] M.empty upsCache <$> HT.new
+-- newParserState :: FSM -- ^ Morphology FSM.
+--                -> IO ParserState -- ^ Fresh parser state.
+-- newParserState fsm' = do
+--   upsCache <- HT.new
+--   populateDemonstrativeCache upsCache
+--   MkParserState fsm' Set.empty [] [] [] [] [] M.empty Nothing upsCache <$> HT.new
 
 -- | Create a parser state with a given context and fresh caches.
 newParserStateWithCtx :: FSM -- ^ Morphology FSM.
@@ -307,19 +308,21 @@ newParserStateWithCtx :: FSM -- ^ Morphology FSM.
                       -> [(Identifier, Int)] -- ^ Type constructor arities.
                       -> [(Identifier, [Identifier])] -- ^ Type modifiers.
                       -> [Identifier] -- ^ Primitive types.
+                      -> Maybe FilePath -- ^ Optional file path for span tracking.
                       -> IO ParserState -- ^ Fresh parser state.
-newParserStateWithCtx fsm' ctx ctors tyParams tyCons tyMods primTypes = do
+newParserStateWithCtx fsm' ctx ctors tyParams tyCons tyMods primTypes mFilePath = do
   upsCache <- HT.new
   populateDemonstrativeCache upsCache
-  MkParserState fsm' ctx ctors tyParams tyCons tyMods primTypes M.empty upsCache <$> HT.new
+  MkParserState fsm' ctx ctors tyParams tyCons tyMods primTypes M.empty mFilePath upsCache <$> HT.new
 
 -- | Create a parser state with shared caches (for parse/render reuse).
 newParserStateWithCaches :: FSM -- ^ Morphology FSM.
+                         -> Maybe FilePath -- ^ Optional file path for span tracking.
                          -> MorphCache -- ^ Shared ups cache.
                          -> MorphCache -- ^ Shared downs cache.
                          -> ParserState -- ^ Parser state.
-newParserStateWithCaches fsm' =
-  MkParserState fsm' Set.empty [] [] [] [] [] M.empty
+newParserStateWithCaches fsm' path =
+  MkParserState fsm' Set.empty [] [] [] [] [] M.empty path
 
 -- | Create a parser state with context and shared caches.
 newParserStateWithCtxAndCaches :: FSM -- ^ Morphology FSM.
@@ -330,6 +333,7 @@ newParserStateWithCtxAndCaches :: FSM -- ^ Morphology FSM.
                                -> [(Identifier, [Identifier])] -- ^ Type modifiers.
                                -> [Identifier] -- ^ Primitive types.
                                -> M.Map Identifier [Span] -- ^ Definition spans.
+                               -> Maybe FilePath -- ^ Optional file path for span tracking.
                                -> MorphCache -- ^ Shared ups cache.
                                -> MorphCache -- ^ Shared downs cache.
                                -> ParserState -- ^ Parser state.
@@ -361,7 +365,8 @@ withSpan p = do
   start <- getSourcePos
   x <- p
   end <- getSourcePos
-  return (x, Span start end)
+  pState <- getP
+  return (x, Span start end (parserFilePath pState))
 
 -- | Execute a parser with pattern variables temporarily added to context.
 withPatVars :: [Identifier] -- ^ Pattern variable names to add.
@@ -831,7 +836,7 @@ estimateCandidates useCtx (ss, s) = do
             let baseRoot = T.takeWhile (/= '<') y
                 direct = (ss, baseRoot)
             -- Fast path: if the base root is already in context, avoid costly downs.
-            if direct `Set.member` ctx
+            if direct `Set.member` ctx && not ("<lik>" `T.isInfixOf` y)
               then return [(direct, cas)]
               else do
                 let forms = fromMaybe [] (M.lookup stem stemMap)
@@ -839,10 +844,11 @@ estimateCandidates useCtx (ss, s) = do
                       if "<p3s>" `T.isInfixOf` y
                         then fromMaybe [] (M.lookup (stem <> "<p3s>") p3sMap)
                         else []
+                    includeBaseRoot = not ("<lik>" `T.isInfixOf` y)
                     roots =
                       case forms ++ p3sFormsFor of
                         [] -> [baseRoot]
-                        xs -> xs ++ [baseRoot]
+                        xs -> if includeBaseRoot then xs ++ [baseRoot] else xs
                 return [((ss, root), cas) | root <- ordNub roots])
       let candidatesDedup = ordNub candidatesRaw
           candidates =
@@ -1269,7 +1275,7 @@ matchCtxByInflection ctx ident candidates = do
         Just (baseRoot, cas)
           | cas `elem` cases -> do
               let direct = (mods, baseRoot)
-              if direct `Set.member` ctxFiltered
+              if direct `Set.member` ctxFiltered && not ("<lik>" `T.isInfixOf` analysis)
                 -- Fast path: analysis root is already a context identifier.
                 then return (Just (direct, cas))
                 else do
@@ -1279,7 +1285,11 @@ matchCtxByInflection ctx ident candidates = do
                     if "<p3s>" `T.isInfixOf` analysis && cas /= P3s
                       then downsCached (stem <> "<p3s>")
                       else return []
-                  let roots = ordNub (forms ++ p3sForms ++ [baseRoot])
+                  let includeBaseRoot = not ("<lik>" `T.isInfixOf` analysis)
+                      roots =
+                        case forms ++ p3sForms of
+                          [] -> [baseRoot]
+                          xs -> ordNub (if includeBaseRoot then xs ++ [baseRoot] else xs)
                       matches = filter (`Set.member` ctxFiltered) [(mods, root) | root <- roots]
                   case matches of
                     (match:_) -> return (Just (match, cas))

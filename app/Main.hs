@@ -10,7 +10,7 @@ import System.Directory (doesFileExist, canonicalizePath, doesDirectoryExist, li
 import Paths_kip (version, getDataFileName)
 import Data.List
 import Options.Applicative hiding (ParseError)
-import System.FilePath ((</>), takeDirectory, takeExtension)
+import System.FilePath ((</>), joinPath, takeDirectory, takeExtension)
 
 import Control.Monad (forM, forM_, when, unless, filterM)
 import Control.Monad.IO.Class
@@ -294,32 +294,38 @@ renderSpan :: Lang -- ^ Language selection.
 renderSpan lang sp =
   case sp of
     NoSpan -> ""
-    Span start end ->
-      case lang of
-        LangTr ->
-          T.concat
-            [ " (satır "
-            , T.pack (show (unPos (sourceLine start)))
-            , ", sütun "
-            , T.pack (show (unPos (sourceColumn start)))
-            , " - satır "
-            , T.pack (show (unPos (sourceLine end)))
-            , ", sütun "
-            , T.pack (show (unPos (sourceColumn end)))
-            , ")"
-            ]
-        LangEn ->
-          T.concat
-            [ " (line "
-            , T.pack (show (unPos (sourceLine start)))
-            , ", column "
-            , T.pack (show (unPos (sourceColumn start)))
-            , " - line "
-            , T.pack (show (unPos (sourceLine end)))
-            , ", column "
-            , T.pack (show (unPos (sourceColumn end)))
-            , ")"
-            ]
+    Span start end path ->
+      case path
+        of 
+          Nothing ->
+            (case lang of
+              LangTr ->
+                T.concat
+                  [ " (satır "
+                  , T.pack (show (unPos (sourceLine start)))
+                  , ", sütun "
+                  , T.pack (show (unPos (sourceColumn start)))
+                  , " - satır "
+                  , T.pack (show (unPos (sourceLine end)))
+                  , ", sütun "
+                  , T.pack (show (unPos (sourceColumn end)))
+                  , ")"
+                  ]
+              LangEn ->
+                T.concat
+                  [ " (line "
+                  , T.pack (show (unPos (sourceLine start)))
+                  , ", column "
+                  , T.pack (show (unPos (sourceColumn start)))
+                  , " - line "
+                  , T.pack (show (unPos (sourceLine end)))
+                  , ", column "
+                  , T.pack (show (unPos (sourceColumn end)))
+                  , ")"
+                  ])
+          Just p ->
+             "\n" <> T.pack p <>":" <> T.pack (show (unPos (sourceLine start))) <> ":" <> T.pack (show (unPos (sourceColumn start))) <> "-"
+            <> T.pack (show (unPos (sourceLine end))) <> ":" <> T.pack (show (unPos (sourceColumn end)))
 
 -- | Check whether a return type annotation was written explicitly.
 isExplicitRetTy :: Ty Ann -- ^ Return type annotation.
@@ -386,8 +392,8 @@ renderTCError paramTyCons tyMods tcErr = do
           missing <- renderMissingPatterns LangTr pats
           let header = "Tip hatası: örüntü eksik." <> renderSpan (rcLang ctx) sp
           return (T.intercalate "\n" [header, missing])
-        UnimplementedPrimitive name args sp ->
-          return ("Tip hatası: yerleşik fonksiyon uygulanmamış." <> renderSpan (rcLang ctx) sp)
+        UnimplementedPrimitive name _ sp ->
+          return ("Tip hatası: " <> T.pack (prettyIdent name) <> " için yerleşik fonksiyon uygulanmamış." <> renderSpan (rcLang ctx) sp)
     LangEn ->
       case tcErr of
         TC.Unknown ->
@@ -433,8 +439,8 @@ renderTCError paramTyCons tyMods tcErr = do
           missing <- renderMissingPatterns LangEn pats
           let header = "Type error: non-exhaustive pattern match." <> renderSpan (rcLang ctx) sp
           return (T.intercalate "\n" [header, missing])
-        UnimplementedPrimitive name args sp ->
-          return ("Type error: unimplemented primitive function." <> renderSpan (rcLang ctx) sp)
+        UnimplementedPrimitive name _ sp ->
+          return ("Type error: unimplemented primitive function for " <> T.pack (prettyIdent name) <> "." <> renderSpan (rcLang ctx) sp)
 
 -- | Render a type checker error with a source snippet.
 renderTCErrorWithSource :: [Identifier] -- ^ Type parameters for rendering.
@@ -500,7 +506,7 @@ renderSpanSnippet :: Text -- ^ Source input.
 renderSpanSnippet source sp =
   case sp of
     NoSpan -> ""
-    Span start end ->
+    Span start end _ ->
       let ls = T.lines source
           sLine = unPos (sourceLine start)
           sCol = unPos (sourceColumn start)
@@ -999,6 +1005,20 @@ main = do
                 -> String -- ^ Input line.
                 -> ReplM () -- ^ No result.
     handleInput rs input
+      | input == ":modules" = do
+            forM_ (Set.toAscList (replLoaded rs)) $ \path ->
+              lift (outputStrLn path)
+            loop rs
+      | input == ":functions" = do
+          let names = nub (map snd (MultiMap.keys (tcFuncSigs (replTCState rs))))
+          forM_ (sort names) $ \name ->
+            lift (outputStrLn (T.unpack name))
+          loop rs
+      | input == ":types" = do
+          let names = nub [name | ((_, name), _arity) <- replTyCons rs]
+          forM_ (sort names) $ \name ->
+            lift (outputStrLn (T.unpack name))
+          loop rs
       | Just word <- stripPrefix ":name " input = do
           fsm <- runApp requireFsm
           liftIO (ups fsm (T.pack word)) >>= \xs -> lift (mapM_ (outputStrLn . T.unpack) xs)
@@ -1015,7 +1035,7 @@ main = do
           ctx <- ask
           fsm <- runApp requireFsm
           (uCache, dCache) <- runApp requireParserCaches
-          let pst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) Map.empty uCache dCache
+          let pst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) Map.empty Nothing uCache dCache
           liftIO (parseExpFromRepl pst (T.pack expr)) >>= \case
             Left err -> do
               emitMsgTCtx (MsgParseError err)
@@ -1048,7 +1068,7 @@ main = do
           (uCache, dCache) <- runApp requireParserCaches
           let pst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs)
                     (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs)
-                    Map.empty uCache dCache
+                    Map.empty Nothing uCache dCache
           -- Decide statement vs expression based on trailing period
           let isStmt = case dropWhile (== ' ') (reverse expr) of '.':_ -> True; _ -> False
           if isStmt
@@ -1072,7 +1092,7 @@ main = do
       | otherwise = do
           fsm <- runApp requireFsm
           (uCache, dCache) <- runApp requireParserCaches
-          let pst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) Map.empty uCache dCache
+          let pst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) Map.empty Nothing uCache dCache
           -- If input ends with a period, parse as statement; otherwise parse as expression
           if case dropWhile (== ' ') (reverse input) of
                '.':_ -> True
@@ -1082,12 +1102,12 @@ main = do
                 Left err -> do
                   emitMsgTCtx (MsgParseError err)
                   loop rs
-                Right (stmt, MkParserState _ pctx pctors pty ptycons ptymods pprim _ _ _) -> do
+                Right (stmt, MkParserState _ pctx pctors pty ptycons ptymods pprim _ _ _ _) -> do
                   case stmt of
                     Load name -> do
-                      let loadPst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) Map.empty uCache dCache
                       path <- runApp (resolveModulePath (replModuleDirs rs) name)
                       absPath <- liftIO (canonicalizePath path)
+                      let loadPst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) Map.empty (Just path) uCache dCache
                       if Set.member absPath (replLoaded rs)
                         then loop rs
                         else do
@@ -1302,7 +1322,7 @@ main = do
           case mCached of
             Just cached -> do
               let loaded' = Set.insert absPath loaded
-                  pstCached = fromCachedParserState fsm uCache dCache (cachedParser cached)
+                  pstCached = fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached)
                   tcCached = fromCachedTCState (cachedTC cached)
                   stmts = cachedTypedStmts cached
               (_, _, newStmts, loaded'') <-
@@ -1324,7 +1344,7 @@ main = do
                       liftIO (die (T.unpack msg))
                     Right (_, tcStWithDecls) -> do
                       -- Type-check each statement
-                      (pst'', tcSt'', newStmts, loaded') <- foldM' (collectStmt moduleDirs absPath paramTyCons (parserTyMods pst') input)
+                      (pst'', tcSt'', newStmts, loaded') <- foldM' (collectStmt moduleDirs path paramTyCons (parserTyMods pst') input)
                         (pst', tcStWithDecls, [], Set.insert absPath loaded) stmts
                       return (pst'', tcSt'', accStmts ++ newStmts, loaded')
 
@@ -1408,7 +1428,7 @@ main = do
               if buildOnly
                 then return (pst, tcSt, evalSt, loaded')
                 else do
-                  let pst' = fromCachedParserState fsm uCache dCache (cachedParser cached)
+                  let pst' = fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached)
                       tcSt' = tcSt
                       evalSt' = evalSt
                       stmts = cachedStmts cached
@@ -1663,15 +1683,19 @@ main = do
     resolveModulePath :: [FilePath] -- ^ Module search paths.
                       -> Identifier -- ^ Module identifier.
                       -> AppM FilePath -- ^ Resolved file path.
-    resolveModulePath dirs name = do
-      let base = prettyIdent name ++ ".kip"
-          candidates = map (</> base) dirs
+    resolveModulePath dirs name@(xs, x) = do
+      let parts = map T.unpack xs
+          nm = T.unpack x
+          splits = [ joinPath (take k parts ++ [intercalate "-" (drop k parts ++ [nm]) ++ ".kip"])
+                   | k <- [length parts, length parts - 1 .. 0] ]
+          candidates = concatMap (\d -> map (d </>) splits) dirs
       found <- liftIO (filterM doesFileExist candidates)
       case found of
         path:_ -> return path
         [] -> do
           msg <- renderMsg (MsgModuleNotFound name)
           liftIO (die (T.unpack msg))
+
 
     -- | Resolve build targets from file or directory inputs.
     resolveBuildTargets :: [FilePath] -- ^ Input paths.
@@ -1709,12 +1733,12 @@ main = do
                            -> FSM -- ^ Morphology FSM.
                            -> AppM ParserState -- ^ Loaded parser state.
     loadPreludeParserState moduleDirs uCache dCache fsm = do
-      let pst = newParserStateWithCaches fsm uCache dCache
       path <- resolveModulePath moduleDirs ([], T.pack "temel")
       absPath <- liftIO (canonicalizePath path)
+      let pst = newParserStateWithCaches fsm (Just path) uCache dCache
       let cachePath = cacheFilePath absPath
       liftIO (loadCachedModule cachePath) >>= \case
-        Just cached -> return (fromCachedParserState fsm uCache dCache (cachedParser cached))
+        Just cached -> return (fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached))
         Nothing -> do
           input <- liftIO (TIO.readFile path)
           liftIO (parseFromFile pst input) >>= \case
@@ -1729,7 +1753,7 @@ main = do
                             -> MorphCache -- ^ Shared downs cache.
                             -> AppM (ParserState, TCState, Set FilePath) -- ^ Loaded parser/TC states.
     loadPreludeCodegenState noPrelude moduleDirs fsm uCache dCache = do
-      let pst = newParserStateWithCaches fsm uCache dCache
+      let pst = newParserStateWithCaches fsm Nothing uCache dCache
           tcSt = emptyTCState
       if noPrelude
         then return (pst, tcSt, Set.empty)
@@ -1740,11 +1764,12 @@ main = do
           liftIO (loadCachedModule cachePath) >>= \case
             Just cached -> do
               depPaths <- liftIO $ mapM (canonicalizePath . (\(p, _, _, _) -> p)) (dependencies (metadata cached))
-              let pst' = fromCachedParserState fsm uCache dCache (cachedParser cached)
+              let pst' = fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached)
                   tcSt' = fromCachedTCState (cachedTC cached)
                   loaded = Set.fromList (absPath : depPaths)
               return (pst', tcSt', loaded)
             Nothing -> do
+              let pst = pst { parserFilePath = Just path }
               (pst', tcSt', _, loaded') <- collectFileStmts moduleDirs (pst, tcSt, [], Set.empty) path
               return (pst', tcSt', loaded')
 
@@ -1757,14 +1782,15 @@ main = do
                      -> MorphCache -- ^ Shared downs cache.
                      -> AppM (ParserState, TCState, EvalState, Set FilePath) -- ^ Loaded states.
     loadPreludeState noPrelude moduleDirs cache fsm uCache dCache = do
-      let pst = newParserStateWithCaches fsm uCache dCache
+      let pst = newParserStateWithCaches fsm Nothing uCache dCache
           tcSt = emptyTCState
           evalSt = mkEvalState cache fsm
       if noPrelude
         then return (pst, tcSt, evalSt, Set.empty)
         else do
           path <- resolveModulePath moduleDirs ([], T.pack "giriş")
-          runFile False False False moduleDirs (pst, tcSt, evalSt, Set.empty) path
+          let pst' = pst { parserFilePath = Just path }
+          runFile False False False moduleDirs (pst', tcSt, evalSt, Set.empty) path
 
     -- | Build an evaluator state wired to the render cache.
     mkEvalState :: RenderCache -- ^ Render cache.

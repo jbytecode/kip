@@ -1,0 +1,77 @@
+temeli yükle.
+
+(* Liste fonksiyonları. *)
+(bu öğe listesinin) (uzunluk tam-sayısı),
+  bu boşsa,
+    0;
+  ilkin devama ekiyse,
+    (devamın uzunluğuyla) 1'in toplamıdır.
+
+(bu öğe listesiyle) (şu öğe listesinin) (birleşim öğe listesi),
+  bu boşsa,
+    şu;
+  ilkin devama ekiyse,
+    ilkin (devamla şunun birleşimine) ekidir.
+
+(bu öğe listesinin) (ters öğe listesi),
+  bu boşsa,
+    boş;
+  ilkin devama ekiyse,
+    (devamın tersiyle) (ilkin boşa ekinin) birleşimidir.
+
+(bu tam-sayı listesinin) (toplam tam-sayısı),
+  bu boşsa,
+    0;
+  ilkin devama ekiyse,
+    ilkin (devamın toplamıyla) toplamıdır.
+
+(bu a listesinin) (iş a'nın b'siyle) eşlemi,
+  bu boşsa, boş;
+  ilkin devama ekiyse, (ilkin işinin) (devamın işle eşlemine) ekidir.
+
+(bu a listesinin) (test a'nın doğruluğuyla) filtresi,
+  bu boşsa, boş;
+  ilkin devama ekiyse, 
+    (ilkin testi) doğruysa,
+      ilkin (devamın testle filtresine) ekidir;
+    değilse,
+      devamın testle filtresidir.
+
+(bu a listesinin) (n tam-sayısıyla) alımı,
+  bu boşsa, boş;
+  ilkin devama ekiyse,
+    (n'in 0'la eşitliği) doğruysa,
+      boş;
+    değilse,
+      ilkin (devamın (n'in eksiltilmişiyle) alımına) ekidir.
+
+(bu a listesinden) (n tam-sayısının) bırakılmışı,
+  bu boşsa, boş;
+  ilkin devama ekiyse,
+    (n'in 0'la eşitliği) doğruysa,
+      ilkin devama ekidir;
+    değilse,
+      devamın (n'in eksiltilmişiyle) bırakılmışıdır.
+
+
+(başlangıç tam-sayıdan) (son tam-sayıya) aralığı,
+  (başlangıcın sonla eşitliği) doğruysa,
+    boş;
+  değilse,
+    başlangıcın ((başlangıcın 1'le toplamıyla) aralığın tam-sayı listesinin) ekidir.
+
+(bu a listesinin) (test a'nın doğruluğuyla) hepsisi,
+  bu boşsa, doğru;
+  ilkin devama ekiyse,
+    (ilkin testi) doğruysa,
+      (devamın testle hepsisi) doğruluğudur;
+    değilse,
+      yanlış.
+
+(bu a listesinin) (test a'nın doğruluğuyla) herhangisi,
+  bu boşsa, yanlış;
+  ilkin devama ekiyse,
+    (ilkin testi) doğruysa,
+      doğru;
+    değilse,
+      (devamın testle herhangi) doğruluğudur.

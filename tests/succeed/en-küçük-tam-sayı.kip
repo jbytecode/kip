@@ -1,0 +1,3 @@
+(* en-küçük tam-sayı testi *)
+sonuç için 3'le 7'nin küçük tam-sayısı.
+(sonuçla 3'ün eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.

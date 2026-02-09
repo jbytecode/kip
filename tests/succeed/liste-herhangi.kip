@@ -1,0 +1,7 @@
+(* liste herhangi testi *)
+(bu tam-sayının) (sıfır-mı doğruluğu),
+  (bunla 0'ın eşitliği) doğruysa, doğru;
+  değilse, yanlıştır.
+
+sonuç için [1, 2, 0, 3]'ün sıfır-mıyla herhangi doğruluğu.
+sonuç yanlışsa, durmaktır; değilse, bitimliktir.

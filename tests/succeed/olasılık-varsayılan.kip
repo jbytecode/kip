@@ -1,0 +1,7 @@
+(* olasılık varsayılan testi *)
+değer1, tam-sayı olasılığı olarak yokluktur.
+değer2, 42'nin varlığıdır.
+sonuç1 için değer1'in 0'la varsayılan tam-sayısı.
+sonuç2 için değer2'nin 0'la varsayılan tam-sayısı.
+(sonuç1'le 0'ın eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.
+(sonuç2'yle 42'nin eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.

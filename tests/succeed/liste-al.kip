@@ -1,0 +1,3 @@
+(* liste al testi *)
+sonuç için [1, 2, 3, 4, 5]'ün 3'le alımının tam-sayı listesi.
+((sonucun uzunluğuyla) 3'ün eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.

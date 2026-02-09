@@ -18,12 +18,12 @@ data-files:
     vendor/trmorph.fst
     lib/temel.kip
     lib/giriş.kip
-    lib/temel-doğruluk.kip
-    lib/temel-dizge.kip
-    lib/temel-etki.kip
-    lib/temel-liste.kip
-    lib/temel-tam-sayı.kip
-    lib/temel-ondalık-sayı.kip
+    lib/temel/doğruluk.kip
+    lib/temel/dizge.kip
+    lib/temel/etki.kip
+    lib/temel/liste.kip
+    lib/temel/tam-sayı.kip
+    lib/temel/ondalık-sayı.kip
 
 source-repository head
   type: git

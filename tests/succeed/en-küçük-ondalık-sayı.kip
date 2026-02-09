@@ -1,0 +1,3 @@
+(* en-küçük ondalık-sayı testi *)
+sonuç için 1.5'le 2.7'nin küçük ondalık-sayısı.
+(sonuçla 1.5'in eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.

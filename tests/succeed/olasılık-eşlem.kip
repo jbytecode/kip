@@ -1,0 +1,9 @@
+(* olasılık eşlem testi *)
+(bu tam-sayının) (iki-katı tam-sayısı),
+  buyla 2'nin çarpımıdır.
+
+değer, 5'in varlığıdır.
+sonuç için değerin iki-katıyla eşlem tam-sayı olasılığı.
+sonuç n'nin varlığıysa,
+  (n'yle 10'un eşitliği) yanlışsa, durmaktır; değilse, bitimliktir;
+yokluksa, durmaktır.

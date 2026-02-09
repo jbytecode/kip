@@ -1,0 +1,7 @@
+(* liste hepsi testi *)
+(bu tam-sayının) (pozitifliğinin doğruluğu),
+  (bunun 0'dan büyüklüğü) doğruysa, doğru;
+  değilse, yanlıştır.
+
+sonuç için [1, 2, 3]'ün hepsisinin pozitifliğiyle doğruluğu.
+sonuç yanlışsa, durmaktır; değilse, bitimliktir.

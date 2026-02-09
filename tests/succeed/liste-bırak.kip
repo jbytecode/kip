@@ -1,0 +1,3 @@
+(* liste bırak testi *)
+sonuç için [1, 2, 3, 4, 5]'ten 2'nin bırakılmışının tam-sayı listesi.
+((sonucun uzunluğuyla) 3'ün eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.

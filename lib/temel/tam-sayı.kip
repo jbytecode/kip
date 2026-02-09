@@ -37,8 +37,42 @@ temeli yükle.
 (bu tam-sayının) (dizge-hal dizgesi),
   yerleşiktir.
 
+(bu tam-sayının) negatifi,
+  0'la bunun farkıdır.
+
 (bu tam-sayının) (faktöriyel tam-sayısı),
   (bunun 0'dan küçük-eşitliği) doğruysa,
     1;
   değilse,
     ((bunla 1'in farkının) faktöriyeliyle) bunun çarpımıdır.
+
+(bu tam-sayının) (mutlak-değer tam-sayısı),
+  (bunun 0'dan küçüklüğü) doğruysa,
+    (bunun negatifi);
+  değilse,
+    budur.
+
+(bu tam-sayının) (şu tam-sayıyla) (üs tam-sayısı),
+  (şunun 0'dan küçük-eşitliği) doğruysa,
+    1;
+  değilse,
+    (bunun (şununla 1'in farkıyla) üssünün) bununla çarpımıdır.
+
+
+(bu tam-sayıyla) (şu tam-sayının) (küçük tam-sayısı),
+  (bunun şunla küçük-eşitliği) doğruysa,
+    budur;
+  değilse,
+    şudur.
+
+(bu tam-sayıyla) (şu tam-sayının) (büyük tam-sayısı),
+  (bunun şunla büyük-eşitliği) doğruysa,
+    budur;
+  değilse,
+    şudur.
+
+(n tam-sayısının) (eksiltilmiş tam-sayısı),
+  (n'le 1'in farkıdır).
+
+(n tam-sayısının) (arttırılmış tam-sayısı),
+  (n'le 1'in toplamıdır).
