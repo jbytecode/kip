@@ -6,7 +6,7 @@
 module Main where
 
 import System.Exit
-import System.Directory (doesFileExist, canonicalizePath, doesDirectoryExist, listDirectory)
+import System.Directory (doesFileExist, canonicalizePath, doesDirectoryExist, listDirectory, getHomeDirectory, createDirectoryIfMissing)
 import Paths_kip (version, getDataFileName)
 import Data.List
 import Options.Applicative hiding (ParseError)
@@ -907,7 +907,7 @@ main = do
             runReaderT (loadPreludeState (optNoPrelude opts) moduleDirs renderCache fsm upsCache downsCache) renderCtx
           emitMsgIO renderCtx (MsgHeader title)
           emitMsgIO renderCtx (MsgSeparator title)
-          runInputT defaultSettings (runReaderT (loop (ReplState (parserCtx preludePst) (parserCtors preludePst) (parserTyParams preludePst) (parserTyCons preludePst) (parserTyMods preludePst) (parserPrimTypes preludePst) preludeTC preludeEval moduleDirs preludeLoaded)) renderCtx)
+          kipSettings >>= \s -> runInputT s (runReaderT (loop (ReplState (parserCtx preludePst) (parserCtors preludePst) (parserTyParams preludePst) (parserTyCons preludePst) (parserTyMods preludePst) (parserPrimTypes preludePst) preludeTC preludeEval moduleDirs preludeLoaded)) renderCtx)
         else do
           (preludePst, preludeTC, preludeEval, preludeLoaded) <-
             runReaderT (loadPreludeState (optNoPrelude opts) moduleDirs renderCache fsm upsCache downsCache) renderCtx
@@ -917,8 +917,14 @@ main = do
           rs <- runReaderT (runFiles showDefn showDefn False preludePst preludeTC preludeEval moduleDirs preludeLoaded (optFiles opts)) renderCtx
           when showHeader $
             emitMsgIO renderCtx (MsgSeparator title)
-          runInputT defaultSettings (runReaderT (loop rs) renderCtx)
+          kipSettings >>= \s -> runInputT s (runReaderT (loop rs) renderCtx)
   where
+    kipSettings :: IO (Settings IO)
+    kipSettings = do
+      home <- getHomeDirectory
+      let dir = home </> ".kip"
+      createDirectoryIfMissing True dir
+      return defaultSettings { historyFile = Just (dir </> "history.txt") }
     -- | CLI option parser.
     cliParser :: Parser CliOptions -- ^ CLI option parser.
     cliParser =
