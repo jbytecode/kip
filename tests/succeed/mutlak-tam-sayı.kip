@@ -1,3 +1,1 @@
-(* mutlak tam-sayı testi *)
-sonuç için (0'la 5'in farkının) mutlak-değeri.
-(sonuçla 5'in eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.
+((0'la 5'in farkının) mutlak-değerini) yaz.

@@ -1,3 +1,0 @@
-(* liste katla testi — toplam hesaplama *)
-sonuç için [1, 2, 3, 4]'ün 0'la toplamla katla tam-sayısı.
-(sonuçla 10'un eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.

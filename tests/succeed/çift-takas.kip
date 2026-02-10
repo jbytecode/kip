@@ -1,5 +1,0 @@
-(* çift takas testi *)
-nokta, 10'la 20 ikilisidir.
-ters-nokta için noktanın takas tam-sayıyla tam-sayı çifti.
-a için ters-noktanın ilk tam-sayısı.
-(a'yla 20'nin eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.

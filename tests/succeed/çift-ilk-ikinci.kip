@@ -1,6 +1,0 @@
-(* çift ilk ve ikinci testi *)
-nokta, 10'la 20 ikilisidir.
-a için noktanın ilk tam-sayısı.
-b için noktanın ikinci tam-sayısı.
-(a'yla 10'un eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.
-(b'yle 20'nin eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.

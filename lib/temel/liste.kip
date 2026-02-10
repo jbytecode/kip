@@ -25,11 +25,11 @@ temeli yükle.
   ilkin devama ekiyse,
     ilkin (devamın toplamıyla) toplamıdır.
 
-(bu a listesinin) (iş a'nın b'siyle) eşlemi,
+(bu a listesinin) (iş a'nın b'siyle) (eşlemi b listesi),
   bu boşsa, boş;
   ilkin devama ekiyse, (ilkin işinin) (devamın işle eşlemine) ekidir.
 
-(bu a listesinin) (test a'nın doğruluğuyla) filtresi,
+(bu a listesinin) (test a'nın doğruluğuyla) (filtre a listesi),
   bu boşsa, boş;
   ilkin devama ekiyse, 
     (ilkin testi) doğruysa,
@@ -37,41 +37,40 @@ temeli yükle.
     değilse,
       devamın testle filtresidir.
 
-(bu a listesinin) (n tam-sayısıyla) alımı,
+(bu a listesinden) (n tam-sayı) (alış a listesi),
   bu boşsa, boş;
   ilkin devama ekiyse,
     (n'in 0'la eşitliği) doğruysa,
       boş;
     değilse,
-      ilkin (devamın (n'in eksiltilmişiyle) alımına) ekidir.
+      ilkin (devamdan (n'in eksilimi) alışına) ekidir.
 
-(bu a listesinden) (n tam-sayısının) bırakılmışı,
+(bu a listesinden) (n tam-sayı) (bırakış a listesi),
   bu boşsa, boş;
   ilkin devama ekiyse,
     (n'in 0'la eşitliği) doğruysa,
-      ilkin devama ekidir;
+      bu;
     değilse,
-      devamın (n'in eksiltilmişiyle) bırakılmışıdır.
+      devamdan (n'in eksilimi) bırakışıdır.
 
-
-(başlangıç tam-sayıdan) (son tam-sayıya) aralığı,
+(başlangıç tam-sayıdan) (son tam-sayıya) (aralık tam-sayı listesi),
   (başlangıcın sonla eşitliği) doğruysa,
-    boş;
+    başlangıcın boşa ekidir;
   değilse,
-    başlangıcın ((başlangıcın 1'le toplamıyla) aralığın tam-sayı listesinin) ekidir.
+    başlangıcın ((başlangıcın artırımından) sona aralığına) ekidir.
 
-(bu a listesinin) (test a'nın doğruluğuyla) hepsisi,
+(bu a listesinin) (test a'nın doğruluğuyla) (hepsi doğruluğu),
   bu boşsa, doğru;
   ilkin devama ekiyse,
     (ilkin testi) doğruysa,
-      (devamın testle hepsisi) doğruluğudur;
+      devamın testle hepsisi;
     değilse,
-      yanlış.
+      yanlıştır.
 
-(bu a listesinin) (test a'nın doğruluğuyla) herhangisi,
+(bu a listesinin) (test a'nın doğruluğuyla) (herhangi doğruluğu),
   bu boşsa, yanlış;
   ilkin devama ekiyse,
     (ilkin testi) doğruysa,
       doğru;
     değilse,
-      (devamın testle herhangi) doğruluğudur.
+      devamın testle herhangisidir.

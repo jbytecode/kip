@@ -1,3 +1,1 @@
-(* mutlak ondalık-sayı testi *)
-sonuç için (0.0'la 3.5'in farkının) mutlak ondalık-sayısı.
-(sonuçla 3.5'in eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.
+((0.0'la 3.5'in farkının) mutlak-değerini) yaz.

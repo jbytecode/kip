@@ -40,7 +40,7 @@ Field meanings:
 - `hoverContains`: substrings required to appear in hover contents.
 - `completionIncludes`: list of labels that must appear in completion results.
 - `completionAt`: position for the completion request (0-based line/character).
-- `cache`: whether a `.kipcache` cache file should be written after `didSave`.
+- `cache`: whether a `.iz` cache file should be written after `didSave`.
 - `cacheReuse`: when true, run two sessions and ensure the cache timestamp does not change.
 - `definitionAt`: request go-to-definition at the given position (0-based) and
   require at least `atLeast` locations; the returned URI must match the fixture.

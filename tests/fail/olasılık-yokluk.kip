@@ -1,6 +1,0 @@
-(* Yokluk (boş olasılık) tekil tür uygulaması testi. *)
-(bu tam-sayı olasılığının) değeri,
-  yokluksa, 0;
-  n'nin varlığıysa, n'dir.
-
-(yokluğun değeri) yaz.

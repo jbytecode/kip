@@ -586,7 +586,7 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
               foldM' (runStmt showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) (pst', tcStWithDefs, evalSt', loaded') stmts
         Nothing -> do
           input <- liftIO (TIO.readFile path)
-          liftIO (parseFromFile pst input) >>= \case
+          liftIO (parseFromFile pst { parserFilePath = Just path } input) >>= \case
             Left err -> do
               liftIO (emitMsgIO ctx (MsgParseError err))
               msg <- renderMsg MsgRunFailed

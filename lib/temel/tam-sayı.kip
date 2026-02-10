@@ -40,6 +40,12 @@ temeli yükle.
 (bu tam-sayının) negatifi,
   0'la bunun farkıdır.
 
+(n tam-sayısının) (eksilim tam-sayısı),
+  n'le 1'in farkıdır.
+
+(n tam-sayısının) (artırım tam-sayısı),
+  n'le 1'in toplamıdır.
+
 (bu tam-sayının) (faktöriyel tam-sayısı),
   (bunun 0'dan küçük-eşitliği) doğruysa,
     1;
@@ -58,21 +64,14 @@ temeli yükle.
   değilse,
     (bunun (şununla 1'in farkıyla) üssünün) bununla çarpımıdır.
 
-
 (bu tam-sayıyla) (şu tam-sayının) (küçük tam-sayısı),
-  (bunun şunla küçük-eşitliği) doğruysa,
+  (bunun şundan küçüklüğü) doğruysa,
     budur;
   değilse,
     şudur.
 
 (bu tam-sayıyla) (şu tam-sayının) (büyük tam-sayısı),
-  (bunun şunla büyük-eşitliği) doğruysa,
+  (bunun şundan büyüklüğü) doğruysa,
     budur;
   değilse,
     şudur.
-
-(n tam-sayısının) (eksiltilmiş tam-sayısı),
-  (n'le 1'in farkıdır).
-
-(n tam-sayısının) (arttırılmış tam-sayısı),
-  (n'le 1'in toplamıdır).

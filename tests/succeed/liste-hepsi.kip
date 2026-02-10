@@ -1,7 +1,7 @@
-(* liste hepsi testi *)
-(bu tam-sayının) (pozitifliğinin doğruluğu),
-  (bunun 0'dan büyüklüğü) doğruysa, doğru;
-  değilse, yanlıştır.
+(bu tam-sayının) (pozitiflik doğruluğu),
+  bunun 0'dan büyüklüğüdür.
 
-sonuç için [1, 2, 3]'ün hepsisinin pozitifliğiyle doğruluğu.
-sonuç yanlışsa, durmaktır; değilse, bitimliktir.
+([1, 2, 3]'ün pozitiflikle hepsisi) doğruysa,
+  "evet"'i yaz;
+ değilse,
+  "hayır"'ı yaz.

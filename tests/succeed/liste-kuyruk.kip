@@ -1,5 +1,0 @@
-(* liste kuyruk testi *)
-sonuç için [1, 2, 3]'ün kuyruk tam-sayı listesi olasılığı.
-sonuç devamın varlığıysa,
-  ((devamın uzunluğuyla) 2'nin eşitliği) yanlışsa, durmaktır; değilse, bitimliktir;
-yokluksa, durmaktır.

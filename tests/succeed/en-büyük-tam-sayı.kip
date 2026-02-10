@@ -1,3 +1,1 @@
-(* en-büyük tam-sayı testi *)
-sonuç için 3'le 7'nin büyük tam-sayısı.
-(sonuçla 7'nin eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.
+(3'le 7'nin büyüğünü) yaz.

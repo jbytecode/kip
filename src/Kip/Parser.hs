@@ -321,8 +321,8 @@ newParserStateWithCaches :: FSM -- ^ Morphology FSM.
                          -> MorphCache -- ^ Shared ups cache.
                          -> MorphCache -- ^ Shared downs cache.
                          -> ParserState -- ^ Parser state.
-newParserStateWithCaches fsm' path =
-  MkParserState fsm' Set.empty [] [] [] [] [] M.empty path
+newParserStateWithCaches fsm' =
+  MkParserState fsm' Set.empty [] [] [] [] [] M.empty
 
 -- | Create a parser state with context and shared caches.
 newParserStateWithCtxAndCaches :: FSM -- ^ Morphology FSM.
@@ -629,16 +629,16 @@ estimateCandidates useCtx (ss, s) = do
               -- disambiguate P3s vs Acc for forms like "varlığı".
               let bareCaseCandidates =
                     case mBareCase of
-                      Just (base, Acc) | base `Set.member` parserCtx ->
+                      Just (base, Acc) | not useCtx || base `Set.member` parserCtx ->
                         (base, Acc) :
-                        [(possBase, P3s) | possBase /= (ss, s) && possBase `Set.member` parserCtx] ++
+                        [(possBase, P3s) | possBase /= (ss, s) && (not useCtx || possBase `Set.member` parserCtx)] ++
                         [(base, P3s)]
-                      Just (base, cas) | base `Set.member` parserCtx -> [(base, cas)]
+                      Just (base, cas) | not useCtx || base `Set.member` parserCtx -> [(base, cas)]
                       _ -> []
                   -- Also allow a candidate inferred from the surface suffix
                   -- when morphology doesn't provide a case.
                   candidates0' = addSurfaceCaseCandidate s candidates0
-                  candidates0'' = ordNub (bareCaseCandidates ++ candidates0')
+                  candidates0'' = ordNub (candidates0' ++ bareCaseCandidates)
                   hasCond = any (\(_, cas) -> cas == Cond) candidates0'
               -- Conditional (-sa/-se) gets special casing to avoid losing
               -- constructor matches when morphology is ambiguous.
@@ -707,14 +707,14 @@ estimateCandidates useCtx (ss, s) = do
                               -- variant; this keeps P3s/Acc ambiguity visible.
                               let bareCaseCandidates1 =
                                     case stripBareCaseSuffix (ss, stripped) of
-                                      Just (base, Acc) | base `Set.member` parserCtx ->
+                                      Just (base, Acc) | not useCtx || base `Set.member` parserCtx ->
                                         (base, Acc) :
-                                        [(possBase1, P3s) | possBase1 /= (ss, stripped) && possBase1 `Set.member` parserCtx] ++
+                                        [(possBase1, P3s) | possBase1 /= (ss, stripped) && (not useCtx || possBase1 `Set.member` parserCtx)] ++
                                         [(base, P3s)]
-                                      Just (base, cas) | base `Set.member` parserCtx -> [(base, cas)]
+                                      Just (base, cas) | not useCtx || base `Set.member` parserCtx -> [(base, cas)]
                                       _ -> []
                                   candidates1' = addSurfaceCaseCandidate stripped candidates1
-                                  candidates1'' = ordNub (bareCaseCandidates1 ++ candidates1')
+                                  candidates1'' = ordNub (candidates1' ++ bareCaseCandidates1)
                                   hasCond1 = any (\(_, cas) -> cas == Cond) candidates1'
                               condExtra1 <- condCandidatesM stripped
                               let candidates' = ordNub (candidates1'' ++ condExtra1)
@@ -1011,7 +1011,11 @@ resolveCandidatePreferCtx ident = do
     [] ->
       case preferInflected candidates of
         x:_ -> return x
-        [] -> customFailure ErrNoMatchingNominative
+        [] -> do
+          base <- normalizePossessive ident
+          if base /= ident
+            then return (base, Nom)
+            else customFailure ErrNoMatchingNominative
 
 -- | Resolve a candidate, preferring nominative case.
 resolveCandidatePreferNom :: Identifier -- ^ Surface identifier.
@@ -1029,7 +1033,11 @@ resolveCandidatePreferNom ident = do
         Nothing ->
           case candidates of
             x:_ -> return x
-            [] -> customFailure ErrNoMatchingNominative
+            [] -> do
+              base <- normalizePossessive ident
+              if base /= ident
+                then return (base, Nom)
+                else customFailure ErrNoMatchingNominative
 
 {- | Resolve a type candidate, preferring names in scope.
 
@@ -2328,9 +2336,7 @@ parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
                       Just (ident, _) -> do
                         base <- normalizePossessive ident
                         return (base, Nom)
-                      Nothing -> do
-                        (cand, _) <- resolveCandidate False baseName
-                        return (cand, Nom)
+                      Nothing -> return (baseName, Nom)
       recordDefSpan fname nameSpan
       lexeme (char ',')
       let isDefnCandidate = null args && not isInfinitive && isNothing mRetTy

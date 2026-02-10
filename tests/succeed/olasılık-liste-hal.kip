@@ -1,7 +1,0 @@
-(* olasılık liste-hal testi *)
-değer1, tam-sayı olasılığı olarak yokluktur.
-değer2, 7'nin varlığıdır.
-sonuç1 için değer1'in liste-hal tam-sayı listesi.
-sonuç2 için değer2'nin liste-hal tam-sayı listesi.
-((sonuç1'in uzunluğuyla) 0'ın eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.
-((sonuç2'nin uzunluğuyla) 1'in eşitliği) yanlışsa, durmaktır; değilse, bitimliktir.
