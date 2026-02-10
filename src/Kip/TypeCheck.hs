@@ -1695,8 +1695,8 @@ tyMatchesRigid :: Map.Map Identifier Int -- ^ Type constructor arities.
                -> Ty Ann -- ^ Declared type (with rigid type variables).
                -> Bool -- ^ True when the inferred type matches the declared type.
 tyMatchesRigid tyCons inferred declared =
-  let n1 = normalizeTyMap tyCons inferred
-      n2 = normalizeTyMap tyCons declared
+  let n1 = canonicalizeTypeVars tyCons (normalizeTyMap tyCons inferred)
+      n2 = canonicalizeTypeVars tyCons (normalizeTyMap tyCons declared)
       isDefinedType name = Map.member name tyCons
   in case (n1, n2) of
     (TyString _, TyString _) -> True
@@ -1718,6 +1718,59 @@ tyMatchesRigid tyCons inferred declared =
     (TyApp _ c1 as1, TyApp _ c2 as2) ->
       tyMatchesRigid tyCons c1 c2 && length as1 == length as2 && and (zipWith (tyMatchesRigid tyCons) as1 as2)
     _ -> False
+
+-- | Rename all type variables in a type to canonical placeholders (@_t0@,
+-- @_t1@, …) assigned in left-to-right, depth-first order.
+--
+-- Two types that are structurally identical but use different variable names
+-- (i.e. are alpha-equivalent) will produce the same canonical form, so a
+-- simple structural equality check on the results is enough to decide
+-- alpha-equivalence.
+--
+-- Concrete type constructors (those present in @tyCons@) and literal types
+-- ('TyInt', 'TyFloat', 'TyString') are left untouched.  Everything else —
+-- 'TyVar', 'TySkolem', and 'TyInd' names that are /not/ in @tyCons@ — is
+-- treated as a type variable and gets a fresh canonical name.
+--
+-- This is used by 'tyMatchesRigid' so that a declared polymorphic return type
+-- like @a olasılığı@ matches an inferred @x olasılığı@ regardless of the
+-- variable names chosen by the programmer vs. the type-checker.
+canonicalizeTypeVars :: Map.Map Identifier Int -> Ty Ann -> Ty Ann
+canonicalizeTypeVars tyCons ty =
+  let (ty', _, _) = go Map.empty 0 ty
+  in ty'
+  where
+    go env n t =
+      case t of
+        TyVar ann name -> bindVar ann name env n
+        TySkolem ann name -> bindVar ann name env n
+        TyInd ann name
+          | Map.member name tyCons -> (TyInd ann name, env, n)
+          | otherwise -> bindVar ann name env n
+        Arr ann d i ->
+          let (d', env1, n1) = go env n d
+              (i', env2, n2) = go env1 n1 i
+          in (Arr ann d' i', env2, n2)
+        TyApp ann ctor args ->
+          let (ctor', env1, n1) = go env n ctor
+              (args', env2, n2) = goList env1 n1 args
+          in (TyApp ann ctor' args', env2, n2)
+        TyInt{} -> (t, env, n)
+        TyFloat{} -> (t, env, n)
+        TyString{} -> (t, env, n)
+
+    goList env n [] = ([], env, n)
+    goList env n (x:xs) =
+      let (x', env1, n1) = go env n x
+          (xs', env2, n2) = goList env1 n1 xs
+      in (x' : xs', env2, n2)
+
+    bindVar ann name env n =
+      case Map.lookup name env of
+        Just canon -> (TyVar ann canon, env, n)
+        Nothing ->
+          let canon = ([], T.pack ("_t" ++ show n))
+          in (TyVar ann canon, Map.insert name canon env, n + 1)
 
 -- | Check two types for compatibility.
 tyEq :: [(Identifier, Int)] -- ^ Type constructor arities.

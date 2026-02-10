@@ -1052,7 +1052,7 @@ onHover req respond = do
                               case patSpan pat of
                                 Just sp ->
                                   case sp of
-                                    Span s _ -> siType =<< spanInfoAtPosition (posToLsp s) (dsSpanIndex doc)
+                                    Span s _ _ -> siType =<< spanInfoAtPosition (posToLsp s) (dsSpanIndex doc)
                                     NoSpan -> Nothing
                                 Nothing -> Nothing
                             mPatArgTys = mapM patArgType pats
@@ -1742,11 +1742,11 @@ loadCachedDoc st uri text =
                   textHash = hash textBytes
                   cachedHash = sourceHash (metadata cached)
               if textHash == cachedHash
-                then return (Just (cachedDocFrom cached))
+                then return (Just (cachedDocFrom (Just path) cached))
                 else return Nothing  -- Text in memory differs from cached version
   where
-    cachedDocFrom cached =
-      let pstCached = fromCachedParserState (lsFsm st) (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
+    cachedDocFrom path cached =
+      let pstCached = fromCachedParserState (lsFsm st) path (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
           tcCached = fromCachedTCState (cachedTC cached)
           stmts = cachedTypedStmts cached
       in (pstCached, tcCached, stmts)
@@ -1869,17 +1869,20 @@ posToLsp (SourcePos _ line col) =
 -- | Convert a Kip 'Span' to an LSP 'Range'.
 spanToRange :: Span -> Range
 spanToRange NoSpan = Range (Position 0 0) (Position 0 0)
-spanToRange (Span s e) = Range (posToLsp s) (posToLsp e)
+spanToRange (Span s e _) = Range (posToLsp s) (posToLsp e)
 
 -- | Merge an arbitrary list of spans, preserving the earliest start and latest end.
 mergeSpanAll :: [Span] -> Span
 mergeSpanAll spans =
-  case [ (s, e) | Span s e <- spans ] of
+  case [ (s, e) | Span s e _ <- spans ] of
     [] -> NoSpan
     pairs ->
       let starts = map fst pairs
           ends = map snd pairs
-      in Span (minimum starts) (maximum ends)
+          path = case [ p | Span _ _ (Just p) <- spans ] of
+            [] -> Nothing
+            ps -> Just (head ps)  -- Assume all spans share the same path if present
+      in Span (minimum starts) (maximum ends) path
 
 -- | Collect all expression spans from a document's statements.
 -- We use this to filter resolved-name/signature maps because 'Span'
@@ -2011,7 +2014,7 @@ findFunctionArgsAtLine pos stmts =
 patLineContains :: Position -> Clause Ann -> Bool
 patLineContains pos (Clause pat _) =
   case patRootSpan pat of
-    Span start end ->
+    Span start end _ ->
       let Position l _ = pos
           line = fromIntegral l
           startLine = unPos (sourceLine start) - 1
@@ -2057,11 +2060,11 @@ scrutineeTypeForExp pos scrutExp doc = do
       mScrutTyFromResolved =
         (spanInfoForSpan scrutSpan (dsSpanIndex doc) >>= siType) <|>
           case scrutSpan of
-            Span s _ -> spanInfoAtPosition (posToLsp s) (dsSpanIndex doc) >>= siType
+            Span s _ _ -> spanInfoAtPosition (posToLsp s) (dsSpanIndex doc) >>= siType
             NoSpan -> Nothing
       posForArgLookup =
         case scrutSpan of
-          Span s _ -> posToLsp s
+          Span s _ _ -> posToLsp s
           NoSpan -> pos
       mScrutTyFromArgs =
         case scrutExp of
@@ -2149,7 +2152,7 @@ binderTypeFromUses pos doc = do
   where
     spanInScope sp scope =
       case sp of
-        Span s e -> posInSpan (posToLsp s) scope && posInSpan (posToLsp e) scope
+        Span s e _ -> posInSpan (posToLsp s) scope && posInSpan (posToLsp e) scope
         NoSpan -> False
 
 -- | Find the bound expression of a binder definition at cursor position.
@@ -2527,7 +2530,7 @@ lookupBinderRange pos keys mScope binders =
   where
     posInSpan p sp = case sp of
       NoSpan -> False
-      Span start end ->
+      Span start end _ ->
         let Position line char = p
             SourcePos _ startLine startCol = start
             SourcePos _ endLine endCol = end
@@ -2541,7 +2544,7 @@ lookupBinderRange pos keys mScope binders =
 
     spanSize sp = case sp of
       NoSpan -> maxBound :: Int
-      Span start end ->
+      Span start end _ ->
         let SourcePos _ startLine startCol = start
             SourcePos _ endLine endCol = end
             lines = unPos endLine - unPos startLine
@@ -2550,7 +2553,7 @@ lookupBinderRange pos keys mScope binders =
 
     spanContainsSpan outer inner =
       case (outer, inner) of
-        (Span s e, Span s' e') -> s' >= s && e' <= e
+        (Span s e _, Span s' e' _) -> s' >= s && e' <= e
         _ -> False
 
 -- | Lookup the first definition location for any of the candidate identifiers.
@@ -2603,7 +2606,7 @@ typeConstructorsFromTy =
 -- | Check whether an LSP position lies within a Kip span.
 posInSpan :: Position -> Span -> Bool
 posInSpan _ NoSpan = False
-posInSpan (Position l c) (Span s e) =
+posInSpan (Position l c) (Span s e _) =
   let sl = fromIntegral (unPos (sourceLine s) - 1)
       sc = fromIntegral (unPos (sourceColumn s) - 1)
       el = fromIntegral (unPos (sourceLine e) - 1)
@@ -2614,7 +2617,7 @@ posInSpan (Position l c) (Span s e) =
 spanSizeForSort :: Span -> (Int, Int)
 spanSizeForSort sp = case sp of
   NoSpan -> (maxBound :: Int, maxBound :: Int)
-  Span start end ->
+  Span start end _ ->
     let SourcePos _ startLine startCol = start
         SourcePos _ endLine endCol = end
         lines = unPos endLine - unPos startLine
@@ -2812,7 +2815,7 @@ loadDefsForFile st path = do
   mCached <- loadCachedModule cachePath
   case mCached of
     Just cached -> do
-      let pst = fromCachedParserState (lsFsm st) (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
+      let pst = fromCachedParserState (lsFsm st) (Just path) (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
           stmts = cachedStmts cached
           defSpans =
             if isStdlib

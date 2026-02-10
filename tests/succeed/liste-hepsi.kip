@@ -1,0 +1,7 @@
+(bu tam-sayının) (pozitiflik doğruluğu),
+  bunun 0'dan büyüklüğüdür.
+
+([1, 2, 3]'ün pozitiflikle hepsisi) doğruysa,
+  "evet"'i yaz;
+ değilse,
+  "hayır"'ı yaz.

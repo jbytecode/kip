@@ -36,3 +36,24 @@ temeli yükle.
 
 (bu ondalık-sayının) (dizge-hal dizgesi),
   yerleşiktir.
+
+(bu ondalık-sayının) negatifi,
+  0.0'la bunun farkıdır.
+
+(bu ondalık-sayının) (mutlak-değer ondalık-sayısı),
+  (bunun 0.0'dan küçüklüğü) doğruysa,
+    (bunun negatifi);
+  değilse,
+    budur.
+
+(bu ondalık-sayıyla) (şu ondalık-sayının) (küçük ondalık-sayısı),
+  (bunun şundan küçüklüğü) doğruysa,
+    budur;
+  değilse,
+    şudur.
+
+(bu ondalık-sayıyla) (şu ondalık-sayının) (büyük ondalık-sayısı),
+  (bunun şundan büyüklüğü) doğruysa,
+    budur;
+  değilse,
+    şudur.

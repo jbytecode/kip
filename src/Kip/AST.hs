@@ -46,7 +46,7 @@ instance Binary SourcePos where
 
 -- | Source span for diagnostics.
 data Span =
-    Span { spanStart :: SourcePos, spanEnd :: SourcePos } -- ^ Inclusive start and end.
+    Span { spanStart :: SourcePos, spanEnd :: SourcePos, spanPath :: Maybe FilePath } -- ^ Inclusive start and end.
   | NoSpan -- ^ Missing or unknown span.
   deriving (Show, Eq, Ord, Generic, Binary)
 
@@ -81,9 +81,9 @@ mergeSpan :: Span -- ^ First span.
           -> Span -- ^ Merged span.
 mergeSpan a b =
   case (a, b) of
-    (Span s1 _, Span _ e2) -> Span s1 e2
-    (Span s1 e1, NoSpan) -> Span s1 e1
-    (NoSpan, Span s1 e1) -> Span s1 e1
+    (Span s1 _ f1, Span _ e2 f2) | f1 == f2 -> Span s1 e2 f1
+    (Span s1 e1 f1, NoSpan) -> Span s1 e1 f1
+    (NoSpan, Span s1 e1 f1) -> Span s1 e1 f1
     (NoSpan, NoSpan) -> NoSpan
 
 -- | Type syntax tree with an annotation payload.

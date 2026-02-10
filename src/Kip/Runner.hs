@@ -57,7 +57,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, listDirectory)
 import System.Exit (die)
-import System.FilePath ((</>), takeExtension)
+import System.FilePath ((</>), joinPath, takeExtension)
 import Text.Megaparsec (ParseErrorBundle(..), PosState(..), errorBundlePretty)
 import Text.Megaparsec.Error (ParseError(..), ErrorFancy(..), ShowErrorComponent(..))
 import Text.Megaparsec.Pos (sourceLine, sourceColumn, unPos)
@@ -357,8 +357,8 @@ renderTCError paramTyCons tyMods tcErr = do
           missing <- renderMissingPatterns LangTr pats
           let header = "Tip hatası: örüntü eksik." <> renderSpan (rcLang ctx) sp
           return (T.intercalate "\n" [header, missing])
-        UnimplementedPrimitive name args sp ->
-          return ("Tip hatası: yerleşik fonksiyon uygulanmamış." <> renderSpan (rcLang ctx) sp)
+        UnimplementedPrimitive name _ sp ->
+          return ("Tip hatası: " <> T.pack (prettyIdent name) <> " için yerleşik fonksiyon uygulanmamış." <> renderSpan (rcLang ctx) sp)
     LangEn ->
       case tcErr of
         TC.Unknown ->
@@ -404,8 +404,8 @@ renderTCError paramTyCons tyMods tcErr = do
           missing <- renderMissingPatterns LangEn pats
           let header = "Type error: non-exhaustive pattern match." <> renderSpan (rcLang ctx) sp
           return (T.intercalate "\n" [header, missing])
-        UnimplementedPrimitive name args sp ->
-          return ("Type error: unimplemented primitive function." <> renderSpan (rcLang ctx) sp)
+        UnimplementedPrimitive name _ sp ->
+          return ("Type error: unimplemented primitive function for " <> T.pack (prettyIdent name) <> "." <> renderSpan (rcLang ctx) sp)
 
 -- | Render a type checker error with a source snippet.
 renderTCErrorWithSource :: [Identifier] -> [(Identifier, [Identifier])] -> Text -> TCError -> RenderM Text
@@ -464,7 +464,7 @@ renderSpanSnippet :: Text -> Span -> Text
 renderSpanSnippet source sp =
   case sp of
     NoSpan -> ""
-    Span start end ->
+    Span start end _ ->
       let ls = T.lines source
           sLine = unPos (sourceLine start)
           sCol = unPos (sourceColumn start)
@@ -489,32 +489,36 @@ renderSpan :: Lang -> Span -> Text
 renderSpan lang sp =
   case sp of
     NoSpan -> ""
-    Span start end ->
-      case lang of
-        LangTr ->
-          T.concat
-            [ " (satır "
-            , T.pack (show (unPos (sourceLine start)))
-            , ", sütun "
-            , T.pack (show (unPos (sourceColumn start)))
-            , " - satır "
-            , T.pack (show (unPos (sourceLine end)))
-            , ", sütun "
-            , T.pack (show (unPos (sourceColumn end)))
-            , ")"
-            ]
-        LangEn ->
-          T.concat
-            [ " (line "
-            , T.pack (show (unPos (sourceLine start)))
-            , ", column "
-            , T.pack (show (unPos (sourceColumn start)))
-            , " - line "
-            , T.pack (show (unPos (sourceLine end)))
-            , ", column "
-            , T.pack (show (unPos (sourceColumn end)))
-            , ")"
-            ]
+    Span start end path ->
+      case path of
+        Nothing ->
+          case lang of
+            LangTr ->
+              T.concat
+                [ " (satır "
+                , T.pack (show (unPos (sourceLine start)))
+                , ", sütun "
+                , T.pack (show (unPos (sourceColumn start)))
+                , " - satır "
+                , T.pack (show (unPos (sourceLine end)))
+                , ", sütun "
+                , T.pack (show (unPos (sourceColumn end)))
+                , ")"
+                ]
+            LangEn ->
+              T.concat
+                [ " (line "
+                , T.pack (show (unPos (sourceLine start)))
+                , ", column "
+                , T.pack (show (unPos (sourceColumn start)))
+                , " - line "
+                , T.pack (show (unPos (sourceLine end)))
+                , ", column "
+                , T.pack (show (unPos (sourceColumn end)))
+                , ")"
+                ]
+        Just p ->
+          "\n" <> T.pack p <> (T.pack (show (unPos (sourceLine start))) <> ":" <> T.pack (show (unPos (sourceColumn start))) <> "-" <> T.pack (show (unPos (sourceLine end))) <> ":" <> T.pack (show (unPos (sourceColumn end))))
 
 -- | Render an optional type for diagnostics.
 renderTyOpt :: [Identifier] -> [(Identifier, [Identifier])] -> Maybe (Ty Ann) -> RenderM Text
@@ -568,7 +572,7 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
           if buildOnly
             then return (pst, tcSt, evalSt, loaded')
             else do
-              let pst' = fromCachedParserState fsm uCache dCache (cachedParser cached)
+              let pst' = fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached)
                   evalSt' = evalSt
                   stmts = cachedStmts cached
                   paramTyCons = [name | (name, arity) <- parserTyCons pst', arity > 0]
@@ -582,7 +586,7 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
               foldM' (runStmt showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) (pst', tcStWithDefs, evalSt', loaded') stmts
         Nothing -> do
           input <- liftIO (TIO.readFile path)
-          liftIO (parseFromFile pst input) >>= \case
+          liftIO (parseFromFile pst { parserFilePath = Just path } input) >>= \case
             Left err -> do
               liftIO (emitMsgIO ctx (MsgParseError err))
               msg <- renderMsg MsgRunFailed
@@ -797,9 +801,14 @@ funcSigSpansFromStmts stmts defSpans =
 
 -- | Resolve a module name to a file path.
 resolveModulePath :: [FilePath] -> Identifier -> RenderM FilePath
-resolveModulePath dirs name = do
-  let base = prettyIdent name ++ ".kip"
-      candidates = map (</> base) dirs
+resolveModulePath dirs name@(xs, x) = do
+  let parts = map T.unpack xs
+      nm = T.unpack x
+      -- For each split point k (from all-nested to all-flat), generate a candidate.
+      -- k dirs as path components, remaining parts hyphenated with the name.
+      splits = [ joinPath (take k parts ++ [intercalate "-" (drop k parts ++ [nm]) ++ ".kip"])
+               | k <- [length parts, length parts - 1 .. 0] ]
+      candidates = concatMap (\d -> map (d </>) splits) dirs
   found <- liftIO (filterM doesFileExist candidates)
   case found of
     path:_ -> return path
@@ -832,13 +841,15 @@ listKipFilesRecursive dir = do
 -- | Load the prelude module into parser/type/eval states unless disabled.
 loadPreludeState :: Bool -> [FilePath] -> RenderCache -> FSM -> MorphCache -> MorphCache -> RenderM (ParserState, TCState, EvalState, Set FilePath)
 loadPreludeState noPrelude moduleDirs cache fsm uCache dCache = do
-  let pst = newParserStateWithCaches fsm uCache dCache
+  let pst = newParserStateWithCaches fsm Nothing uCache dCache
       tcSt = emptyTCState
       evalSt = mkEvalState cache fsm
   if noPrelude
     then return (pst, tcSt, evalSt, Set.empty)
     else do
       path <- resolveModulePath moduleDirs ([], T.pack "giriş")
+      -- Update pst with the path
+      let pst' = pst { parserFilePath = Just path }
       runFile False False False moduleDirs (pst, tcSt, evalSt, Set.empty) path
 
 -- | Build an evaluator state wired to the render cache.

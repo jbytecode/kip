@@ -1,0 +1,7 @@
+(bu tam-sayının) (sıfırlık doğruluğu),
+  bunla 0'ın eşitliğidir.
+
+([1, 2, 0, 3]'ün sıfırlıkla herhangisi) doğruysa,
+  "evet"'i yaz;
+ değilse,
+  "hayır"'ı yaz.

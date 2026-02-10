@@ -1,0 +1,76 @@
+temeli yükle.
+
+(* Liste fonksiyonları. *)
+(bu öğe listesinin) (uzunluk tam-sayısı),
+  bu boşsa,
+    0;
+  ilkin devama ekiyse,
+    (devamın uzunluğuyla) 1'in toplamıdır.
+
+(bu öğe listesiyle) (şu öğe listesinin) (birleşim öğe listesi),
+  bu boşsa,
+    şu;
+  ilkin devama ekiyse,
+    ilkin (devamla şunun birleşimine) ekidir.
+
+(bu öğe listesinin) (ters öğe listesi),
+  bu boşsa,
+    boş;
+  ilkin devama ekiyse,
+    (devamın tersiyle) (ilkin boşa ekinin) birleşimidir.
+
+(bu tam-sayı listesinin) (toplam tam-sayısı),
+  bu boşsa,
+    0;
+  ilkin devama ekiyse,
+    ilkin (devamın toplamıyla) toplamıdır.
+
+(bu a listesinin) (iş a'nın b'siyle) (eşlemi b listesi),
+  bu boşsa, boş;
+  ilkin devama ekiyse, (ilkin işinin) (devamın işle eşlemine) ekidir.
+
+(bu a listesinin) (test a'nın doğruluğuyla) (filtre a listesi),
+  bu boşsa, boş;
+  ilkin devama ekiyse, 
+    (ilkin testi) doğruysa,
+      ilkin (devamın testle filtresine) ekidir;
+    değilse,
+      devamın testle filtresidir.
+
+(bu a listesinden) (n tam-sayı) (alış a listesi),
+  bu boşsa, boş;
+  ilkin devama ekiyse,
+    (n'in 0'la eşitliği) doğruysa,
+      boş;
+    değilse,
+      ilkin (devamdan (n'in eksilimi) alışına) ekidir.
+
+(bu a listesinden) (n tam-sayı) (bırakış a listesi),
+  bu boşsa, boş;
+  ilkin devama ekiyse,
+    (n'in 0'la eşitliği) doğruysa,
+      bu;
+    değilse,
+      devamdan (n'in eksilimi) bırakışıdır.
+
+(başlangıç tam-sayıdan) (son tam-sayıya) (aralık tam-sayı listesi),
+  (başlangıcın sonla eşitliği) doğruysa,
+    başlangıcın boşa ekidir;
+  değilse,
+    başlangıcın ((başlangıcın artırımından) sona aralığına) ekidir.
+
+(bu a listesinin) (test a'nın doğruluğuyla) (hepsi doğruluğu),
+  bu boşsa, doğru;
+  ilkin devama ekiyse,
+    (ilkin testi) doğruysa,
+      devamın testle hepsisi;
+    değilse,
+      yanlıştır.
+
+(bu a listesinin) (test a'nın doğruluğuyla) (herhangi doğruluğu),
+  bu boşsa, yanlış;
+  ilkin devama ekiyse,
+    (ilkin testi) doğruysa,
+      doğru;
+    değilse,
+      devamın testle herhangisidir.

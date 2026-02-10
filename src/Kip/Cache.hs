@@ -102,12 +102,13 @@ toCachedParserState ps =
 -- | Restore a parser state from its cached representation.
 fromCachedParserState ::
   FSM -- ^ Morphology FSM handle.
+  -> Maybe FilePath -- ^ Path to the cached module (for validation).
   -> MorphCache -- ^ Shared ups cache.
   -> MorphCache -- ^ Shared downs cache.
   -> CachedParserState -- ^ Cached parser snapshot.
   -> ParserState -- ^ Rehydrated parser state.
-fromCachedParserState fsm upsCache downsCache CachedParserState{..} =
-  MkParserState fsm (Set.fromList pctx) pctors ptyParams ptyCons ptyMods pprimTypes pdefSpans upsCache downsCache
+fromCachedParserState fsm cachePath upsCache downsCache CachedParserState{..} =
+  MkParserState fsm (Set.fromList pctx) pctors ptyParams ptyCons ptyMods pprimTypes pdefSpans cachePath upsCache downsCache
 
 -- | Cached wrapper for the type checker state.
 newtype CachedTCState = CachedTCState TCState
