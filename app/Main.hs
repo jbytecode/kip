@@ -616,6 +616,55 @@ formatStepsGrouped useColor renderInput renderOutput steps = do
       deduped = dedupeGroupBoundaries nonEmpty
   return (intercalate "\n\n" deduped)
 
+-- | Strip Turkish copula suffixes from rendered trace text using TRmorph.
+-- Uses morphological analysis to identify copulas, then strips them manually.
+-- Used only by :steps output.
+--
+-- Example: "toplamıdır" → "toplamı"
+--   Analysis: toplam<N><p3s><0><V><cpl:pres><3s><dir>
+--   Contains copula: <0><V><cpl:...> → strip suffix
+stripStepsCopulaTRmorph :: FSM -> String -> IO String
+stripStepsCopulaTRmorph fsm s = T.unpack <$> processText (T.pack s)
+  where
+    processText txt = T.concat <$> mapM processSegment (segmentText txt)
+
+    -- Segment text into words and non-words
+    segmentText :: Text -> [(Bool, Text)]
+    segmentText t
+      | T.null t = []
+      | otherwise =
+          let (word, rest) = T.span isWordCharTR t
+          in if T.null word
+               then let (nonWord, rest') = T.span (not . isWordCharTR) t
+                    in (False, nonWord) : segmentText rest'
+               else (True, word) : segmentText rest
+      where
+        -- Note: Using U+2019 (right single quotation mark) same as original
+        isWordCharTR ch = isAlpha ch || isDigit ch || ch == '\'' || ch == '’'
+
+    processSegment :: (Bool, Text) -> IO Text
+    processSegment (False, nonWord) = return nonWord  -- Preserve non-words as-is
+    processSegment (True, word) = stripWordCopula word
+
+    stripWordCopula :: Text -> IO Text
+    stripWordCopula word = do
+      -- Analyze with TRmorph
+      analyses <- ups fsm word
+      -- Check if any analysis contains a copula
+      let hasCopula = any (T.isInfixOf "<0><V><cpl:") analyses
+      if hasCopula
+        then return (stripCopulaSuffixManual word)
+        else return word
+
+    -- Manual copula suffix stripping (same as original implementation)
+    stripCopulaSuffixManual :: Text -> Text
+    stripCopulaSuffixManual w =
+      let suffixes = ["dır", "dir", "dur", "dür", "tır", "tir", "tur", "tür"]
+          match = find (\suf -> suf `T.isSuffixOf` T.toLower w) suffixes
+      in case match of
+           Just suf -> T.take (T.length w - T.length suf) w
+           Nothing -> w
+
 -- | Strip Turkish copula suffixes from rendered trace text.
 -- Used only by :steps output.
 stripStepsCopula :: String -> String
@@ -1841,7 +1890,7 @@ main = do
                     Right (Right ((result, steps), evalSt')) -> do
                       ctx <- ask
                       (cache, fsm') <- runApp requireCacheFsm
-                      let renderSteps = fmap stripStepsCopula . renderExpPreservingCase cache fsm' evalSt'
+                      let renderSteps exp = renderExpPreservingCase cache fsm' evalSt' exp >>= stripStepsCopulaTRmorph fsm'
                           rInput = renderSteps
                           rOutput = renderSteps . setTopCaseNom
                       formatted <- liftIO (formatSteps (rcUseColor ctx) rInput rOutput result steps)
