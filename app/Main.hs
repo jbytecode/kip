@@ -435,7 +435,9 @@ substituteFirstByHead from to expr = go False expr
         Nothing -> goClauses ann scr (pref ++ [Clause p b]) rest
 
     sameHead (App _ fromFn fromArgs) (App _ exprFn exprArgs) =
-      eqTraceExp fromFn exprFn && length fromArgs == length exprArgs
+      eqTraceExp fromFn exprFn
+        && length fromArgs == length exprArgs
+        && (length fromArgs <= 1 || any id (zipWith eqTraceExp fromArgs exprArgs))
     sameHead _ _ = False
 
 -- | Choose a matching step using current-context order.
