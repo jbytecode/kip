@@ -1,0 +1,45 @@
+⇝ (2'nin 0'dan küçük-eşitliği) doğruysa, 1; değilse, ((2'yle 1'in farkının) faktöriyeliyle) 2'nin çarpımı
+   └────────────────────────┘
+             yanlış
+
+⇝ yanlış doğruysa, 1; değilse, ((2'yle 1'in farkının) faktöriyeliyle) 2'nin çarpımı
+
+⇝ ((2'yle 1'in farkının) faktöriyeliyle) 2'nin çarpımı
+    └─────────────────┘
+             1
+
+⇝ (1'in faktöriyeliyle) 2'nin çarpımı
+   └─────────────────┘
+   (1'in 0'dan küçük-eşitliği) doğruysa, 1; değilse, ((1'le 1'in farkının) faktöriyeliyle) 1'in çarpımı
+
+⇝ ((1'in 0'dan küçük-eşitliği) doğruysa, 1; değilse, ((1'le 1'in farkının) faktöriyeliyle) 1'in çarpımıyla) 2'nin çarpımı
+    └───────────────────────┘
+             yanlış
+
+⇝ (yanlış doğruysa, 1; değilse, ((1'le 1'in farkının) faktöriyeliyle) 1'in çarpımıyla) 2'nin çarpımı
+   └────────────────────────────────────────────────────────────────────────────────┘
+                   ((1'le 1'in farkının) faktöriyeliyle) 1'in çarpımı
+
+⇝ (((1'le 1'in farkının) faktöriyeliyle) 1'in çarpımıyla) 2'nin çarpımı
+     └────────────────┘
+             0
+
+⇝ ((0'ın faktöriyeliyle) 1'in çarpımıyla) 2'nin çarpımı
+    └─────────────────┘
+    (0'ın 0'dan küçük-eşitliği) doğruysa, 1; değilse, ((0'la 1'in farkının) faktöriyeliyle) 0'ın çarpımı
+
+⇝ (((0'ın 0'dan küçük-eşitliği) doğruysa, 1; değilse, ((0'la 1'in farkının) faktöriyeliyle) 0'ın çarpımıyla) 1'in çarpımıyla) 2'nin çarpımı
+     └───────────────────────┘
+               doğru
+
+⇝ ((doğru doğruysa, 1; değilse, ((0'la 1'in farkının) faktöriyeliyle) 0'ın çarpımıyla) 1'in çarpımıyla) 2'nin çarpımı
+    └───────────────────────────────────────────────────────────────────────────────┘
+                                            1
+
+⇝ (1'le 1'in çarpımıyla) 2'nin çarpımı
+   └──────────────────┘
+            1
+
+⇝ 1'le 2'nin çarpımı
+
+⇝ 2
