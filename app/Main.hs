@@ -315,40 +315,43 @@ formatStepsReplay useColor renderInput renderOutput steps = do
         Nothing -> tsInput (head steps)
                    `seq` (tsInput (head steps), steps)
   startText <- renderInput startExpr
-  (_, _, outLines) <- replayUntilFixedPoint arrow pointerIndent renderInput renderOutput
+  (_, _, outLines) <- replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput
     (startExpr, startText, [arrow ++ startText]) restSteps
   return (intercalate "\n" outLines)
 
 -- | Repeatedly apply the shallowest matching step until no step applies.
-replayUntilFixedPoint :: String
+replayUntilFixedPoint :: Bool
+                      -> String
                       -> String
                       -> (Exp Ann -> IO String)
                       -> (Exp Ann -> IO String)
                       -> (Exp Ann, String, [String])
                       -> [TraceStep]
                       -> IO (Exp Ann, String, [String])
-replayUntilFixedPoint _ _ _ _ state [] = return state
-replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (current, currentText, accLines) steps =
+replayUntilFixedPoint _ _ _ _ _ state [] = return state
+replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (current, currentText, accLines) steps =
   case reduceBooleanMatchFirst current of
     Just (oldSub, newSub, nextTop) -> do
       oldSubText <- renderInput oldSub
       newSubText <- renderOutput newSub
       nextTopText <- renderInput nextTop
-      let pointerLines = pointerLinesFor pointerIndent currentText oldSubText newSubText
+      let pointerLines = pointerLinesForColored useColor pointerIndent currentText oldSubText newSubText
+          highlightedNext = highlightSubstring useColor newSubText nextTopText
           sep = [""]
-          newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ nextTopText]
-      replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (nextTop, nextTopText, newLines) steps
+          newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ highlightedNext]
+      replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (nextTop, nextTopText, newLines) steps
     _ -> pickStep current currentText renderInput steps >>= \case
       Nothing -> continueOrFallback (current, currentText, accLines) steps
       Just (idx, step, next) -> do
         subInput <- renderInput (tsInput step)
         subOutput <- renderOutput (tsOutput step)
         nextText <- renderInput next
-        let pointerLines = pointerLinesFor pointerIndent currentText subInput subOutput
+        let pointerLines = pointerLinesForColored useColor pointerIndent currentText subInput subOutput
+            highlightedNext = highlightSubstring useColor subOutput nextText
             sep = [""]
-            newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ nextText]
+            newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ highlightedNext]
             rest = removeAt idx steps
-        replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (next, nextText, newLines) rest
+        replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (next, nextText, newLines) rest
   where
     continueOrFallback state@(cur, curText, linesAcc) restSteps =
       case findHeadFallback cur restSteps of
@@ -356,10 +359,11 @@ replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (current, cur
           oldSubText <- renderInput oldSub
           newSubText <- renderOutput newSub
           curText' <- renderInput cur'
-          let pointerLines = pointerLinesFor pointerIndent curText oldSubText newSubText
+          let pointerLines = pointerLinesForColored useColor pointerIndent curText oldSubText newSubText
+              highlightedCur = highlightSubstring useColor newSubText curText'
               sep = [""]
-              linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ curText']
-          replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') (removeAt idx restSteps)
+              linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ highlightedCur]
+          replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') (removeAt idx restSteps)
         Nothing -> reduceBooleanFallback state restSteps
     findHeadFallback curExpr steps' =
       let candidates =
@@ -378,10 +382,11 @@ replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (current, cur
           oldSubText <- renderInput oldSub
           newSubText <- renderOutput newSub
           curText' <- renderInput cur'
-          let pointerLines = pointerLinesFor pointerIndent curText oldSubText newSubText
+          let pointerLines = pointerLinesForColored useColor pointerIndent curText oldSubText newSubText
+              highlightedCur = highlightSubstring useColor newSubText curText'
               sep = [""]
-              linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ curText']
-          replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') restSteps
+              linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ highlightedCur]
+          replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') restSteps
 
 substituteFirstByHead :: Exp Ann -> Exp Ann -> Exp Ann -> Maybe (Exp Ann, Exp Ann, Exp Ann)
 substituteFirstByHead from to expr = go False expr
@@ -734,6 +739,51 @@ pointerLinesFor pointerIndent wholeText subText resultText =
     stripOuterParens s
       | length s >= 2 && head s == '(' && last s == ')' = tail (init s)
       | otherwise = s
+
+pointerLinesForColored :: Bool -> String -> String -> String -> String -> [String]
+pointerLinesForColored useColor pointerIndent wholeText subText resultText =
+  if not useColor
+    then pointerLinesFor pointerIndent wholeText subText resultText
+    else case chooseNeedle of
+      Nothing -> []
+      Just (ix, needle) ->
+        let subLen = length needle
+        in if ix == 0 && subLen == length wholeText
+             then []
+             else if subLen >= 3
+                    then
+                      let boxChars = dim ("└" ++ replicate (subLen - 2) '─' ++ "┘")
+                          underline = pointerIndent ++ replicate ix ' ' ++ boxChars
+                          resultWidth = length resultText
+                          resultStart
+                            | resultWidth >= subLen = ix
+                            | otherwise = ix + ((subLen - resultWidth) `div` 2)
+                          coloredResult = blue resultText
+                          result = pointerIndent ++ replicate resultStart ' ' ++ coloredResult
+                      in [underline, result]
+                    else [pointerIndent ++ replicate ix ' ' ++ blue resultText]
+  where
+    chooseNeedle =
+      let stripped = stripOuterParens subText
+          candidates = nub [stripped, subText]
+          withPos = mapMaybe (\cand -> fmap (\ix -> (ix, cand)) (findSubstring cand wholeText)) candidates
+      in listToMaybe withPos
+
+    stripOuterParens s
+      | length s >= 2 && head s == '(' && last s == ')' = tail (init s)
+      | otherwise = s
+
+-- | Highlight a substring in blue within a larger text, if found.
+highlightSubstring :: Bool -> String -> String -> String
+highlightSubstring useColor needle haystack
+  | not useColor = haystack
+  | otherwise =
+      case findSubstring needle haystack of
+        Nothing -> haystack
+        Just ix ->
+          let (before, rest) = splitAt ix haystack
+              (match, after) = splitAt (length needle) rest
+          in before ++ blue match ++ after
 
 -- | Process a single sub-step using AST-level substitution.
 -- Returns the updated parent AST, rendered parent string, and accumulated output lines.
