@@ -715,8 +715,11 @@ pointerLinesFor pointerIndent wholeText subText resultText =
            else if subLen >= 3
                   then
                     let underline = pointerIndent ++ replicate ix ' ' ++ "└" ++ replicate (subLen - 2) '─' ++ "┘"
-                        centerOffset = ix + subLen `div` 2
-                        result = pointerIndent ++ replicate centerOffset ' ' ++ resultText
+                        resultWidth = length resultText
+                        resultStart
+                          | resultWidth >= subLen = ix
+                          | otherwise = ix + ((subLen - resultWidth) `div` 2)
+                        result = pointerIndent ++ replicate resultStart ' ' ++ resultText
                     in [underline, result]
                   else [pointerIndent ++ replicate ix ' ' ++ resultText]
   where
