@@ -835,7 +835,7 @@ renderExpPreservingCase cache fsm evalSt expr =
                   return (unwords (argStrs' ++ [fnStr]))
             _ -> renderAppPC cache fsm evalSt annExp fn args
         _ -> renderAppPC cache fsm evalSt annExp fn args
-    Match {scrutinee, clauses} -> do
+    Match {annExp, scrutinee, clauses} -> do
       -- If scrutinee is a value (IntLit, FloatLit, StrLit, or Var that's a constructor),
       -- only render the selected clause body
       case selectMatchingClause scrutinee clauses of
@@ -854,8 +854,8 @@ renderExpPreservingCase cache fsm evalSt expr =
               scrutStr = if shouldParenthesizeScrutinee scrutinee
                            then "(" ++ scrutStrRaw ++ ")"
                            else scrutStrRaw
-          clauseStrs <- mapM (renderClausePC cache fsm evalSt scrutStr) clauses
-          return (intercalate ", " clauseStrs)
+          clauseStrs <- mapM (renderClausePC cache fsm evalSt (annCase annExp) scrutStr) clauses
+          return (intercalate "; " clauseStrs)
     Seq {first, second} -> do
       firstStr <- renderExpPreservingCase cache fsm evalSt first
       secondStr <- renderExpPreservingCase cache fsm evalSt second
@@ -895,10 +895,16 @@ renderAppPC cache fsm evalSt appAnn fn' args' = do
   return (unwords (argStrs' ++ [fnStr]))
 
 -- | Render a clause preserving case annotations.
-renderClausePC :: RenderCache -> FSM -> EvalState -> String -> Clause Ann -> IO String
-renderClausePC cache fsm evalSt scrutStr (Clause pat body) = do
+renderClausePC :: RenderCache -> FSM -> EvalState -> Case -> String -> Clause Ann -> IO String
+renderClausePC cache fsm evalSt matchCase scrutStr (Clause pat body) = do
   patStr <- renderPatPC cache fsm scrutStr pat
-  bodyStr <- renderExpPreservingCase cache fsm evalSt body
+  let bodyForRender =
+        case body of
+          IntLit {} -> body
+          FloatLit {} -> body
+          StrLit {} -> body
+          _ -> body { annExp = setAnnCase (annExp body) matchCase }
+  bodyStr <- renderExpPreservingCase cache fsm evalSt bodyForRender
   return (patStr ++ ", " ++ bodyStr)
 
 -- | Try to select the matching clause if the scrutinee is a value.
