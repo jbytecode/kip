@@ -274,8 +274,18 @@ runApp action = do
   ctx <- ask
   liftIO (runReaderT action ctx)
 
+-- ============================================================================
+-- :steps Command - Trace Formatting
+-- ============================================================================
+-- Functions for formatting evaluation traces with visual pointers showing
+-- step-by-step evaluation of sub-expressions.
+
 -- | Format trace steps for display using Unicode box drawing.
--- Shows sub-expressions with underlines and their results.
+-- This is the top-level entry point for the :steps command output.
+--
+-- Takes a list of trace steps and formats them to show the evaluation
+-- process with visual pointers (└─┘) indicating which sub-expressions
+-- are being evaluated at each step.
 formatSteps :: Bool
             -> (Exp Ann -> IO String) -- ^ Preserving-case renderer (for inputs).
             -> (Exp Ann -> IO String) -- ^ Nominative renderer (for outputs).
@@ -297,7 +307,9 @@ formatSteps useColor renderInput renderOutput finalExp steps = do
   let suffix = if truncated then "(1000 adım sınırına ulaşıldı)\n" else ""
   return (formatted' ++ suffix)
 
--- | Format steps by replaying trace transitions across depth frames.
+-- | Format steps by replaying trace transitions.
+-- Finds the starting expression and then replays each evaluation step,
+-- showing how sub-expressions are reduced.
 formatStepsReplay :: Bool
                   -> (Exp Ann -> IO String)
                   -> (Exp Ann -> IO String)
@@ -307,6 +319,7 @@ formatStepsReplay _ _ _ [] = return ""
 formatStepsReplay useColor renderInput renderOutput steps = do
   let arrow = if useColor then dim "⇝ " else "⇝ "
       pointerIndent = "  "
+      -- Find the first depth-0 step to use as starting point
       mStartIdx = findIndex (\s -> tsDepth s == 0) steps
       (startExpr, restSteps) = case mStartIdx of
         Just i ->
@@ -320,6 +333,13 @@ formatStepsReplay useColor renderInput renderOutput steps = do
   return (intercalate "\n" outLines)
 
 -- | Repeatedly apply the shallowest matching step until no step applies.
+-- This is the core algorithm that reconstructs the evaluation trace.
+--
+-- The algorithm:
+-- 1. Try to reduce boolean matches directly in the current expression
+-- 2. Otherwise, find a matching trace step and apply it
+-- 3. Show visual pointers indicating what changed
+-- 4. Recursively process remaining steps
 replayUntilFixedPoint :: Bool
                       -> String
                       -> String
@@ -388,6 +408,10 @@ replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur
               linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ highlightedCur]
           replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') restSteps
 
+-- | Try to substitute by matching the "head" of application expressions.
+-- This is a more lenient matching strategy used as a fallback.
+--
+-- Returns (old sub-expression, new sub-expression, updated parent expression).
 substituteFirstByHead :: Exp Ann -> Exp Ann -> Exp Ann -> Maybe (Exp Ann, Exp Ann, Exp Ann)
 substituteFirstByHead from to expr = go False expr
   where
@@ -445,7 +469,8 @@ substituteFirstByHead from to expr = go False expr
         && (length fromArgs <= 1 || any id (zipWith eqTraceExp fromArgs exprArgs))
     sameHead _ _ = False
 
--- | Choose a matching step using current-context order.
+-- | Find a trace step that matches the current expression.
+-- Returns the step index, the step itself, and the expression after applying it.
 pickStep :: Exp Ann
          -> String
          -> (Exp Ann -> IO String)
@@ -467,6 +492,7 @@ pickStep current currentText renderInput steps = do
           x:_ -> Just x
           [] -> Nothing
 
+-- | Remove element at the given index from a list.
 removeAt :: Int -> [a] -> [a]
 removeAt idx xs =
   let (pref, rest) = splitAt idx xs
@@ -474,7 +500,14 @@ removeAt idx xs =
        [] -> xs
        (_:suff) -> pref ++ suff
 
--- | Reduce the first boolean conditional match found in pre-order.
+-- ============================================================================
+-- Boolean Match Reduction
+-- ============================================================================
+-- Special handling for boolean conditional expressions (doğru/yanlış).
+-- These can be reduced directly without trace steps.
+
+-- | Reduce the first boolean conditional match found in pre-order traversal.
+-- Returns (old expression, new expression, updated parent expression).
 reduceBooleanMatchFirst :: Exp Ann -> Maybe (Exp Ann, Exp Ann, Exp Ann)
 reduceBooleanMatchFirst expr =
   case expr of
@@ -520,7 +553,8 @@ reduceBooleanMatchFirst expr =
           (oldSub, newSub, xs') <- reduceInArgs xs
           return (oldSub, newSub, x : xs')
 
--- | Choose a clause when scrutinee is a rendered boolean constructor.
+-- | Choose a clause body when scrutinee is a boolean constructor.
+-- Matches patterns against doğru (true) or yanlış (false).
 pickBoolClause :: Exp Ann -> [Clause Ann] -> Maybe (Exp Ann)
 pickBoolClause scr clauses = do
   b <- boolValue scr
@@ -529,6 +563,7 @@ pickBoolClause scr clauses = do
         if patMatchesBool b pat then Just body else matchClause rest
   matchClause clauses
 
+-- | Extract boolean value from an expression if it's a boolean constructor.
 boolValue :: Exp Ann -> Maybe Bool
 boolValue exp' =
   case exp' of
@@ -541,6 +576,8 @@ boolValue exp' =
              else Nothing
     _ -> Nothing
 
+-- | Check if a pattern matches a boolean value.
+-- Wildcards and variables match anything; constructor patterns must match.
 patMatchesBool :: Bool -> Pat Ann -> Bool
 patMatchesBool _ (PWildcard _) = True
 patMatchesBool _ (PVar _ _) = True
@@ -548,13 +585,16 @@ patMatchesBool b (PCtor (ctor, _) _) =
   if b then isTrueIdent ctor else isFalseIdent ctor
 patMatchesBool _ _ = False
 
+-- | Check if an identifier is "doğru" (true).
 isTrueIdent :: Identifier -> Bool
 isTrueIdent (_, w) = w == T.pack "doğru"
 
+-- | Check if an identifier is "yanlış" (false).
 isFalseIdent :: Identifier -> Bool
 isFalseIdent (_, w) = w == T.pack "yanlış"
 
--- | Reduce only when the whole expression is a boolean conditional.
+-- | Reduce a boolean match only if the entire expression is a conditional.
+-- This is more conservative than reduceBooleanMatchFirst.
 reduceTopBooleanMatch :: Exp Ann -> Maybe (Exp Ann, Exp Ann)
 reduceTopBooleanMatch exp' =
   case exp' of
@@ -699,7 +739,12 @@ containsExp needle haystack
           containsExp needle ascExp
         _ -> False
 
+-- ============================================================================
+-- String Utilities
+-- ============================================================================
+
 -- | Find the starting position of a substring in a string.
+-- Returns Nothing if the substring is not found.
 findSubstring :: String -> String -> Maybe Int
 findSubstring sub str = go 0 str
   where
@@ -709,28 +754,29 @@ findSubstring sub str = go 0 str
       | otherwise = go (idx + 1) rest
 
 -- | Build underline/result lines for a highlighted sub-expression.
+-- Creates visual pointers using Unicode box-drawing characters (└─┘)
+-- to show which part of a larger expression is being evaluated.
+--
 -- If the rendered sub-expression is wrapped in one outer parenthesis pair,
 -- prefer highlighting its inner text.
-pointerLinesFor :: String -> String -> String -> String -> [String]
-pointerLinesFor pointerIndent wholeText subText resultText =
-  case chooseNeedle of
+--
+-- When color is enabled:
+--   - Underline characters (└─┘) are rendered in dim gray
+--   - Result text is rendered in blue
+pointerLinesForColored :: Bool -> String -> String -> String -> String -> [String]
+pointerLinesForColored useColor pointerIndent wholeText subText resultText =
+  case findNeedlePosition of
     Nothing -> []
     Just (ix, needle) ->
       let subLen = length needle
       in if ix == 0 && subLen == length wholeText
-           then []
+           then []  -- Don't show pointer if the whole expression is highlighted
            else if subLen >= 3
-                  then
-                    let underline = pointerIndent ++ replicate ix ' ' ++ "└" ++ replicate (subLen - 2) '─' ++ "┘"
-                        resultWidth = length resultText
-                        resultStart
-                          | resultWidth >= subLen = ix
-                          | otherwise = ix + ((subLen - resultWidth) `div` 2)
-                        result = pointerIndent ++ replicate resultStart ' ' ++ resultText
-                    in [underline, result]
-                  else [pointerIndent ++ replicate ix ' ' ++ resultText]
+                  then buildLongPointer ix subLen
+                  else buildShortPointer ix
   where
-    chooseNeedle =
+    -- Find the position of the sub-expression in the whole text
+    findNeedlePosition =
       let stripped = stripOuterParens subText
           candidates = nub [stripped, subText]
           withPos = mapMaybe (\cand -> fmap (\ix -> (ix, cand)) (findSubstring cand wholeText)) candidates
@@ -740,40 +786,31 @@ pointerLinesFor pointerIndent wholeText subText resultText =
       | length s >= 2 && head s == '(' && last s == ')' = tail (init s)
       | otherwise = s
 
-pointerLinesForColored :: Bool -> String -> String -> String -> String -> [String]
-pointerLinesForColored useColor pointerIndent wholeText subText resultText =
-  if not useColor
-    then pointerLinesFor pointerIndent wholeText subText resultText
-    else case chooseNeedle of
-      Nothing -> []
-      Just (ix, needle) ->
-        let subLen = length needle
-        in if ix == 0 && subLen == length wholeText
-             then []
-             else if subLen >= 3
-                    then
-                      let boxChars = dim ("└" ++ replicate (subLen - 2) '─' ++ "┘")
-                          underline = pointerIndent ++ replicate ix ' ' ++ boxChars
-                          resultWidth = length resultText
-                          resultStart
-                            | resultWidth >= subLen = ix
-                            | otherwise = ix + ((subLen - resultWidth) `div` 2)
-                          coloredResult = blue resultText
-                          result = pointerIndent ++ replicate resultStart ' ' ++ coloredResult
-                      in [underline, result]
-                    else [pointerIndent ++ replicate ix ' ' ++ blue resultText]
-  where
-    chooseNeedle =
-      let stripped = stripOuterParens subText
-          candidates = nub [stripped, subText]
-          withPos = mapMaybe (\cand -> fmap (\ix -> (ix, cand)) (findSubstring cand wholeText)) candidates
-      in listToMaybe withPos
+    -- Build pointer for sub-expressions of length >= 3
+    buildLongPointer ix subLen =
+      let boxDrawing = "└" ++ replicate (subLen - 2) '─' ++ "┘"
+          underline = pointerIndent ++ replicate ix ' ' ++ applyColor boxDrawing dim
+          -- Center the result text under the underline
+          resultWidth = length resultText
+          resultStart
+            | resultWidth >= subLen = ix
+            | otherwise = ix + ((subLen - resultWidth) `div` 2)
+          result = pointerIndent ++ replicate resultStart ' ' ++ applyColor resultText blue
+      in [underline, result]
 
-    stripOuterParens s
-      | length s >= 2 && head s == '(' && last s == ')' = tail (init s)
-      | otherwise = s
+    -- Build pointer for short sub-expressions
+    buildShortPointer ix =
+      [pointerIndent ++ replicate ix ' ' ++ applyColor resultText blue]
+
+    applyColor text colorFn = if useColor then colorFn text else text
+
+-- | Uncolored version for backwards compatibility
+pointerLinesFor :: String -> String -> String -> String -> [String]
+pointerLinesFor = pointerLinesForColored False
 
 -- | Highlight a substring in blue within a larger text, if found.
+-- Used to keep evaluated sub-expressions highlighted when they appear
+-- in the next evaluation step.
 highlightSubstring :: Bool -> String -> String -> String
 highlightSubstring useColor needle haystack
   | not useColor = haystack
@@ -821,7 +858,14 @@ processSubStepAST arrow renderInput renderOutput (currentParentAST, currentParen
       return (newParentAST, newParent, newLines)
 
 
--- | Replace only the first matching sub-expression (pre-order).
+-- ============================================================================
+-- Expression Substitution and Equality
+-- ============================================================================
+
+-- | Replace only the first matching sub-expression in pre-order traversal.
+-- Returns (changed flag, updated expression).
+--
+-- The 'changed' flag indicates whether a substitution was made.
 substituteFirstChild :: Exp Ann -> Exp Ann -> Exp Ann -> (Bool, Exp Ann)
 substituteFirstChild from to expr
   | eqTraceExp from expr = (True, copyCase expr to)
@@ -877,8 +921,12 @@ substituteFirstChild from to expr
              let (cr, xs') = substClauses xs
              in (cr, Clause p b : xs')
 
--- | Structural equality tuned for trace substitution.
--- Ignores annotation details and variable candidate-case variants.
+-- | Structural equality for trace expressions.
+-- More lenient than standard equality - ignores annotations and handles
+-- Turkish case variants of the same variable.
+--
+-- This is important because the same logical expression may appear with
+-- different case markings (nominative, accusative, etc.) in different contexts.
 eqTraceExp :: Exp Ann -> Exp Ann -> Bool
 eqTraceExp a b =
   case (a, b) of
@@ -904,9 +952,15 @@ eqTraceExp a b =
   where
     eqClause (Clause p1 e1) (Clause p2 e2) = p1 == p2 && eqTraceExp e1 e2
 
+-- ============================================================================
+-- Case Annotation Helpers
+-- ============================================================================
+
 -- | Reset the outermost expression annotation to nominative case.
--- This prevents evaluated results from carrying stale case annotations
--- (e.g. an IntLit result inheriting instrumental case from its context).
+-- This prevents evaluated results from carrying stale case annotations.
+--
+-- Example: if evaluating "f x" in instrumental case produces "5",
+-- the result should be "5" in nominative, not "5" in instrumental.
 setTopCaseNom :: Exp Ann -> Exp Ann
 setTopCaseNom e = case e of
   Var ann n c       -> Var (setAnnCase ann Nom) n c
@@ -921,6 +975,7 @@ setTopCaseNom e = case e of
   Ascribe ann t e'  -> Ascribe (setAnnCase ann Nom) t e'
 
 -- | Copy the case annotation from one expression to another.
+-- Preserves the grammatical case context when substituting expressions.
 copyCase :: Exp Ann -> Exp Ann -> Exp Ann
 copyCase from to =
   let cas = annCase (annExp from)
