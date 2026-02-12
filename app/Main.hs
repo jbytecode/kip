@@ -2,6 +2,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 -- | Command-line interface and REPL for Kip.
 module Main where
 
@@ -303,13 +304,11 @@ formatSteps useColor renderInput renderOutput finalExp steps = do
     finalStr <- renderInput finalExp
     let arrow = if useColor then dim "⇝ " else "⇝ "
     return (arrow ++ finalStr)
-  let formatted' =
-        if null formatted
-          then finalLine
-          -- Check if either rendering of the final line already appears at the end
-          else if finalLine `isSuffixOf` formatted || finalLinePreserved `isSuffixOf` formatted
-                 then formatted
-                 else formatted ++ "\n\n" ++ finalLine
+  let formatted'
+        | null formatted = finalLine
+        | finalLine `isSuffixOf` formatted
+          || finalLinePreserved `isSuffixOf` formatted = formatted
+        | otherwise = formatted ++ "\n\n" ++ finalLine
   let suffix = if truncated then "(1000 adım sınırına ulaşıldı)\n" else ""
   return (formatted' ++ suffix)
 
@@ -325,18 +324,23 @@ formatStepsReplay _ _ _ [] = return ""
 formatStepsReplay useColor renderInput renderOutput steps = do
   let arrow = if useColor then dim "⇝ " else "⇝ "
       pointerIndent = "  "
-      -- Find the first depth-0 step to use as starting point
       mStartIdx = findIndex (\s -> tsDepth s == 0) steps
-      (startExpr, restSteps) = case mStartIdx of
-        Just i ->
-          let top = steps !! i
-          in (tsOutput top, drop (i + 1) steps)
-        Nothing -> tsInput (head steps)
-                   `seq` (tsInput (head steps), steps)
-  startText <- renderInput startExpr
-  (_, _, outLines) <- replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput
-    (startExpr, startText, [arrow ++ startText]) restSteps
-  return (intercalate "\n" outLines)
+      replay expr rest = do
+        txt <- renderInput expr
+        (_, _, outLines) <- replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput
+          (expr, txt, [arrow ++ txt]) rest
+        return (intercalate "\n" outLines)
+  case mStartIdx of
+    Just i ->
+      let top = steps !! i
+          before = take i steps
+          after = drop (i + 1) steps
+      in if not (null after) then replay (tsOutput top) after    -- expansion (e.g. factorial)
+         else if not (null before) then replay (tsInput top) before  -- sub-eval (e.g. nested sum)
+         else return ""                                              -- simple one-step result
+    Nothing -> case steps of
+      s : _ -> replay (tsInput s) steps
+      []    -> return ""
 
 -- | Repeatedly apply the shallowest matching step until no step applies.
 -- This is the core algorithm that reconstructs the evaluation trace.
@@ -369,7 +373,8 @@ replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur
     _ -> pickStep current currentText renderInput steps >>= \case
       Nothing -> continueOrFallback (current, currentText, accLines) steps
       Just (idx, step, next) -> do
-        subInput <- renderInput (tsInput step)
+        let matchedChild = fromMaybe (tsInput step) (findFirstChild (tsInput step) current)
+        subInput <- renderInput matchedChild
         subOutput <- renderOutput (tsOutput step)
         nextText <- renderInput next
         let pointerLines = pointerLinesForColored useColor pointerIndent currentText subInput subOutput
@@ -419,7 +424,7 @@ replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur
 --
 -- Returns (old sub-expression, new sub-expression, updated parent expression).
 substituteFirstByHead :: Exp Ann -> Exp Ann -> Exp Ann -> Maybe (Exp Ann, Exp Ann, Exp Ann)
-substituteFirstByHead from to expr = go False expr
+substituteFirstByHead from to = go False
   where
     go allowRoot cur
       | allowRoot && sameHead from cur =
@@ -472,7 +477,7 @@ substituteFirstByHead from to expr = go False expr
     sameHead (App _ fromFn fromArgs) (App _ exprFn exprArgs) =
       eqTraceExp fromFn exprFn
         && length fromArgs == length exprArgs
-        && (length fromArgs <= 1 || any id (zipWith eqTraceExp fromArgs exprArgs))
+        && (length fromArgs <= 1 || or (zipWith eqTraceExp fromArgs exprArgs))
     sameHead _ _ = False
 
 -- | Find a trace step that matches the current expression.
@@ -654,7 +659,7 @@ stripStepsCopulaTRmorph cache fsm s = do
     segmentTextStr str =
       let (word, rest) = span isWordCharTR str
       in if null word
-           then let (nonWord, rest') = span (not . isWordCharTR) str
+           then let (nonWord, rest') = break isWordCharTR str
                 in (False, nonWord) : segmentTextStr rest'
            else (True, word) : segmentTextStr rest
       where
@@ -720,7 +725,7 @@ dedupeGroupBoundaries (g:gs) = reverse (foldl' step [g] gs)
               nextLines = lines next
           in case (reverse prevLines, nextLines) of
                (pLast:_, nFirst:nRest) | pLast == nFirst && not (null nRest) ->
-                 (intercalate "\n" (prevLines ++ nRest)) : rest
+                 intercalate "\n" (prevLines ++ nRest) : rest
                _ -> next : acc
 
 -- | Group steps by top-level (depth 0) steps.
@@ -810,7 +815,7 @@ containsExp needle haystack
 -- | Find the starting position of a substring in a string.
 -- Returns Nothing if the substring is not found.
 findSubstring :: String -> String -> Maybe Int
-findSubstring sub str = go 0 str
+findSubstring sub = go 0
   where
     go _ [] = Nothing
     go idx s@(_:rest)
@@ -843,7 +848,7 @@ pointerLinesForColored useColor pointerIndent wholeText subText resultText =
     findNeedlePosition =
       let stripped = stripOuterParens subText
           candidates = nub [stripped, subText]
-          withPos = mapMaybe (\cand -> fmap (\ix -> (ix, cand)) (findSubstring cand wholeText)) candidates
+          withPos = mapMaybe (\cand -> fmap (, cand) (findSubstring cand wholeText)) candidates
       in listToMaybe withPos
 
     stripOuterParens s
@@ -984,6 +989,26 @@ substituteFirstChild from to expr
            else
              let (cr, xs') = substClauses xs
              in (cr, Clause p b : xs')
+
+-- | Find the first child expression matching via 'eqTraceExp'.
+-- Returns the child from the parent tree so its case annotation is preserved.
+findFirstChild :: Exp Ann -> Exp Ann -> Maybe (Exp Ann)
+findFirstChild from expr
+  | eqTraceExp from expr = Just expr
+  | otherwise = case expr of
+      App _ fn args ->
+        findFirstChild from fn <|>
+        foldr ((<|>) . findFirstChild from) Nothing args
+      Match _ scr cls ->
+        findFirstChild from scr <|>
+        foldr ((<|>) . findInClause) Nothing cls
+      Seq _ a b -> findFirstChild from a <|> findFirstChild from b
+      Bind _ _ _ e -> findFirstChild from e
+      Let _ _ e -> findFirstChild from e
+      Ascribe _ _ e -> findFirstChild from e
+      _ -> Nothing
+  where
+    findInClause (Clause _ body) = findFirstChild from body
 
 -- | Structural equality for trace expressions.
 -- More lenient than standard equality - ignores annotations and handles

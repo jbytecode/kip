@@ -268,7 +268,8 @@ normalizeReplLines =
     isBannerLine s =
       let stripped = filter (/= ' ') s
           boxChars = "┌┐└┘─│" :: String
-      in (not (null stripped) && all (`elem` boxChars) stripped)
+          startsWithBox = case s of { c:_ -> c `elem` boxChars; _ -> False }
+      in (startsWithBox && not (null stripped) && all (`elem` boxChars) stripped)
          || ("Kip " `isInfixOf` s && any (`elem` boxChars) s)
 
 -- | Strip Windows carriage returns from a line.
