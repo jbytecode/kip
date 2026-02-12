@@ -25,6 +25,8 @@ module Kip.Render
   , renderExpWithCase
   , renderExpNom
   , renderExpPreservingCase
+  , upsCached
+  , upsCachedBatch
   , downsCached
   , pickDownForm
   ) where
@@ -76,6 +78,22 @@ upsCached RenderCache{rcUpsCache} fsm s = do
       res <- ups fsm s
       HT.insert rcUpsCache s res
       return res
+
+-- | Cached batch morphology analysis lookup.
+-- Uses batch FFI when multiple words are missing to avoid repeated handle setup.
+upsCachedBatch :: RenderCache -- ^ Render cache.
+               -> FSM -- ^ Morphology FSM.
+               -> [Text] -- ^ Surface forms.
+               -> IO [[Text]] -- ^ Morphology analyses per surface form.
+upsCachedBatch _ _ [] = return []
+upsCachedBatch RenderCache{rcUpsCache} fsm words = do
+  cached <- mapM (HT.lookup rcUpsCache) words
+  let missing = [w | (w, Nothing) <- zip words cached]
+  fetched <- if null missing then return [] else upsBatch fsm missing
+  let fetchedMap = M.fromList (zip missing fetched)
+  mapM_ (uncurry (HT.insert rcUpsCache)) (zip missing fetched)
+  let resolve w = fromMaybe (fromMaybe [] (M.lookup w fetchedMap))
+  return (zipWith resolve words cached)
 
 -- | Cached version of 'downs'.
 downsCached :: RenderCache -- ^ Render cache.

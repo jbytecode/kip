@@ -52,7 +52,7 @@ import Crypto.Hash.SHA256 (hash)
 import qualified Data.ByteString as BS
 
 import Data.Version (showVersion)
-import Data.Char (isAlpha, isDigit)
+import Data.Char (isAlpha, isDigit, toLower)
 
 -- | REPL runtime state (parser/type context + evaluator).
 data ReplState =
@@ -629,46 +629,55 @@ formatStepsGrouped useColor renderInput renderOutput steps = do
 -- Example: "toplamıdır" → "toplamı"
 --   Analysis: toplam<N><p3s><0><V><cpl:pres><3s><dir>
 --   Contains copula: <0><V><cpl:...> → strip suffix
-stripStepsCopulaTRmorph :: FSM -> String -> IO String
-stripStepsCopulaTRmorph fsm s = T.unpack <$> processText (T.pack s)
-  where
-    processText txt = T.concat <$> mapM processSegment (segmentText txt)
+--
+-- Optimized with batching and caching:
+-- - Collects all words and makes a single upsCachedBatch call
+-- - Checks cache first, only fetches uncached words
+-- - Works with String, only converts to Text at TRmorph boundary
+stripStepsCopulaTRmorph :: RenderCache -> FSM -> String -> IO String
+stripStepsCopulaTRmorph cache fsm s = do
+  let segments = segmentTextStr s
+      words = [w | (True, w) <- segments]
 
-    -- Segment text into words and non-words
-    segmentText :: Text -> [(Bool, Text)]
-    segmentText t
-      | T.null t = []
-      | otherwise =
-          let (word, rest) = T.span isWordCharTR t
-          in if T.null word
-               then let (nonWord, rest') = T.span (not . isWordCharTR) t
-                    in (False, nonWord) : segmentText rest'
-               else (True, word) : segmentText rest
+  -- Batch fetch with caching (hits cache, batches misses)
+  allAnalyses <- Kip.Render.upsCachedBatch cache fsm (map T.pack words)
+
+  -- Build analysis map
+  let analysisMap = Map.fromList (zip words allAnalyses)
+
+  -- Process segments with analysis map
+  concat <$> mapM (processSegment analysisMap) segments
+  where
+    -- Segment string into words and non-words (String version)
+    segmentTextStr :: String -> [(Bool, String)]
+    segmentTextStr [] = []
+    segmentTextStr str =
+      let (word, rest) = span isWordCharTR str
+      in if null word
+           then let (nonWord, rest') = span (not . isWordCharTR) str
+                in (False, nonWord) : segmentTextStr rest'
+           else (True, word) : segmentTextStr rest
       where
         -- Note: Using U+2019 (right single quotation mark) same as original
-        isWordCharTR ch = isAlpha ch || isDigit ch || ch == '\'' || ch == '’'
+        isWordCharTR ch = isAlpha ch || isDigit ch || ch == '\'' || ch == '\x2019'
 
-    processSegment :: (Bool, Text) -> IO Text
-    processSegment (False, nonWord) = return nonWord  -- Preserve non-words as-is
-    processSegment (True, word) = stripWordCopula word
+    processSegment :: Map.Map String [Text] -> (Bool, String) -> IO String
+    processSegment _ (False, nonWord) = return nonWord
+    processSegment analysisMap (True, word) = do
+      let analyses = Map.findWithDefault [] word analysisMap
+          hasCopula = any (T.isInfixOf "<0><V><cpl:") analyses
+      return $ if hasCopula
+               then stripCopulaSuffixManual word
+               else word
 
-    stripWordCopula :: Text -> IO Text
-    stripWordCopula word = do
-      -- Analyze with TRmorph
-      analyses <- ups fsm word
-      -- Check if any analysis contains a copula
-      let hasCopula = any (T.isInfixOf "<0><V><cpl:") analyses
-      if hasCopula
-        then return (stripCopulaSuffixManual word)
-        else return word
-
-    -- Manual copula suffix stripping (same as original implementation)
-    stripCopulaSuffixManual :: Text -> Text
+    -- Manual copula suffix stripping (String version)
+    stripCopulaSuffixManual :: String -> String
     stripCopulaSuffixManual w =
       let suffixes = ["dır", "dir", "dur", "dür", "tır", "tir", "tur", "tür"]
-          match = find (\suf -> suf `T.isSuffixOf` T.toLower w) suffixes
+          wLower = map toLower w
+          match = find (`isSuffixOf` wLower) suffixes
       in case match of
-           Just suf -> T.take (T.length w - T.length suf) w
+           Just suf -> take (length w - length suf) w
            Nothing -> w
 
 -- | Strip Turkish copula suffixes from rendered trace text.
@@ -1896,7 +1905,7 @@ main = do
                     Right (Right ((result, steps), evalSt')) -> do
                       ctx <- ask
                       (cache, fsm') <- runApp requireCacheFsm
-                      let renderSteps exp = renderExpPreservingCase cache fsm' evalSt' exp >>= stripStepsCopulaTRmorph fsm'
+                      let renderSteps exp = renderExpPreservingCase cache fsm' evalSt' exp >>= stripStepsCopulaTRmorph cache fsm'
                           rInput = renderSteps
                           rOutput = renderSteps . setTopCaseNom
                       formatted <- liftIO (formatSteps (rcUseColor ctx) rInput rOutput result steps)
