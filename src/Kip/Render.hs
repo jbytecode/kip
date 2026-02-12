@@ -24,6 +24,7 @@ module Kip.Render
   , renderExpValue
   , renderExpWithCase
   , renderExpNom
+  , renderExpPreservingCase
   , downsCached
   , pickDownForm
   ) where
@@ -257,6 +258,18 @@ addP3sSuffix stem =
            then stem ++ ['s', suffixVowel]  -- After vowel: add 's' + vowel
            else stem ++ [suffixVowel]       -- After consonant: just add vowel
 
+-- | Add conditional suffix to a stem (minimal fallback for Cond case).
+addCondSuffix :: String -- ^ Input stem.
+              -> String -- ^ Stem with conditional suffix.
+addCondSuffix stem =
+  case lastVowel stem of
+    Nothing -> stem ++ "sa"  -- No vowel, default to sa
+    Just v ->
+      let suffixVowel = if v `elem` ("aıou" :: String) then 'a' else 'e'
+      in if endsWithVowel stem
+           then stem ++ ['y', 's', suffixVowel]  -- After vowel: add 'y' + 's' + vowel
+           else stem ++ ['s', suffixVowel]        -- After consonant: 's' + vowel
+
 -- | Render an identifier with one or more cases applied.
 renderIdentWithCases :: RenderCache -- ^ Render cache.
                      -> FSM -- ^ Morphology FSM.
@@ -271,9 +284,11 @@ renderIdentWithCases cache fsm (xs, x) cases = do
     then deriveInflectedForms cache fsm stem (concatMap caseTag (filter (/= Nom) cases))
     else return forms
   -- Use FSM-derived forms, or minimal fallback if FSM fails.
-  -- P3s (possessive) fallback is kept since it's regular and needed for types.
+  -- P3s (possessive) and Cond (conditional) fallbacks are kept since they are
+  -- regular and needed for types/patterns; TRmorph does not cover Cond.
   let minimalFallback = case cases of
         [P3s] -> addP3sSuffix stem
+        [Cond] -> addCondSuffix stem
         _ -> stem
       root = fromMaybe minimalFallback (pickDownFormWithStem (Just stem) forms)
       root' = fromMaybe root (pickDownFormWithStem (Just stem) forms')
@@ -786,6 +801,142 @@ renderExpValue :: RenderCache -- ^ Render cache.
                -> IO String -- ^ Rendered output.
 renderExpValue cache fsm evalSt = renderExpWithCase cache fsm evalSt Nom
 
+-- | Render an expression preserving the case annotations on each sub-expression.
+-- Used for trace output where intermediate expressions carry their original cases.
+renderExpPreservingCase :: RenderCache -- ^ Render cache.
+                        -> FSM -- ^ Morphology FSM.
+                        -> EvalState -- ^ Evaluator state.
+                        -> Exp Ann -- ^ Expression to render.
+                        -> IO String -- ^ Rendered output.
+renderExpPreservingCase cache fsm evalSt expr =
+  case expr of
+    IntLit {annExp, intVal} ->
+      renderIntWithCase cache fsm (annCase annExp) intVal
+    FloatLit {annExp, floatVal} ->
+      renderFloatWithCase cache fsm (annCase annExp) floatVal
+    StrLit {lit} ->
+      return ("\"" ++ T.unpack lit ++ "\"")
+    Var {annExp, varName, varCandidates} ->
+      renderVarWithCase cache fsm varName annExp varCandidates (annCase annExp)
+    App {annExp, fn, args} ->
+      case fn of
+        Var {varCandidates} ->
+          case lookupCtorSig (M.toList (evalCtors evalSt)) varCandidates of
+            Just (ctorName, (argTys, _))
+              | length argTys == length args -> do
+                  argStrs <- mapM (renderExpPreservingCase cache fsm evalSt) args
+                  let argStrs' = map wrapIfNeeded argStrs
+                      topCase = annCase annExp
+                      fnCases
+                        | null args = [topCase]
+                        | topCase == Nom = [P3s]
+                        | otherwise = [P3s, topCase]
+                  fnStr <- renderIdentWithCases cache fsm ctorName fnCases
+                  return (unwords (argStrs' ++ [fnStr]))
+            _ -> renderAppPC cache fsm evalSt annExp fn args
+        _ -> renderAppPC cache fsm evalSt annExp fn args
+    Match {scrutinee, clauses} -> do
+      -- If scrutinee is a value (IntLit, FloatLit, StrLit, or Var that's a constructor),
+      -- only render the selected clause body
+      case selectMatchingClause scrutinee clauses of
+        Just clauseBody -> renderExpPreservingCase cache fsm evalSt clauseBody
+        Nothing -> do
+          -- Scrutinee not yet evaluated, show full match
+          scrutStr <- renderExpPreservingCase cache fsm evalSt scrutinee
+          clauseStrs <- mapM (renderClausePC cache fsm evalSt scrutStr) clauses
+          return ("(" ++ intercalate ", " clauseStrs ++ ")")
+    Seq {first, second} -> do
+      firstStr <- renderExpPreservingCase cache fsm evalSt first
+      secondStr <- renderExpPreservingCase cache fsm evalSt second
+      return (firstStr ++ ", " ++ secondStr)
+    Bind {bindName, bindExp} -> do
+      expStr <- renderExpPreservingCase cache fsm evalSt bindExp
+      return (prettyIdent bindName ++ " için " ++ expStr)
+    Let {body} ->
+      renderExpPreservingCase cache fsm evalSt body
+    Ascribe {ascExp} ->
+      renderExpPreservingCase cache fsm evalSt ascExp
+
+-- | Render a function application preserving case annotations.
+renderAppPC :: RenderCache -> FSM -> EvalState -> Ann -> Exp Ann -> [Exp Ann] -> IO String
+renderAppPC cache fsm evalSt appAnn fn' args' = do
+  argStrs <- mapM (renderExpPreservingCase cache fsm evalSt) args'
+  let argStrs' = map wrapIfNeeded argStrs
+      topCase = annCase appAnn
+  fnStr <- case fn' of
+    Var {annExp = fnAnn, varName, varCandidates} -> do
+      let fnCases
+            | null args' = [topCase]
+            | topCase == Nom || topCase == P3s = [P3s]
+            | otherwise = [P3s, topCase]
+          -- When the Var's annotation case already matches the single target
+          -- case, prefer the surface form so copula suffixes (-dır etc.) that
+          -- TRmorph cannot regenerate are preserved.
+          targetCase = case fnCases of { [c] -> Just c; _ -> Nothing }
+      case targetCase of
+        Just tc | annCase fnAnn == tc -> return (prettyIdent varName)
+        _ -> do
+          let fnName = case varCandidates of
+                (ident, _):_ -> ident
+                [] -> varName
+          renderIdentWithCases cache fsm fnName fnCases
+    _ -> renderExpPreservingCase cache fsm evalSt fn'
+  return (unwords (argStrs' ++ [fnStr]))
+
+-- | Render a clause preserving case annotations.
+renderClausePC :: RenderCache -> FSM -> EvalState -> String -> Clause Ann -> IO String
+renderClausePC cache fsm evalSt scrutStr (Clause pat body) = do
+  patStr <- renderPatPC cache fsm scrutStr pat
+  bodyStr <- renderExpPreservingCase cache fsm evalSt body
+  return (patStr ++ ", " ++ bodyStr)
+
+-- | Try to select the matching clause if the scrutinee is a value.
+-- Returns Just clauseBody if a clause matches, Nothing if scrutinee needs evaluation.
+selectMatchingClause :: Exp Ann -> [Clause Ann] -> Maybe (Exp Ann)
+selectMatchingClause scrut clauses =
+  case scrut of
+    IntLit {} -> findMatchingClauseBody scrut clauses
+    FloatLit {} -> findMatchingClauseBody scrut clauses
+    StrLit {} -> findMatchingClauseBody scrut clauses
+    _ -> Nothing
+  where
+    findMatchingClauseBody :: Exp Ann -> [Clause Ann] -> Maybe (Exp Ann)
+    findMatchingClauseBody _ [] = Nothing
+    findMatchingClauseBody s (Clause pat body : rest) =
+      case matchesPattern s pat of
+        True -> Just body
+        False -> findMatchingClauseBody s rest
+
+    matchesPattern :: Exp Ann -> Pat Ann -> Bool
+    matchesPattern _ (PWildcard _) = True
+    matchesPattern _ (PVar _ _) = True
+    matchesPattern (IntLit _ n1) (PIntLit n2 _) = n1 == n2
+    matchesPattern (FloatLit _ n1) (PFloatLit n2 _) = n1 == n2
+    matchesPattern (StrLit _ s1) (PStrLit s2 _) = s1 == s2
+    matchesPattern (Var _ _ cands) (PCtor (ctorName, _) pats) =
+      any (\(ident, _) -> ident == ctorName) cands && null pats
+    matchesPattern (App _ (Var _ _ cands) args) (PCtor (ctorName, _) pats) =
+      any (\(ident, _) -> ident == ctorName) cands && length args == length pats
+    matchesPattern _ _ = False
+
+-- | Render a pattern preserving case annotations.
+renderPatPC :: RenderCache -> FSM -> String -> Pat Ann -> IO String
+renderPatPC cache fsm scrutStr pat =
+  case pat of
+    PWildcard _ -> return "değilse"
+    PVar name ann -> renderIdentWithCases cache fsm name [annCase ann]
+    PCtor (ctor, ann) pats -> do
+      subPats <- mapM (renderPatPC cache fsm "") pats
+      let argStrs = (if null scrutStr then id else (scrutStr :)) subPats
+      ctorStr <- renderIdentWithCases cache fsm ctor [annCase ann]
+      return (unwords (argStrs ++ [ctorStr]))
+    PIntLit n ann -> renderIntWithCase cache fsm (annCase ann) n
+    PFloatLit n ann -> renderFloatWithCase cache fsm (annCase ann) n
+    PStrLit s _ -> return ("\"" ++ T.unpack s ++ "\"")
+    PListLit pats -> do
+      patStrs <- mapM (renderPatPC cache fsm "") pats
+      return ("[" ++ intercalate ", " patStrs ++ "]")
+
 -- | Render an expression with a requested grammatical case.
 renderExpWithCase :: RenderCache -- ^ Render cache.
                   -> FSM -- ^ Morphology FSM.
@@ -964,15 +1115,15 @@ renderVarWithCase :: RenderCache -- ^ Render cache.
                   -> [(Identifier, Case)] -- ^ Candidate identifiers.
                   -> Case -- ^ Target case.
                   -> IO String -- ^ Rendered identifier.
-renderVarWithCase cache fsm name annExp candidates targetCase =
-  case find (\(_, cas) -> cas == targetCase) candidates of
-    Just (ident, _) -> renderIdentWithCases cache fsm ident [targetCase]
-    Nothing ->
-      if annCase annExp == targetCase
-        then return (prettyIdent name)
-        else case candidates of
-          (ident, _):_ -> renderIdentWithCases cache fsm ident [targetCase]
-          [] -> renderIdentWithCases cache fsm name [targetCase]
+renderVarWithCase cache fsm name annExp candidates targetCase
+  | annCase annExp == targetCase = return (prettyIdent name)
+  | otherwise =
+      case find (\(_, cas) -> cas == targetCase) candidates of
+        Just (ident, _) -> renderIdentWithCases cache fsm ident [targetCase]
+        Nothing ->
+          case candidates of
+            (ident, _):_ -> renderIdentWithCases cache fsm ident [targetCase]
+            [] -> renderIdentWithCases cache fsm name [targetCase]
 
 -- | Look up a constructor signature by candidate identifiers.
 lookupCtorSig :: [(Identifier, ([Ty Ann], Ty Ann))] -- ^ Constructor signatures.
