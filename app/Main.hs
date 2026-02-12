@@ -298,10 +298,16 @@ formatSteps useColor renderInput renderOutput finalExp steps = do
     finalStr <- renderOutput finalExp
     let arrow = if useColor then dim "⇝ " else "⇝ "
     return (arrow ++ finalStr)
+  -- Also render with case preserved to check if it matches the last step
+  finalLinePreserved <- do
+    finalStr <- renderInput finalExp
+    let arrow = if useColor then dim "⇝ " else "⇝ "
+    return (arrow ++ finalStr)
   let formatted' =
         if null formatted
           then finalLine
-          else if finalLine `isSuffixOf` formatted
+          -- Check if either rendering of the final line already appears at the end
+          else if finalLine `isSuffixOf` formatted || finalLinePreserved `isSuffixOf` formatted
                  then formatted
                  else formatted ++ "\n\n" ++ finalLine
   let suffix = if truncated then "(1000 adım sınırına ulaşıldı)\n" else ""
