@@ -24,7 +24,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Text.Encoding (encodeUtf8)
-import Data.Maybe (fromMaybe, isJust, maybeToList, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, maybeToList, listToMaybe, mapMaybe)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Map.Strict as Map
@@ -293,7 +293,7 @@ formatSteps useColor renderInput renderOutput finalExp steps = do
           then finalLine
           else if finalLine `isSuffixOf` formatted
                  then formatted
-                 else formatted ++ "\n" ++ finalLine
+                 else formatted ++ "\n\n" ++ finalLine
   let suffix = if truncated then "(1000 adım sınırına ulaşıldı)\n" else ""
   return (formatted' ++ suffix)
 
@@ -306,6 +306,7 @@ formatStepsReplay :: Bool
 formatStepsReplay _ _ _ [] = return ""
 formatStepsReplay useColor renderInput renderOutput steps = do
   let arrow = if useColor then dim "⇝ " else "⇝ "
+      pointerIndent = "  "
       mStartIdx = findIndex (\s -> tsDepth s == 0) steps
       (startExpr, restSteps) = case mStartIdx of
         Just i ->
@@ -314,63 +315,40 @@ formatStepsReplay useColor renderInput renderOutput steps = do
         Nothing -> tsInput (head steps)
                    `seq` (tsInput (head steps), steps)
   startText <- renderInput startExpr
-  (_, _, outLines) <- replayUntilFixedPoint arrow renderInput renderOutput
+  (_, _, outLines) <- replayUntilFixedPoint arrow pointerIndent renderInput renderOutput
     (startExpr, startText, [arrow ++ startText]) restSteps
   return (intercalate "\n" outLines)
 
 -- | Repeatedly apply the shallowest matching step until no step applies.
 replayUntilFixedPoint :: String
+                      -> String
                       -> (Exp Ann -> IO String)
                       -> (Exp Ann -> IO String)
                       -> (Exp Ann, String, [String])
                       -> [TraceStep]
                       -> IO (Exp Ann, String, [String])
-replayUntilFixedPoint _ _ _ state [] = return state
-replayUntilFixedPoint arrow renderInput renderOutput (current, currentText, accLines) steps =
+replayUntilFixedPoint _ _ _ _ state [] = return state
+replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (current, currentText, accLines) steps =
   case reduceBooleanMatchFirst current of
     Just (oldSub, newSub, nextTop) -> do
       oldSubText <- renderInput oldSub
       newSubText <- renderOutput newSub
       nextTopText <- renderInput nextTop
-      let pos = findSubstring oldSubText currentText
-          subLen = length oldSubText
-          (underlineLine, resultLine) =
-            case pos of
-              Just ix | subLen >= 3 ->
-                let underline = replicate ix ' ' ++ "└" ++ replicate (subLen - 2) '─' ++ "┘"
-                    centerOffset = ix + subLen `div` 2
-                    result = replicate centerOffset ' ' ++ newSubText
-                in (underline, result)
-              Just ix ->
-                ("", replicate ix ' ' ++ newSubText)
-              Nothing -> ("", "")
-          pointerLines = filter (not . null) [underlineLine, resultLine]
-          sep = if null pointerLines then [] else [""]
+      let pointerLines = pointerLinesFor pointerIndent currentText oldSubText newSubText
+          sep = [""]
           newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ nextTopText]
-      replayUntilFixedPoint arrow renderInput renderOutput (nextTop, nextTopText, newLines) steps
+      replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (nextTop, nextTopText, newLines) steps
     _ -> pickStep current currentText renderInput steps >>= \case
       Nothing -> continueOrFallback (current, currentText, accLines) steps
       Just (idx, step, next) -> do
         subInput <- renderInput (tsInput step)
         subOutput <- renderOutput (tsOutput step)
         nextText <- renderInput next
-        let pos = findSubstring subInput currentText
-            subLen = length subInput
-            (underlineLine, resultLine) =
-              case pos of
-                Just ix | subLen >= 3 ->
-                  let underline = replicate ix ' ' ++ "└" ++ replicate (subLen - 2) '─' ++ "┘"
-                      centerOffset = ix + subLen `div` 2
-                      result = replicate centerOffset ' ' ++ subOutput
-                  in (underline, result)
-                Just ix ->
-                  ("", replicate ix ' ' ++ subOutput)
-                Nothing -> ("", "")
-            pointerLines = filter (not . null) [underlineLine, resultLine]
-            sep = if null pointerLines then [] else [""]
+        let pointerLines = pointerLinesFor pointerIndent currentText subInput subOutput
+            sep = [""]
             newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ nextText]
             rest = removeAt idx steps
-        replayUntilFixedPoint arrow renderInput renderOutput (next, nextText, newLines) rest
+        replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (next, nextText, newLines) rest
   where
     continueOrFallback state@(cur, curText, linesAcc) restSteps =
       case findHeadFallback cur restSteps of
@@ -378,21 +356,10 @@ replayUntilFixedPoint arrow renderInput renderOutput (current, currentText, accL
           oldSubText <- renderInput oldSub
           newSubText <- renderOutput newSub
           curText' <- renderInput cur'
-          let pos = findSubstring oldSubText curText
-              subLen = length oldSubText
-              (underlineLine, resultLine) =
-                case pos of
-                  Just ix | subLen >= 3 ->
-                    let underline = replicate ix ' ' ++ "└" ++ replicate (subLen - 2) '─' ++ "┘"
-                        centerOffset = ix + subLen `div` 2
-                        result = replicate centerOffset ' ' ++ newSubText
-                    in (underline, result)
-                  Just ix -> ("", replicate ix ' ' ++ newSubText)
-                  Nothing -> ("", "")
-              pointerLines = filter (not . null) [underlineLine, resultLine]
-              sep = if null pointerLines then [] else [""]
+          let pointerLines = pointerLinesFor pointerIndent curText oldSubText newSubText
+              sep = [""]
               linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ curText']
-          replayUntilFixedPoint arrow renderInput renderOutput (cur', curText', linesAcc') (removeAt idx restSteps)
+          replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') (removeAt idx restSteps)
         Nothing -> reduceBooleanFallback state restSteps
     findHeadFallback curExpr steps' =
       let candidates =
@@ -411,21 +378,10 @@ replayUntilFixedPoint arrow renderInput renderOutput (current, currentText, accL
           oldSubText <- renderInput oldSub
           newSubText <- renderOutput newSub
           curText' <- renderInput cur'
-          let pos = findSubstring oldSubText curText
-              subLen = length oldSubText
-              (underlineLine, resultLine) =
-                case pos of
-                  Just ix | subLen >= 3 ->
-                    let underline = replicate ix ' ' ++ "└" ++ replicate (subLen - 2) '─' ++ "┘"
-                        centerOffset = ix + subLen `div` 2
-                        result = replicate centerOffset ' ' ++ newSubText
-                    in (underline, result)
-                  Just ix -> ("", replicate ix ' ' ++ newSubText)
-                  Nothing -> ("", "")
-              pointerLines = filter (not . null) [underlineLine, resultLine]
-              sep = if null pointerLines then [] else [""]
+          let pointerLines = pointerLinesFor pointerIndent curText oldSubText newSubText
+              sep = [""]
               linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ curText']
-          replayUntilFixedPoint arrow renderInput renderOutput (cur', curText', linesAcc') restSteps
+          replayUntilFixedPoint arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') restSteps
 
 substituteFirstByHead :: Exp Ann -> Exp Ann -> Exp Ann -> Maybe (Exp Ann, Exp Ann, Exp Ann)
 substituteFirstByHead from to expr = go False expr
@@ -744,6 +700,35 @@ findSubstring sub str = go 0 str
     go idx s@(_:rest)
       | sub `isPrefixOf` s = Just idx
       | otherwise = go (idx + 1) rest
+
+-- | Build underline/result lines for a highlighted sub-expression.
+-- If the rendered sub-expression is wrapped in one outer parenthesis pair,
+-- prefer highlighting its inner text.
+pointerLinesFor :: String -> String -> String -> String -> [String]
+pointerLinesFor pointerIndent wholeText subText resultText =
+  case chooseNeedle of
+    Nothing -> []
+    Just (ix, needle) ->
+      let subLen = length needle
+      in if ix == 0 && subLen == length wholeText
+           then []
+           else if subLen >= 3
+                  then
+                    let underline = pointerIndent ++ replicate ix ' ' ++ "└" ++ replicate (subLen - 2) '─' ++ "┘"
+                        centerOffset = ix + subLen `div` 2
+                        result = pointerIndent ++ replicate centerOffset ' ' ++ resultText
+                    in [underline, result]
+                  else [pointerIndent ++ replicate ix ' ' ++ resultText]
+  where
+    chooseNeedle =
+      let stripped = stripOuterParens subText
+          candidates = nub [stripped, subText]
+          withPos = mapMaybe (\cand -> fmap (\ix -> (ix, cand)) (findSubstring cand wholeText)) candidates
+      in listToMaybe withPos
+
+    stripOuterParens s
+      | length s >= 2 && head s == '(' && last s == ')' = tail (init s)
+      | otherwise = s
 
 -- | Process a single sub-step using AST-level substitution.
 -- Returns the updated parent AST, rendered parent string, and accumulated output lines.

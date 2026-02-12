@@ -842,9 +842,20 @@ renderExpPreservingCase cache fsm evalSt expr =
         Just clauseBody -> renderExpPreservingCase cache fsm evalSt clauseBody
         Nothing -> do
           -- Scrutinee not yet evaluated, show full match
-          scrutStr <- renderExpPreservingCase cache fsm evalSt scrutinee
+          scrutStrRaw <- renderExpPreservingCase cache fsm evalSt scrutinee
+          let shouldParenthesizeScrutinee exp' =
+                case exp' of
+                  Var {} -> False
+                  App {fn = Var {varCandidates}, args} ->
+                    case lookupCtorSig (M.toList (evalCtors evalSt)) varCandidates of
+                      Just (_, (argTys, _)) -> length argTys == length args
+                      Nothing -> True
+                  _ -> True
+              scrutStr = if shouldParenthesizeScrutinee scrutinee
+                           then "(" ++ scrutStrRaw ++ ")"
+                           else scrutStrRaw
           clauseStrs <- mapM (renderClausePC cache fsm evalSt scrutStr) clauses
-          return ("(" ++ intercalate ", " clauseStrs ++ ")")
+          return (intercalate ", " clauseStrs)
     Seq {first, second} -> do
       firstStr <- renderExpPreservingCase cache fsm evalSt first
       secondStr <- renderExpPreservingCase cache fsm evalSt second
@@ -918,6 +929,7 @@ selectMatchingClause scrut clauses =
     matchesPattern (App _ (Var _ _ cands) args) (PCtor (ctorName, _) pats) =
       any (\(ident, _) -> ident == ctorName) cands && length args == length pats
     matchesPattern _ _ = False
+
 
 -- | Render a pattern preserving case annotations.
 renderPatPC :: RenderCache -> FSM -> String -> Pat Ann -> IO String
