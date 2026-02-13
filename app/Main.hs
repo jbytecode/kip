@@ -393,15 +393,16 @@ replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur
       Nothing -> continueOrFallback (current, currentText, accLines) steps
       Just (idx, step, next) -> do
         let matchedChild = fromMaybe (tsInput step) (findFirstChild (tsInput step) current)
+            next' = collapseSeqBindAfterStep next
         subInput <- renderInput matchedChild
         subOutput <- renderOutput (tsOutput step)
-        nextText <- renderInput next
+        nextText <- renderInput next'
         let pointerLines = pointerLinesForColored useColor pointerIndent currentText subInput subOutput
             highlightedNext = highlightSubstring useColor subOutput nextText
             sep = [""]
             newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ highlightedNext]
             rest = removeAt idx steps
-        replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (next, nextText, newLines) rest
+        replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (next', nextText, newLines) rest
   where
     continueOrFallback state@(cur, curText, linesAcc) restSteps =
       case findHeadFallback cur restSteps of
@@ -734,6 +735,19 @@ reduceSeqFirst expr =
         Nothing -> do
           (oldSub, newSub, xs') <- reduceInArgs xs
           return (oldSub, newSub, x : xs')
+
+-- | Collapse a top-level Seq/Bind once after a regular step replay.
+-- This skips an unhelpful intermediate like:
+--   "isim için <değer>, ... "
+-- and jumps directly to the substituted continuation.
+collapseSeqBindAfterStep :: Exp Ann -> Exp Ann
+collapseSeqBindAfterStep expr =
+  case expr of
+    Seq _ (Bind _ _ _ bindExp) _ | isTraceValue bindExp ->
+      case reduceSeqFirst expr of
+        Just (_, _, collapsed) -> collapsed
+        Nothing -> expr
+    _ -> expr
 
 -- | Format steps grouped by top-level evaluation.
 formatStepsGrouped :: Bool
