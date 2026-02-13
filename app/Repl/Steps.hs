@@ -286,18 +286,21 @@ substituteFirstByHead from to = go False
                 Nothing -> Nothing
             _ -> Nothing
 
-    goArgs ann f pref [] = Nothing
-    goArgs ann f pref (x:xs) =
+    goArgs ann f revPref [] = Nothing
+    goArgs ann f revPref (x:xs) =
       case go True x of
-        Just (oldSub, newSub, x') -> Just (oldSub, newSub, App ann f (pref ++ (x' : xs)))
-        Nothing -> goArgs ann f (pref ++ [x]) xs
+        Just (oldSub, newSub, x') ->
+          let pref = reverse revPref
+          in Just (oldSub, newSub, App ann f (pref ++ (x' : xs)))
+        Nothing -> goArgs ann f (x : revPref) xs
 
-    goClauses ann scr pref [] = Nothing
-    goClauses ann scr pref (Clause p b:rest) =
+    goClauses ann scr revPref [] = Nothing
+    goClauses ann scr revPref (Clause p b:rest) =
       case go True b of
         Just (oldSub, newSub, b') ->
-          Just (oldSub, newSub, Match ann scr (pref ++ (Clause p b' : rest)))
-        Nothing -> goClauses ann scr (pref ++ [Clause p b]) rest
+          let pref = reverse revPref
+          in Just (oldSub, newSub, Match ann scr (pref ++ (Clause p b' : rest)))
+        Nothing -> goClauses ann scr (Clause p b : revPref) rest
 
     sameHead (App _ fromFn fromArgs) (App _ exprFn exprArgs) =
       eqTraceExp fromFn exprFn
@@ -313,20 +316,23 @@ pickStep :: Exp Ann
          -> [TraceStep]
          -> IO (Maybe (Int, TraceStep, Exp Ann))
 pickStep current currentText renderInput steps = do
-  let matches0 =
-        [ (i, s, next)
-        | (i, s) <- zip [0..] steps
-        , let (changed, next) = substituteFirstChild (tsInput s) (tsOutput s) current
-        , changed
-        ]
   case reduceTopBooleanMatch current of
-    Just (_, nextTop) ->
-      return (find (\(_, _, n) -> eqTraceExp n nextTop) matches0)
-    Nothing ->
-      return $
-        case matches0 of
-          x:_ -> Just x
-          [] -> Nothing
+    Just (_, nextTop) -> return (findMatchingNextTop 0 nextTop steps)
+    Nothing -> return (findFirstApplicable 0 steps)
+  where
+    findFirstApplicable _ [] = Nothing
+    findFirstApplicable i (s:ss) =
+      let (changed, next) = substituteFirstChild (tsInput s) (tsOutput s) current
+      in if changed
+           then Just (i, s, next)
+           else findFirstApplicable (i + 1) ss
+
+    findMatchingNextTop _ _ [] = Nothing
+    findMatchingNextTop i nextTop (s:ss) =
+      let (changed, next) = substituteFirstChild (tsInput s) (tsOutput s) current
+      in if changed && eqTraceExp next nextTop
+           then Just (i, s, next)
+           else findMatchingNextTop (i + 1) nextTop ss
 
 -- | Remove element at the given index from a list.
 removeAt :: Int -> [a] -> [a]
@@ -665,16 +671,20 @@ dedupeGroupBoundaries (g:gs) = reverse (foldl' step [g] gs)
 groupByTopLevel :: [(Int, TraceStep)] -> IO [[(Int, TraceStep)]]
 groupByTopLevel [] = return []
 groupByTopLevel steps = do
-  let go [] currentSubs groups =
-        case (currentSubs, reverse groups) of
-          ([], gs) -> reverse gs
-          (subs, []) -> []
-          (subs, lastGroup:restRev) -> reverse ((lastGroup ++ subs) : restRev)
-      go ((i, s):xs) currentSubs groups
-        | tsDepth s > 0 = go xs (currentSubs ++ [(i, s)]) groups
+  let go [] currentSubsRev groupsRev =
+        case groupsRev of
+          [] -> []
+          lastGroupRev:restRev ->
+            let groupsWithTrailingSubs =
+                  if null currentSubsRev
+                    then groupsRev
+                    else (currentSubsRev ++ lastGroupRev) : restRev
+            in map reverse (reverse groupsWithTrailingSubs)
+      go ((i, s):xs) currentSubsRev groupsRev
+        | tsDepth s > 0 = go xs ((i, s) : currentSubsRev) groupsRev
         | otherwise =
-            let grp = currentSubs ++ [(i, s)]
-            in go xs [] (groups ++ [grp])
+            let grpRev = (i, s) : currentSubsRev
+            in go xs [] (grpRev : groupsRev)
   return (go steps [] [])
 
 -- | Format a single group (sub-steps followed by their parent top-level step).
