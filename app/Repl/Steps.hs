@@ -5,6 +5,7 @@
 module Repl.Steps
   ( formatSteps
   , stripStepsCopulaTRmorph
+  , shouldSkipInfinitiveSteps
   , setTopCaseNom
   ) where
 
@@ -57,6 +58,30 @@ formatSteps useColor renderInput renderOutput finalExp steps = do
         | otherwise = formatted ++ "\n\n" ++ finalLine
   let suffix = if truncated then "(1000 adım sınırına ulaşıldı)\n" else ""
   return (formatted' ++ suffix)
+
+-- | Check whether a :steps expression is an infinitive reference.
+-- Such expressions should not be stepped or evaluated in :steps mode.
+shouldSkipInfinitiveSteps :: RenderCache -> FSM -> Exp Ann -> IO Bool
+shouldSkipInfinitiveSteps cache fsm = go
+  where
+    go exp' =
+      case exp' of
+        App _ fn _ -> isInfinitiveHead fn
+        Var {} -> isInfinitiveHead exp'
+        Ascribe _ _ e -> go e
+        _ -> return False
+
+    isInfinitiveHead expr =
+      case expr of
+        Var _ varName varCandidates -> do
+          byName <- hasInfinitiveAnalysis varName
+          byCandidates <- or <$> mapM (hasInfinitiveAnalysis . fst) varCandidates
+          return (byName || byCandidates)
+        _ -> return False
+
+    hasInfinitiveAnalysis ident = do
+      analyses <- Kip.Render.upsCached cache fsm (T.pack (Kip.Render.prettyIdent ident))
+      return (any (T.isInfixOf "<vn:inf><N>") analyses)
 
 -- | Format steps by replaying trace transitions.
 -- Finds the starting expression and then replays each evaluation step,

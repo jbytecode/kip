@@ -45,7 +45,7 @@ import Kip.TypeCheck
 import qualified Kip.TypeCheck as TC
 import Kip.Render
 import Kip.Cache
-import Repl.Steps (formatSteps, setTopCaseNom, stripStepsCopulaTRmorph)
+import Repl.Steps (formatSteps, setTopCaseNom, shouldSkipInfinitiveSteps, stripStepsCopulaTRmorph)
 import Kip.Runner (Lang(..), renderEvalError)
 import Kip.Codegen.JS (codegenProgram)
 import Data.Word
@@ -1110,25 +1110,29 @@ main = do
                   emitMsgTCtx (MsgTCError tcErr (Just (T.pack expr)) paramTyCons (replTyMods rs))
                   loop rs
                 Right (parsed', _) -> do
-                  res <- liftIO $ catch
-                    (Right <$> runEvalM (evalExpTraced parsed') (replEvalState rs))
-                    (\UserInterrupt -> return (Left ()))
-                  case res of
-                    Left () -> do
-                      emitMsgTCtx MsgCtrlC
-                      loop rs
-                    Right (Left evalErr) -> do
-                      emitMsgTCtx (MsgEvalError evalErr)
-                      loop rs
-                    Right (Right ((result, steps), evalSt')) -> do
-                      ctx <- ask
-                      (cache, fsm') <- runApp requireCacheFsm
-                      let renderSteps exp = renderExpPreservingCase cache fsm' evalSt' exp >>= stripStepsCopulaTRmorph cache fsm'
-                          rInput = renderSteps
-                          rOutput = renderSteps . setTopCaseNom
-                      formatted <- liftIO (formatSteps (rcUseColor ctx) rInput rOutput result steps)
-                      lift (outputStrLn formatted)
-                      loop rs
+                  (cache, fsm') <- runApp requireCacheFsm
+                  skipSteps <- liftIO (shouldSkipInfinitiveSteps cache fsm' parsed')
+                  if skipSteps
+                    then loop rs
+                    else do
+                      res <- liftIO $ catch
+                        (Right <$> runEvalM (evalExpTraced parsed') (replEvalState rs))
+                        (\UserInterrupt -> return (Left ()))
+                      case res of
+                        Left () -> do
+                          emitMsgTCtx MsgCtrlC
+                          loop rs
+                        Right (Left evalErr) -> do
+                          emitMsgTCtx (MsgEvalError evalErr)
+                          loop rs
+                        Right (Right ((result, steps), evalSt')) -> do
+                          ctx <- ask
+                          let renderSteps exp = renderExpPreservingCase cache fsm' evalSt' exp >>= stripStepsCopulaTRmorph cache fsm'
+                              rInput = renderSteps
+                              rOutput = renderSteps . setTopCaseNom
+                          formatted <- liftIO (formatSteps (rcUseColor ctx) rInput rOutput result steps)
+                          lift (outputStrLn formatted)
+                          loop rs
       | otherwise = do
           fsm <- runApp requireFsm
           (uCache, dCache) <- runApp requireParserCaches
