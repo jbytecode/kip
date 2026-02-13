@@ -53,7 +53,7 @@ import Crypto.Hash.SHA256 (hash)
 import qualified Data.ByteString as BS
 
 import Data.Version (showVersion)
-import Data.Char (isAlpha, isDigit, toLower)
+import Data.Char (isAlpha, isDigit, toLower, isAsciiUpper, isAsciiLower)
 
 -- | REPL runtime state (parser/type context + evaluator).
 data ReplState =
@@ -304,10 +304,13 @@ formatSteps useColor renderInput renderOutput finalExp steps = do
     finalStr <- renderInput finalExp
     let arrow = if useColor then dim "⇝ " else "⇝ "
     return (arrow ++ finalStr)
-  let formatted'
+  let formattedPlain = stripAnsiForCompare formatted
+      finalPlain = stripAnsiForCompare finalLine
+      finalPreservedPlain = stripAnsiForCompare finalLinePreserved
+      formatted'
         | null formatted = finalLine
-        | finalLine `isSuffixOf` formatted
-          || finalLinePreserved `isSuffixOf` formatted = formatted
+        | finalPlain `isSuffixOf` formattedPlain
+          || finalPreservedPlain `isSuffixOf` formattedPlain = formatted
         | otherwise = formatted ++ "\n\n" ++ finalLine
   let suffix = if truncated then "(1000 adım sınırına ulaşıldı)\n" else ""
   return (formatted' ++ suffix)
@@ -335,12 +338,28 @@ formatStepsReplay useColor renderInput renderOutput steps = do
       let top = steps !! i
           before = take i steps
           after = drop (i + 1) steps
-      in if not (null after) then replay (tsOutput top) after    -- expansion (e.g. factorial)
+          isSeq = case tsInput top of { Seq {} -> True; _ -> False }
+      in if isSeq && not (null before)
+           then replay (tsInput top) (before ++ after)  -- Seq: start from input, replay all
+         else if not (null after) then replay (tsOutput top) after    -- expansion (e.g. factorial)
          else if not (null before) then replay (tsInput top) before  -- sub-eval (e.g. nested sum)
          else return ""                                              -- simple one-step result
     Nothing -> case steps of
       s : _ -> replay (tsInput s) steps
-      []    -> return ""
+
+-- | Remove ANSI escape sequences for robust string comparisons.
+stripAnsiForCompare :: String -> String
+stripAnsiForCompare [] = []
+stripAnsiForCompare ('\ESC':'[':xs) = stripAnsiForCompare (dropAnsiCode xs)
+stripAnsiForCompare (x:xs) = x : stripAnsiForCompare xs
+
+dropAnsiCode :: String -> String
+dropAnsiCode [] = []
+dropAnsiCode (y:ys)
+  | isAsciiLetter y = ys
+  | otherwise = dropAnsiCode ys
+  where
+    isAsciiLetter c = isAsciiUpper c || isAsciiLower c
 
 -- | Repeatedly apply the shallowest matching step until no step applies.
 -- This is the core algorithm that reconstructs the evaluation trace.
@@ -395,7 +414,19 @@ replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur
               sep = [""]
               linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ highlightedCur]
           replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') (removeAt idx restSteps)
+        Nothing -> reduceSeqFallback state restSteps
+    reduceSeqFallback state@(cur, curText, linesAcc) restSteps =
+      case reduceSeqFirst cur of
         Nothing -> reduceBooleanFallback state restSteps
+        Just (oldSub, newSub, cur') -> do
+          oldSubText <- renderInput oldSub
+          newSubText <- renderOutput newSub
+          curText' <- renderInput cur'
+          let pointerLines = pointerLinesForColored useColor pointerIndent curText oldSubText newSubText
+              highlightedCur = highlightSubstring useColor newSubText curText'
+              sep = [""]
+              linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ highlightedCur]
+          replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') restSteps
     findHeadFallback curExpr steps' =
       let candidates =
             [ (i, oldSub, newSub, cur')
@@ -613,6 +644,96 @@ reduceTopBooleanMatch exp' =
       body <- pickBoolClause scr clauses
       return (exp', body)
     _ -> Nothing
+
+-- ============================================================================
+-- Seq/Bind Reduction
+-- ============================================================================
+-- Special handling for sequential composition (Seq/Bind) in the replay.
+-- When a Bind's expression has been fully evaluated, we can substitute it
+-- into the continuation body.
+
+-- | Check if an expression is a fully-evaluated trace value.
+isTraceValue :: Exp Ann -> Bool
+isTraceValue (IntLit _ _)   = True
+isTraceValue (FloatLit _ _) = True
+isTraceValue (StrLit _ _)   = True
+isTraceValue Var {}          = True
+isTraceValue _              = False
+
+-- | Substitute a single bind variable in an expression.
+-- Replaces occurrences of @name@ with @value@, preserving the variable's
+-- case annotation on the substituted value.
+substituteBindVar :: Identifier -> Exp Ann -> Exp Ann -> Exp Ann
+substituteBindVar name value = go
+  where
+    go expr = case expr of
+      Var ann vName candidates
+        | vName == name || any (\(c, _) -> c == name) candidates ->
+            copyCase expr value
+        | otherwise -> expr
+      App ann f args     -> App ann (go f) (map go args)
+      Match ann scr cls  -> Match ann (go scr) (map goClause cls)
+      Seq ann f s        -> Seq ann (go f) (go s)
+      Bind ann nm na be  -> Bind ann nm na (go be)
+      Let ann nm b       -> Let ann nm (go b)
+      Ascribe ann ty e   -> Ascribe ann ty (go e)
+      _                  -> expr
+    goClause (Clause p e) = Clause p (go e)
+
+-- | Reduce the first reducible Seq found in pre-order traversal.
+-- Returns (old expression, new expression, updated parent expression).
+--
+-- Two reduction rules:
+--   1. @Seq (Bind x value) body@ where @value@ is a trace value
+--      → substitute @x → value@ in @body@
+--   2. @Seq first second@ where @first@ is a trace value (e.g. bitimlik)
+--      → @second@
+reduceSeqFirst :: Exp Ann -> Maybe (Exp Ann, Exp Ann, Exp Ann)
+reduceSeqFirst expr =
+  case expr of
+    Seq ann (Bind _ bName _ bExp) second
+      | isTraceValue bExp ->
+          let result = copyCase expr (substituteBindVar bName bExp second)
+          in Just (expr, result, result)
+    Seq _ f second
+      | isTraceValue f ->
+          let result = copyCase expr second
+          in Just (expr, result, result)
+    -- Recurse into sub-expressions
+    App ann fn args ->
+      case reduceSeqFirst fn of
+        Just (oldSub, newSub, fn') -> Just (oldSub, newSub, App ann fn' args)
+        Nothing -> do
+          (oldSub, newSub, args') <- reduceInArgs args
+          return (oldSub, newSub, App ann fn args')
+    Match ann scr clauses ->
+      case reduceSeqFirst scr of
+        Just (oldSub, newSub, scr') -> Just (oldSub, newSub, Match ann scr' clauses)
+        Nothing -> Nothing
+    Seq ann f s ->
+      case reduceSeqFirst f of
+        Just (oldSub, newSub, f') -> Just (oldSub, newSub, Seq ann f' s)
+        Nothing -> do
+          (oldSub, newSub, s') <- reduceSeqFirst s
+          return (oldSub, newSub, Seq ann f s')
+    Bind ann nm na be -> do
+      (oldSub, newSub, be') <- reduceSeqFirst be
+      return (oldSub, newSub, Bind ann nm na be')
+    Let ann nm b -> do
+      (oldSub, newSub, b') <- reduceSeqFirst b
+      return (oldSub, newSub, Let ann nm b')
+    Ascribe ann ty e -> do
+      (oldSub, newSub, e') <- reduceSeqFirst e
+      return (oldSub, newSub, Ascribe ann ty e')
+    _ -> Nothing
+  where
+    reduceInArgs [] = Nothing
+    reduceInArgs (x:xs) =
+      case reduceSeqFirst x of
+        Just (oldSub, newSub, x') -> Just (oldSub, newSub, x' : xs)
+        Nothing -> do
+          (oldSub, newSub, xs') <- reduceInArgs xs
+          return (oldSub, newSub, x : xs')
 
 -- | Format steps grouped by top-level evaluation.
 formatStepsGrouped :: Bool
@@ -1912,7 +2033,7 @@ main = do
               loop rs
             Right parsed -> do
               let paramTyCons = [name | (name, arity) <- replTyCons rs, arity > 0]
-              liftIO (runTCM (tcExp1 parsed) (replTCState rs)) >>= \case
+              liftIO (runTCM (tcExp1With True parsed) (replTCState rs)) >>= \case
                 Left tcErr -> do
                   emitMsgTCtx (MsgTCError tcErr (Just (T.pack expr)) paramTyCons (replTyMods rs))
                   loop rs

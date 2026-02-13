@@ -140,8 +140,15 @@ mkReplTest :: FilePath -- ^ Kip executable path.
            -> TestTree -- ^ Test case.
 mkReplTest kipPath path =
   testCase path $ do
-    input <- readFile path
-    (exitCode, stdout, stderr) <- readProcessWithExitCode kipPath [] input
+    replInput <- readFile path
+    stdinExtra <- readIfExists (replaceExtension path "in")
+    let stdinText = case stdinExtra of
+          Nothing -> replInput
+          Just extra ->
+            if null replInput || last replInput == '\n'
+              then replInput ++ extra
+              else replInput ++ "\n" ++ extra
+    (exitCode, stdout, stderr) <- readProcessWithExitCode kipPath [] stdinText
     case exitCode of
       ExitFailure _ ->
         assertFailure (path ++ " failed:\n" ++ stdout ++ stderr)

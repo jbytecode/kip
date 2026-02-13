@@ -971,7 +971,7 @@ stripCaseRoots mods word =
 lookupByCandidateSuffixHM :: HM.HashMap Identifier a
                           -> [(Identifier, Case)]
                           -> Maybe a
-lookupByCandidateSuffixHM env candidates = go candidates
+lookupByCandidateSuffixHM env = go
   where
     go [] = Nothing
     go (((mods, word), _):rest) =

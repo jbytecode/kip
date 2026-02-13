@@ -32,7 +32,7 @@ module Kip.Render
   ) where
 
 import Data.Char (isLetter, isLower, isDigit, isSpace)
-import Data.List (intercalate, maximumBy, find, isInfixOf, isSuffixOf, isPrefixOf, intersect, nub)
+import Data.List (intercalate, maximumBy, find, isInfixOf, isSuffixOf, isPrefixOf, stripPrefix, intersect, nub)
 import qualified Data.Bifunctor as B
 import Data.Maybe (fromMaybe, catMaybes)
 import qualified Data.Map.Strict as M
@@ -832,8 +832,8 @@ renderExpPreservingCase cache fsm evalSt expr =
       renderIntWithCase cache fsm (annCase annExp) intVal
     FloatLit {annExp, floatVal} ->
       renderFloatWithCase cache fsm (annCase annExp) floatVal
-    StrLit {lit} ->
-      return ("\"" ++ T.unpack lit ++ "\"")
+    StrLit {annExp, lit} ->
+      renderStrLitWithCase cache fsm (annCase annExp) lit
     Var {annExp, varName, varCandidates} ->
       renderVarWithCase cache fsm varName annExp varCandidates (annCase annExp)
     App {annExp, fn, args} ->
@@ -894,7 +894,12 @@ renderAppPC cache fsm evalSt appAnn fn' args' = do
       topCase = annCase appAnn
   fnStr <- case fn' of
     Var {annExp = fnAnn, varName, varCandidates} -> do
+      let fnName = case varCandidates of
+            (ident, _):_ -> ident
+            [] -> varName
+          isWritePrimName (mods, name) = null mods && name == T.pack "yaz"
       let fnCases
+            | isWritePrimName fnName && not (null args') = [Nom]
             | null args' = [topCase]
             | topCase == Nom || topCase == P3s = [P3s]
             | otherwise = [P3s, topCase]
@@ -905,9 +910,6 @@ renderAppPC cache fsm evalSt appAnn fn' args' = do
       case targetCase of
         Just tc | annCase fnAnn == tc -> return (prettyIdent varName)
         _ -> do
-          let fnName = case varCandidates of
-                (ident, _):_ -> ident
-                [] -> varName
           renderIdentWithCases cache fsm fnName fnCases
     _ -> renderExpPreservingCase cache fsm evalSt fn'
   return (unwords (argStrs' ++ [fnStr]))
@@ -938,9 +940,9 @@ selectMatchingClause scrut clauses =
     findMatchingClauseBody :: Exp Ann -> [Clause Ann] -> Maybe (Exp Ann)
     findMatchingClauseBody _ [] = Nothing
     findMatchingClauseBody s (Clause pat body : rest) =
-      case matchesPattern s pat of
-        True -> Just body
-        False -> findMatchingClauseBody s rest
+      if matchesPattern s pat
+        then Just body
+        else findMatchingClauseBody s rest
 
     matchesPattern :: Exp Ann -> Pat Ann -> Bool
     matchesPattern _ (PWildcard _) = True
@@ -1106,6 +1108,22 @@ applyCaseToLastWord cache fsm cas s =
       in if null revWord
         then Nothing
         else Just (reverse revPrefix, reverse revWord, reverse revSuffix)
+
+-- | Render a quoted string literal with a case suffix (if any).
+renderStrLitWithCase :: RenderCache -> FSM -> Case -> Text -> IO String
+renderStrLitWithCase cache fsm cas litText = do
+  let bare = T.unpack litText
+      quoted = "\"" ++ bare ++ "\""
+  if cas == Nom
+    then return quoted
+    else do
+      inflected <- renderIdentWithCases cache fsm ([], litText) [cas]
+      let suffix = maybe "'i" quoteSuffix (stripPrefix bare inflected)
+      return (quoted ++ suffix)
+  where
+    quoteSuffix "" = ""
+    quoteSuffix s@('\'':_) = s
+    quoteSuffix s = '\'' : s
 
 -- | Wrap a string in parentheses when it contains whitespace.
 wrapIfNeeded :: String -- ^ Input string.
