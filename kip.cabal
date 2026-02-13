@@ -82,6 +82,7 @@ executable kip
   main-is: Main.hs
   other-modules:
       Paths_kip
+      Repl.Steps
   hs-source-dirs:
       app
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
