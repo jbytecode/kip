@@ -34,7 +34,7 @@ module Kip.Render
 import Data.Char (isLetter, isLower, isDigit, isSpace, isAlphaNum)
 import Data.List (intercalate, maximumBy, minimumBy, find, isInfixOf, isSuffixOf, isPrefixOf, stripPrefix, intersect, nub)
 import qualified Data.Bifunctor as B
-import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
+import Data.Maybe (fromMaybe, catMaybes, listToMaybe, maybeToList)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -1467,11 +1467,25 @@ renderFloatWithCase :: RenderCache -- ^ Render cache.
 renderFloatWithCase cache fsm cas n = do
   let base = show (abs n)
       prefix = if n < 0 then "-" else ""
-  if cas == Nom
+      commaBase = map (\c -> if c == '.' then ',' else c) base
+      suffixFrom inflected =
+        listToMaybe
+          [ s
+          | b <- [base, commaBase]
+          , s <- maybeToList (stripPrefix b inflected)
+          ]
+      withQuoteSuffix "" = ""
+      withQuoteSuffix s@('\'':_) = s
+      withQuoteSuffix s = '\'' : s
+  if cas == Nom || cas == P3s
     then return (prefix ++ base)
     else do
       inflected <- renderIdentWithCases cache fsm ([], T.pack base) [cas]
-      return (prefix ++ inflected)
+      let rendered =
+            case suffixFrom inflected of
+              Just suf -> base ++ withQuoteSuffix suf
+              Nothing -> inflected
+      return (prefix ++ rendered)
 
 -- | Render a variable with the requested case, using candidates if present.
 renderVarWithCase :: RenderCache -- ^ Render cache.
