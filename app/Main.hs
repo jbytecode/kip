@@ -329,7 +329,7 @@ formatStepsReplay useColor renderInput renderOutput steps = do
       pointerIndent = "  "
       mStartIdx = findIndex (\s -> tsDepth s == 0) steps
       replay expr rest = do
-        txt <- renderInput expr
+        txt <- renderOutput expr
         (_, _, outLines) <- replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput
           (expr, txt, [arrow ++ txt]) rest
         return (intercalate "\n" outLines)
@@ -393,17 +393,43 @@ replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur
       Nothing -> continueOrFallback (current, currentText, accLines) steps
       Just (idx, step, next) -> do
         let matchedChild = fromMaybe (tsInput step) (findFirstChild (tsInput step) current)
-            next' = collapseSeqBindAfterStep next
-        subInput <- renderInput matchedChild
-        subOutput <- renderOutput (tsOutput step)
-        nextText <- renderInput next'
-        let pointerLines = pointerLinesForColored useColor pointerIndent currentText subInput subOutput
-            highlightedNext = highlightSubstring useColor subOutput nextText
-            sep = [""]
-            newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ highlightedNext]
             rest = removeAt idx steps
-        replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (next', nextText, newLines) rest
+            (next', useOutputRender) = collapseSeqAfterStep next
+            renderInput' = if useOutputRender then renderOutput else renderInput
+        subInput <- renderSubInputForPointer currentText matchedChild
+        subOutput <- renderOutput (tsOutput step)
+        nextText <- renderInput' next'
+        if stripAnsiForCompare nextText == stripAnsiForCompare currentText
+          then replayUntilFixedPoint useColor arrow pointerIndent renderInput' renderOutput (next', nextText, accLines) rest
+          else do
+            let pointerLines = pointerLinesForColored useColor pointerIndent currentText subInput subOutput
+                highlightedNext = highlightSubstring useColor subOutput nextText
+                sep = [""]
+                newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ highlightedNext]
+            replayUntilFixedPoint useColor arrow pointerIndent renderInput' renderOutput (next', nextText, newLines) rest
   where
+    renderSubInputForPointer curTxt subExpr = do
+      base <- renderInput subExpr
+      let baseNorm = stripAnsiForCompare base
+          curNorm = stripAnsiForCompare curTxt
+      let ann = annExp subExpr
+          dummyName = ([], T.pack "_")
+          bindExpr = Bind ann dummyName ann subExpr
+      bindTxt <- renderInput bindExpr
+      let marker = "için "
+          markerLen = length marker
+          alt =
+            case findIndex (isPrefixOf marker) (tails bindTxt) of
+              Just i -> drop (i + markerLen) bindTxt
+              Nothing -> bindTxt
+          altNorm = stripAnsiForCompare alt
+          baseHit = length baseNorm >= 3 && baseNorm `isInfixOf` curNorm
+          altHit = length altNorm >= 3 && altNorm `isInfixOf` curNorm
+      case (baseHit, altHit) of
+        (True, True) -> return (if length altNorm > length baseNorm then alt else base)
+        (False, True) -> return alt
+        _ -> return base
+
     continueOrFallback state@(cur, curText, linesAcc) restSteps =
       case findHeadFallback cur restSteps of
         Just (idx, oldSub, newSub, cur') -> do
@@ -450,7 +476,6 @@ replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur
               sep = [""]
               linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ highlightedCur]
           replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') restSteps
-
 -- | Try to substitute by matching the "head" of application expressions.
 -- This is a more lenient matching strategy used as a fallback.
 --
@@ -698,7 +723,7 @@ reduceSeqFirst expr =
           in Just (expr, result, result)
     Seq _ f second
       | isTraceValue f ->
-          let result = copyCase expr second
+          let result = second
           in Just (expr, result, result)
     -- Recurse into sub-expressions
     App ann fn args ->
@@ -736,18 +761,20 @@ reduceSeqFirst expr =
           (oldSub, newSub, xs') <- reduceInArgs xs
           return (oldSub, newSub, x : xs')
 
--- | Collapse a top-level Seq/Bind once after a regular step replay.
--- This skips an unhelpful intermediate like:
---   "isim için <değer>, ... "
--- and jumps directly to the substituted continuation.
-collapseSeqBindAfterStep :: Exp Ann -> Exp Ann
-collapseSeqBindAfterStep expr =
+-- | Collapse a top-level sequence once after a regular step replay.
+-- Returns (collapsed expression, render collapsed step with output renderer).
+collapseSeqAfterStep :: Exp Ann -> (Exp Ann, Bool)
+collapseSeqAfterStep expr =
   case expr of
     Seq _ (Bind _ _ _ bindExp) _ | isTraceValue bindExp ->
       case reduceSeqFirst expr of
-        Just (_, _, collapsed) -> collapsed
-        Nothing -> expr
-    _ -> expr
+        Just (_, _, collapsed) -> (collapsed, False)
+        Nothing -> (expr, False)
+    Seq _ first _ | isTraceValue first ->
+      case reduceSeqFirst expr of
+        Just (_, _, collapsed) -> (collapsed, True)
+        Nothing -> (expr, False)
+    _ -> (expr, False)
 
 -- | Format steps grouped by top-level evaluation.
 formatStepsGrouped :: Bool
@@ -806,7 +833,9 @@ stripStepsCopulaTRmorph cache fsm s = do
     processSegment analysisMap (True, word) = do
       let analyses = Map.findWithDefault [] word analysisMap
           hasCopula = any (T.isInfixOf "<0><V><cpl:") analyses
-      return $ if hasCopula
+          hasLexicalVerb =
+            any (\a -> T.isInfixOf "<V>" a && not (T.isInfixOf "<0><V><cpl:" a)) analyses
+      return $ if hasCopula && not hasLexicalVerb
                then stripCopulaSuffixManual word
                else word
 
@@ -994,11 +1023,10 @@ pointerLinesForColored useColor pointerIndent wholeText subText resultText =
     buildLongPointer ix subLen =
       let boxDrawing = "└" ++ replicate (subLen - 2) '─' ++ "┘"
           underline = pointerIndent ++ replicate ix ' ' ++ applyColor boxDrawing dim
-          -- Center the result text under the underline
-          resultWidth = length resultText
-          resultStart
-            | resultWidth >= subLen = ix
-            | otherwise = ix + ((subLen - resultWidth) `div` 2)
+          resultStart =
+            let gap = subLen - length resultText
+                centered = if gap <= 2 then 0 else gap `div` 2
+            in ix + max 0 centered
           result = pointerIndent ++ replicate resultStart ' ' ++ applyColor resultText blue
       in [underline, result]
 
