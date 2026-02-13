@@ -12,7 +12,7 @@ import Data.List
 import Options.Applicative hiding (ParseError)
 import System.FilePath ((</>), joinPath, takeDirectory, takeExtension)
 
-import Control.Monad (forM, forM_, when, unless, filterM)
+import Control.Monad (forM, forM_, foldM, when, unless, filterM)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
@@ -24,7 +24,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Text.Encoding (encodeUtf8)
-import Data.Maybe (fromMaybe, isJust, maybeToList, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, maybeToList, listToMaybe, mapMaybe)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Map.Strict as Map
@@ -39,12 +39,13 @@ import System.Console.Chalk
 import Kip.Parser
 import Kip.AST
 import qualified Data.HashTable.IO as HT
-import Kip.Eval (EvalState, EvalM, EvalError, emptyEvalState, runEvalM, evalExp, evalStmt, evalStmtInFile, evalRender)
+import Kip.Eval (EvalState, EvalM, EvalError, emptyEvalState, runEvalM, evalExp, evalExpTraced, evalStmt, evalStmtInFile, evalRender)
 import qualified Kip.Eval as Eval
 import Kip.TypeCheck
 import qualified Kip.TypeCheck as TC
 import Kip.Render
 import Kip.Cache
+import Repl.Steps (formatSteps, setTopCaseNom, shouldSkipInfinitiveSteps, stripStepsCopulaTRmorph)
 import Kip.Runner (Lang(..), renderEvalError)
 import Kip.Codegen.JS (codegenProgram)
 import Data.Word
@@ -273,7 +274,6 @@ runApp action = do
   ctx <- ask
   liftIO (runReaderT action ctx)
 
--- | Render a message or fall back to a generic error.
 renderCompilerMsgBasicOrDie :: CompilerMsg -- ^ Message to render.
                             -> RenderM Text -- ^ Rendered text.
 renderCompilerMsgBasicOrDie msg = do
@@ -1095,6 +1095,44 @@ main = do
                   unless (T.null (T.strip remaining)) $
                     lift (outputStrLn ("Remaining: " ++ T.unpack remaining))
           loop rs
+      | Just expr <- stripPrefix ":steps " input = do
+          fsm <- runApp requireFsm
+          (uCache, dCache) <- runApp requireParserCaches
+          let pst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) Map.empty Nothing uCache dCache
+          liftIO (parseExpFromRepl pst (T.pack expr)) >>= \case
+            Left err -> do
+              emitMsgTCtx (MsgParseError err)
+              loop rs
+            Right parsed -> do
+              let paramTyCons = [name | (name, arity) <- replTyCons rs, arity > 0]
+              liftIO (runTCM (tcExp1With True parsed) (replTCState rs)) >>= \case
+                Left tcErr -> do
+                  emitMsgTCtx (MsgTCError tcErr (Just (T.pack expr)) paramTyCons (replTyMods rs))
+                  loop rs
+                Right (parsed', _) -> do
+                  (cache, fsm') <- runApp requireCacheFsm
+                  skipSteps <- liftIO (shouldSkipInfinitiveSteps cache fsm' parsed')
+                  if skipSteps
+                    then loop rs
+                    else do
+                      res <- liftIO $ catch
+                        (Right <$> runEvalM (evalExpTraced parsed') (replEvalState rs))
+                        (\UserInterrupt -> return (Left ()))
+                      case res of
+                        Left () -> do
+                          emitMsgTCtx MsgCtrlC
+                          loop rs
+                        Right (Left evalErr) -> do
+                          emitMsgTCtx (MsgEvalError evalErr)
+                          loop rs
+                        Right (Right ((result, steps), evalSt')) -> do
+                          ctx <- ask
+                          let renderSteps exp = renderExpPreservingCase cache fsm' evalSt' exp >>= stripStepsCopulaTRmorph cache fsm'
+                              rInput = renderSteps
+                              rOutput = renderSteps . setTopCaseNom
+                          formatted <- liftIO (formatSteps (rcUseColor ctx) rInput rOutput result steps)
+                          lift (outputStrLn formatted)
+                          loop rs
       | otherwise = do
           fsm <- runApp requireFsm
           (uCache, dCache) <- runApp requireParserCaches

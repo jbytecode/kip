@@ -1,0 +1,18 @@
+(bu tam-sayı listesini) bastırmak tanımlandı.
+1
+2
+⇝ 1'i yazıp, (2'nin boşa ekini) bastır
+  └───────┘
+  bitimlik
+
+⇝ (2'nin boşa ekini) bastır
+
+⇝ 2'yi yazıp, boşu bastır
+  └────────┘
+  bitimlik
+
+⇝ boşu bastır
+
+⇝ dur
+
+⇝ bitimlik

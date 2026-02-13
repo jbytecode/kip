@@ -24,14 +24,17 @@ module Kip.Render
   , renderExpValue
   , renderExpWithCase
   , renderExpNom
+  , renderExpPreservingCase
+  , upsCached
+  , upsCachedBatch
   , downsCached
   , pickDownForm
   ) where
 
-import Data.Char (isLetter, isLower, isDigit, isSpace)
-import Data.List (intercalate, maximumBy, find, isInfixOf, isSuffixOf, isPrefixOf, intersect, nub)
+import Data.Char (isLetter, isLower, isDigit, isSpace, isAlphaNum)
+import Data.List (intercalate, maximumBy, minimumBy, find, isInfixOf, isSuffixOf, isPrefixOf, stripPrefix, intersect, nub)
 import qualified Data.Bifunctor as B
-import Data.Maybe (fromMaybe, catMaybes)
+import Data.Maybe (fromMaybe, catMaybes, listToMaybe, maybeToList)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -75,6 +78,22 @@ upsCached RenderCache{rcUpsCache} fsm s = do
       res <- ups fsm s
       HT.insert rcUpsCache s res
       return res
+
+-- | Cached batch morphology analysis lookup.
+-- Uses batch FFI when multiple words are missing to avoid repeated handle setup.
+upsCachedBatch :: RenderCache -- ^ Render cache.
+               -> FSM -- ^ Morphology FSM.
+               -> [Text] -- ^ Surface forms.
+               -> IO [[Text]] -- ^ Morphology analyses per surface form.
+upsCachedBatch _ _ [] = return []
+upsCachedBatch RenderCache{rcUpsCache} fsm words = do
+  cached <- mapM (HT.lookup rcUpsCache) words
+  let missing = [w | (w, Nothing) <- zip words cached]
+  fetched <- if null missing then return [] else upsBatch fsm missing
+  let fetchedMap = M.fromList (zip missing fetched)
+  mapM_ (uncurry (HT.insert rcUpsCache)) (zip missing fetched)
+  let resolve w = fromMaybe (fromMaybe [] (M.lookup w fetchedMap))
+  return (zipWith resolve words cached)
 
 -- | Cached version of 'downs'.
 downsCached :: RenderCache -- ^ Render cache.
@@ -257,6 +276,18 @@ addP3sSuffix stem =
            then stem ++ ['s', suffixVowel]  -- After vowel: add 's' + vowel
            else stem ++ [suffixVowel]       -- After consonant: just add vowel
 
+-- | Add conditional suffix to a stem (minimal fallback for Cond case).
+addCondSuffix :: String -- ^ Input stem.
+              -> String -- ^ Stem with conditional suffix.
+addCondSuffix stem =
+  case lastVowel stem of
+    Nothing -> stem ++ "sa"  -- No vowel, default to sa
+    Just v ->
+      let suffixVowel = if v `elem` ("aıou" :: String) then 'a' else 'e'
+      in if endsWithVowel stem
+           then stem ++ ['y', 's', suffixVowel]  -- After vowel: add 'y' + 's' + vowel
+           else stem ++ ['s', suffixVowel]        -- After consonant: 's' + vowel
+
 -- | Render an identifier with one or more cases applied.
 renderIdentWithCases :: RenderCache -- ^ Render cache.
                      -> FSM -- ^ Morphology FSM.
@@ -268,16 +299,56 @@ renderIdentWithCases cache fsm (xs, x) cases = do
       tagged = T.pack (stem ++ "<N>" ++ concatMap caseTag (filter (/= Nom) cases))
   forms <- map T.unpack <$> downsCached cache fsm tagged
   forms' <- if null forms
-    then deriveInflectedForms cache fsm stem (concatMap caseTag (filter (/= Nom) cases))
+    then do
+      derived <- deriveInflectedForms cache fsm stem (concatMap caseTag (filter (/= Nom) cases))
+      adjAdvForms <-
+        if cases == [Dat]
+          then map T.unpack <$> downsCached cache fsm (T.pack (stem ++ "<Adj><adv>"))
+          else return []
+      return (derived ++ adjAdvForms)
     else return forms
   -- Use FSM-derived forms, or minimal fallback if FSM fails.
-  -- P3s (possessive) fallback is kept since it's regular and needed for types.
+  -- P3s (possessive) and Cond (conditional) fallbacks are kept since they are
+  -- regular and needed for types/patterns; TRmorph does not cover Cond.
   let minimalFallback = case cases of
         [P3s] -> addP3sSuffix stem
+        [Cond] -> addCondSuffix stem
         _ -> stem
       root = fromMaybe minimalFallback (pickDownFormWithStem (Just stem) forms)
       root' = fromMaybe root (pickDownFormWithStem (Just stem) forms')
-  return (T.unpack (T.intercalate (T.pack "-") (xs ++ [T.pack root'])))
+  datAdjRoot <-
+    if cases == [Dat] && root' == stem
+      then do
+        adjForms <- map T.unpack <$> downsCached cache fsm (T.pack (stem ++ "<Adj><0><N><dat>"))
+        advForms <- map T.unpack <$> downsCached cache fsm (T.pack (stem ++ "<Adv><0><N><dat>"))
+        let datForms = adjForms ++ advForms
+        case pickDownFormWithStem (Just stem) datForms of
+          Just hit -> return (Just hit)
+          Nothing -> inferDatSurfaceViaUps cache fsm stem
+      else return Nothing
+  let finalRoot = fromMaybe root' datAdjRoot
+  return (T.unpack (T.intercalate (T.pack "-") (xs ++ [T.pack finalRoot])))
+
+-- | Infer a dative surface from TRmorph analyses when downs generation is empty.
+inferDatSurfaceViaUps :: RenderCache -> FSM -> String -> IO (Maybe String)
+inferDatSurfaceViaUps cache fsm stem = do
+  let probes = map (stem ++) ["a", "e", "ya", "ye"]
+  analysesByProbe <- upsCachedBatch cache fsm (map T.pack probes)
+  let hasDatRoot =
+        any (\an -> T.pack "<dat>" `T.isInfixOf` an && T.takeWhile (/= '<') an == T.pack stem)
+      hasAnyDat = any (T.pack "<dat>" `T.isInfixOf`)
+      hasAny analyses = not (null analyses)
+      exact = [p | (p, analyses) <- zip probes analysesByProbe, hasDatRoot analyses]
+      loose = [p | (p, analyses) <- zip probes analysesByProbe, hasAnyDat analyses]
+      anyHit = [p | (p, analyses) <- zip probes analysesByProbe, hasAny analyses]
+  return $
+    case exact of
+      p:_ -> Just p
+      [] -> case loose of
+        p:_ -> Just p
+        [] -> case anyHit of
+          p:_ -> Just p
+          [] -> Nothing
 
 -- | Render an identifier with a single case applied.
 renderIdentWithCase :: RenderCache -- ^ Render cache.
@@ -786,6 +857,379 @@ renderExpValue :: RenderCache -- ^ Render cache.
                -> IO String -- ^ Rendered output.
 renderExpValue cache fsm evalSt = renderExpWithCase cache fsm evalSt Nom
 
+-- | Render an expression preserving the case annotations on each sub-expression.
+-- Used for trace output where intermediate expressions carry their original cases.
+renderExpPreservingCase :: RenderCache -- ^ Render cache.
+                        -> FSM -- ^ Morphology FSM.
+                        -> EvalState -- ^ Evaluator state.
+                        -> Exp Ann -- ^ Expression to render.
+                        -> IO String -- ^ Rendered output.
+renderExpPreservingCase cache fsm evalSt expr =
+  case expr of
+    IntLit {annExp, intVal} ->
+      renderIntWithCase cache fsm (annCase annExp) intVal
+    FloatLit {annExp, floatVal} ->
+      renderFloatWithCase cache fsm (annCase annExp) floatVal
+    StrLit {annExp, lit} ->
+      renderStrLitWithCase cache fsm (annCase annExp) lit
+    Var {annExp, varName, varCandidates} ->
+      renderVarWithCase cache fsm varName annExp varCandidates (annCase annExp)
+    App {annExp, fn, args} ->
+      case fn of
+        Var {varCandidates} ->
+          case lookupCtorSig (M.toList (evalCtors evalSt)) varCandidates of
+            Just (ctorName, (argTys, _))
+              | length argTys == length args -> do
+                argStrs <- sequence
+                  [ renderExpWithCase cache fsm evalSt (selectCtorArgCase ctorName idx ty arg) arg
+                  | (idx, (ty, arg)) <- zip [0 :: Int ..] (zip argTys args)
+                  ]
+                let argStrs' = map wrapIfNeeded argStrs
+                    topCase = annCase annExp
+                    fnCases
+                      | null args = [topCase]
+                      | topCase == Nom = [P3s]
+                      | otherwise = [P3s, topCase]
+                fnStr <- renderIdentWithCases cache fsm ctorName fnCases
+                return (unwords (argStrs' ++ [fnStr]))
+            _ -> renderAppPC cache fsm evalSt annExp fn args
+        _ -> renderAppPC cache fsm evalSt annExp fn args
+    Match {annExp, scrutinee, clauses} -> do
+      -- If scrutinee is a value (IntLit, FloatLit, StrLit, or Var that's a constructor),
+      -- only render the selected clause body
+      case selectMatchingClause scrutinee clauses of
+        Just clauseBody -> renderExpPreservingCase cache fsm evalSt clauseBody
+        Nothing -> do
+          -- Scrutinee not yet evaluated, show full match
+          scrutStrRaw <- renderExpPreservingCase cache fsm evalSt scrutinee
+          let shouldParenthesizeScrutinee exp' =
+                case exp' of
+                  Var {} -> False
+                  App {fn = Var {varCandidates}, args} ->
+                    case lookupCtorSig (M.toList (evalCtors evalSt)) varCandidates of
+                      Just (_, (argTys, _)) -> length argTys == length args
+                      Nothing -> True
+                  _ -> True
+              scrutStr = if shouldParenthesizeScrutinee scrutinee
+                           then "(" ++ scrutStrRaw ++ ")"
+                           else scrutStrRaw
+          clauseStrs <- mapM (renderClausePC cache fsm evalSt (annCase annExp) scrutStr) clauses
+          return (intercalate "; " clauseStrs)
+    Seq {first, second} -> do
+      firstStr <- renderSeqFirstExp cache fsm evalSt first
+      secondStr <- renderExpPreservingCase cache fsm evalSt second
+      return (firstStr ++ ", " ++ secondStr)
+    Bind {bindName, bindExp} -> do
+      expStr <- renderSeqFirstExp cache fsm evalSt bindExp
+      return (prettyIdent bindName ++ " için " ++ expStr)
+    Let {body} ->
+      renderExpPreservingCase cache fsm evalSt body
+    Ascribe {ascExp} ->
+      renderExpPreservingCase cache fsm evalSt ascExp
+
+-- | Render the first expression of a sequence in converb style when possible.
+renderSeqFirstExp :: RenderCache -> FSM -> EvalState -> Exp Ann -> IO String
+renderSeqFirstExp cache fsm evalSt exp' =
+  case exp' of
+    Bind {bindName, bindExp} -> do
+      expStr <- renderSeqFirstExp cache fsm evalSt bindExp
+      return (prettyIdent bindName ++ " için " ++ expStr)
+    App {fn = Var {varName, varCandidates}, args} ->
+      case lookupCtorSig (M.toList (evalCtors evalSt)) varCandidates of
+        Just (_, (argTys, _))
+          | length argTys == length args -> do
+              argStrs <- sequence
+                [ renderExpWithCase cache fsm evalSt (selectCtorArgCase varName idx ty arg) arg
+                | (idx, (ty, arg)) <- zip [0 :: Int ..] (zip argTys args)
+                ]
+              renderSeqConverbApp argStrs
+        _ -> do
+          fnLemma <- pickLemmaIdentifier cache fsm varName varCandidates
+          let isWritePrimName (mods, name) = null mods && name == T.pack "yaz"
+              hasWritePrim = isWritePrimName fnLemma
+          fnVerb <- hasVerbAnalysis cache fsm fnLemma
+          surfaceVerb <- hasVerbAnalysis cache fsm varName
+          let forceVerbArgs = (hasWritePrim || fnVerb || surfaceVerb) && not (null args)
+              renderAccArg arg =
+                case arg of
+                  App {} -> renderExpPreservingCase cache fsm evalSt arg >>= applyCaseToLastWord cache fsm Acc
+                  StrLit {} -> do
+                    s <- renderExpPreservingCase cache fsm evalSt arg
+                    if hasAccSuffix s then return s else applyCaseToLastWord cache fsm Acc s
+                  _ -> renderExpWithCase cache fsm evalSt Acc arg
+          argStrs <-
+            if forceVerbArgs
+              then mapM renderAccArg args
+              else mapM (renderExpPreservingCase cache fsm evalSt) args
+          renderSeqConverbApp argStrs
+      where
+        renderSeqConverbApp argStrs = do
+          fnStr <- renderVerbAsConverb cache fsm varName varCandidates
+          return (unwords (map wrapIfNeeded argStrs ++ [fnStr]))
+    Var {varName, varCandidates} ->
+      renderVerbAsConverb cache fsm varName varCandidates
+    _ -> renderExpPreservingCase cache fsm evalSt exp'
+
+-- | Render a function application preserving case annotations.
+renderAppPC :: RenderCache -> FSM -> EvalState -> Ann -> Exp Ann -> [Exp Ann] -> IO String
+renderAppPC cache fsm evalSt appAnn fn' args' = do
+  let topCase = annCase appAnn
+  (argStrs, fnStr) <- case fn' of
+    Var {annExp = fnAnn, varName, varCandidates} -> do
+      preserveSurface <- shouldPreserveSurfaceForm cache fsm varName
+      fnName <- pickLemmaIdentifier cache fsm varName varCandidates
+      surfaceImperative <- hasImperativeAnalysis cache fsm varName
+      lemmaImperative <- hasImperativeAnalysis cache fsm fnName
+      let isWritePrimName (mods, name) = null mods && name == T.pack "yaz"
+          hasWritePrim = isWritePrimName fnName
+          forceVerbArgs = (hasWritePrim || surfaceImperative || lemmaImperative) && not (null args')
+          isEkiLike =
+            let s = T.unpack (snd fnName)
+            in s == "ek" || s == "eki" || "ek" `isInfixOf` s
+          renderAccArg arg =
+            case arg of
+              App {} -> renderExpPreservingCase cache fsm evalSt arg >>= applyCaseToLastWord cache fsm Acc
+              StrLit {} -> do
+                s <- renderExpPreservingCase cache fsm evalSt arg
+                if hasAccSuffix s then return s else applyCaseToLastWord cache fsm Acc s
+              _ -> renderExpWithCase cache fsm evalSt Acc arg
+          fnCases
+            | preserveSurface = [Nom]
+            | hasWritePrim && not (null args') = [Nom]
+            | null args' = [topCase]
+            | topCase == Nom || topCase == P3s = [P3s]
+            | otherwise = [P3s, topCase]
+      argStrs <-
+        if forceVerbArgs
+          then mapM renderAccArg args'
+          else if isEkiLike && length args' == 2
+            then do
+              let [a1, a2] = args'
+              s1 <- renderExpWithCase cache fsm evalSt Gen a1
+              s2 <- renderExpWithCase cache fsm evalSt Dat a2
+              return [s1, s2]
+          else mapM (renderExpPreservingCase cache fsm evalSt) args'
+      if surfaceImperative || lemmaImperative
+        then do
+          renderedVerb <- renderVerbAsImperative cache fsm varName fnName varCandidates
+          return (argStrs, renderedVerb)
+        else if preserveSurface
+        then return (argStrs, prettyIdent varName)
+        else do
+          fnStr <- renderIdentWithCases cache fsm fnName fnCases
+          return (argStrs, fnStr)
+    _ -> do
+      argStrs <- mapM (renderExpPreservingCase cache fsm evalSt) args'
+      fnStr <- renderExpPreservingCase cache fsm evalSt fn'
+      return (argStrs, fnStr)
+  let argStrs' = map wrapIfNeeded argStrs
+  return (unwords (argStrs' ++ [fnStr]))
+
+-- | Decide whether to keep the exact surface form for a function token.
+-- Uses TRmorph analyses rather than suffix heuristics.
+shouldPreserveSurfaceForm :: RenderCache -> FSM -> Identifier -> IO Bool
+shouldPreserveSurfaceForm cache fsm ident = do
+  analyses <- map T.unpack <$> upsCached cache fsm (T.pack (prettyIdent ident))
+  let hasMarker a = "<adv>" `isInfixOf` a
+  return (any hasMarker analyses)
+
+-- | Keep exact copula surface so :steps can strip only the copula suffix.
+shouldPreserveCopulaSurface :: RenderCache -> FSM -> Identifier -> IO Bool
+shouldPreserveCopulaSurface cache fsm ident = do
+  analyses <- map T.unpack <$> upsCached cache fsm (T.pack (prettyIdent ident))
+  return (any ("<0><V><cpl:" `isInfixOf`) analyses)
+
+-- | Check whether an identifier has a verbal analysis.
+isVerbLike :: RenderCache -> FSM -> Identifier -> IO Bool
+isVerbLike cache fsm ident = do
+  analyses <- map T.unpack <$> upsCached cache fsm (T.pack (prettyIdent ident))
+  let hasVerb = any ("<V>" `isInfixOf`) analyses
+      hasNoun = any ("<N>" `isInfixOf`) analyses
+  return (hasVerb && not hasNoun)
+
+-- | Check whether an identifier has any verbal analysis.
+hasVerbAnalysis :: RenderCache -> FSM -> Identifier -> IO Bool
+hasVerbAnalysis cache fsm ident = do
+  analyses <- map T.unpack <$> upsCached cache fsm (T.pack (prettyIdent ident))
+  return (any ("<V>" `isInfixOf`) analyses)
+
+-- | Check whether an identifier has a 2nd-person imperative verbal analysis.
+hasImperativeAnalysis :: RenderCache -> FSM -> Identifier -> IO Bool
+hasImperativeAnalysis cache fsm ident = do
+  analyses <- map T.unpack <$> upsCached cache fsm (T.pack (prettyIdent ident))
+  return (any ("<V>" `isInfixOf`) analyses && any ("<imp><2s>" `isInfixOf`) analyses)
+
+-- | Pick a lemma-like candidate, preferring nominative analyses.
+pickLemmaCandidate :: Identifier -> [(Identifier, Case)] -> Identifier
+pickLemmaCandidate fallback candidates =
+  case find (\(_, cas) -> cas == Nom) candidates of
+    Just (ident, _) -> ident
+    Nothing ->
+      case candidates of
+        (ident, _):_ -> ident
+        [] -> fallback
+
+-- | Pick a lemma identifier via TRmorph analyses, then fall back to candidates.
+pickLemmaIdentifier :: RenderCache -> FSM -> Identifier -> [(Identifier, Case)] -> IO Identifier
+pickLemmaIdentifier cache fsm fallback@(mods, _) candidates = do
+  case candidates of
+    _:_ ->
+      let cand = pickLemmaCandidate fallback candidates
+      in if cand /= fallback
+           then return cand
+           else do
+            analyses <- upsCached cache fsm (T.pack (prettyIdent fallback))
+            let roots = [T.takeWhile (/= '<') a | a <- analyses, not (T.null a)]
+                shortestRoot =
+                  case roots of
+                    [] -> Nothing
+                    _ -> Just (minimumBy (\a b -> compare (T.length a) (T.length b)) roots)
+            case shortestRoot of
+              Just root | not (T.null root) -> return (mods, root)
+              _ -> return fallback
+    [] -> do
+      analyses <- upsCached cache fsm (T.pack (prettyIdent fallback))
+      let roots = [T.takeWhile (/= '<') a | a <- analyses, not (T.null a)]
+          shortestRoot =
+            case roots of
+              [] -> Nothing
+              _ -> Just (minimumBy (\a b -> compare (T.length a) (T.length b)) roots)
+      case shortestRoot of
+        Just root | not (T.null root) -> return (mods, root)
+        _ -> return fallback
+
+-- | Render a verb in ip-converb form using TRmorph.
+renderVerbAsConverb :: RenderCache -> FSM -> Identifier -> [(Identifier, Case)] -> IO String
+renderVerbAsConverb cache fsm name candidates = do
+  lemma <- pickLemmaIdentifier cache fsm name candidates
+  let stem = prettyIdent lemma
+      tagged = T.pack (stem ++ "<V><adv>")
+  forms <- map T.unpack <$> downsCached cache fsm tagged
+  return (fromMaybe (prettyIdent name) (pickDownForm forms))
+
+-- | Render a verb in imperative form by preferring concise TRmorph surfaces.
+renderVerbAsImperative :: RenderCache -> FSM -> Identifier -> Identifier -> [(Identifier, Case)] -> IO String
+renderVerbAsImperative cache fsm surface lemma candidates = do
+  analyses <- map T.unpack <$> upsCached cache fsm (T.pack (prettyIdent surface))
+  let verbAnalyses = filter ("<V>" `isInfixOf`) analyses
+      positiveImperatives =
+        [ an
+        | an <- verbAnalyses
+        , "<imp><2s>" `isInfixOf` an
+        , not ("<neg>" `isInfixOf` an)
+        ]
+      derivationTags an =
+        concat
+          [ t
+          | t <- ["<caus>", "<pass>", "<reflex>", "<rcp>"]
+          , t `isInfixOf` an
+          ]
+      imperativeTagFromAnalysis an =
+        let root = takeWhile (/= '<') an
+        in root ++ "<V>" ++ derivationTags an ++ "<imp><2s>"
+      derivedImperativeTags =
+        nub [imperativeTagFromAnalysis an | an <- verbAnalyses, not (null an)]
+      chooseShortest forms =
+        case filter isPlainLower forms of
+          [] ->
+            case forms of
+              f:_ -> Just f
+              [] -> Nothing
+          xs -> Just (minimumBy (\a b -> compare (length a) (length b)) xs)
+  fromPositiveImperatives <-
+    if null positiveImperatives
+      then return Nothing
+      else do
+        formsByAnalysis <- mapM (\an -> map T.unpack <$> downsCached cache fsm (T.pack an)) positiveImperatives
+        return (chooseShortest (concat formsByAnalysis))
+  fromDerivedImperatives <-
+    if null derivedImperativeTags
+      then return Nothing
+      else do
+        formsByAnalysis <- mapM (\an -> map T.unpack <$> downsCached cache fsm (T.pack an)) derivedImperativeTags
+        return (chooseShortest (concat formsByAnalysis))
+  case fromPositiveImperatives of
+    Just surfaceForm -> return surfaceForm
+    Nothing ->
+      case fromDerivedImperatives of
+        Just surfaceForm -> return surfaceForm
+        Nothing -> do
+          normalizedLemma <- pickLemmaIdentifier cache fsm lemma candidates
+          let tagged = T.pack (prettyIdent normalizedLemma ++ "<V><imp><2s>")
+          forms <- map T.unpack <$> downsCached cache fsm tagged
+          return (fromMaybe (prettyIdent surface) (chooseShortest forms))
+  where
+    isPlainLower = all (\ch -> (isLetter ch && isLower ch) || ch == '-')
+
+-- | Check whether rendered text already carries an accusative suffix.
+hasAccSuffix :: String -> Bool
+hasAccSuffix s =
+  any (`isSuffixOf` s)
+    [ "'ı", "'i", "'u", "'ü"
+    , "'yı", "'yi", "'yu", "'yü"
+    ]
+
+-- | Render a clause preserving case annotations.
+renderClausePC :: RenderCache -> FSM -> EvalState -> Case -> String -> Clause Ann -> IO String
+renderClausePC cache fsm evalSt matchCase scrutStr (Clause pat body) = do
+  patStr <- renderPatPC cache fsm scrutStr pat
+  let bodyForRender =
+        case body of
+          IntLit {} -> body
+          FloatLit {} -> body
+          StrLit {} -> body
+          _ -> body { annExp = setAnnCase (annExp body) matchCase }
+  bodyStr <- renderExpPreservingCase cache fsm evalSt bodyForRender
+  return (patStr ++ ", " ++ bodyStr)
+
+-- | Try to select the matching clause if the scrutinee is a value.
+-- Returns Just clauseBody if a clause matches, Nothing if scrutinee needs evaluation.
+selectMatchingClause :: Exp Ann -> [Clause Ann] -> Maybe (Exp Ann)
+selectMatchingClause scrut clauses =
+  case scrut of
+    IntLit {} -> findMatchingClauseBody scrut clauses
+    FloatLit {} -> findMatchingClauseBody scrut clauses
+    StrLit {} -> findMatchingClauseBody scrut clauses
+    _ -> Nothing
+  where
+    findMatchingClauseBody :: Exp Ann -> [Clause Ann] -> Maybe (Exp Ann)
+    findMatchingClauseBody _ [] = Nothing
+    findMatchingClauseBody s (Clause pat body : rest) =
+      if matchesPattern s pat
+        then Just body
+        else findMatchingClauseBody s rest
+
+    matchesPattern :: Exp Ann -> Pat Ann -> Bool
+    matchesPattern _ (PWildcard _) = True
+    matchesPattern _ (PVar _ _) = True
+    matchesPattern (IntLit _ n1) (PIntLit n2 _) = n1 == n2
+    matchesPattern (FloatLit _ n1) (PFloatLit n2 _) = n1 == n2
+    matchesPattern (StrLit _ s1) (PStrLit s2 _) = s1 == s2
+    matchesPattern (Var _ _ cands) (PCtor (ctorName, _) pats) =
+      any (\(ident, _) -> ident == ctorName) cands && null pats
+    matchesPattern (App _ (Var _ _ cands) args) (PCtor (ctorName, _) pats) =
+      any (\(ident, _) -> ident == ctorName) cands && length args == length pats
+    matchesPattern _ _ = False
+
+
+-- | Render a pattern preserving case annotations.
+renderPatPC :: RenderCache -> FSM -> String -> Pat Ann -> IO String
+renderPatPC cache fsm scrutStr pat =
+  case pat of
+    PWildcard _ -> return "değilse"
+    PVar name ann -> renderIdentWithCases cache fsm name [annCase ann]
+    PCtor (ctor, ann) pats -> do
+      subPats <- mapM (renderPatPC cache fsm "") pats
+      let argStrs = (if null scrutStr then id else (scrutStr :)) subPats
+      ctorStr <- renderIdentWithCases cache fsm ctor [annCase ann]
+      return (unwords (argStrs ++ [ctorStr]))
+    PIntLit n ann -> renderIntWithCase cache fsm (annCase ann) n
+    PFloatLit n ann -> renderFloatWithCase cache fsm (annCase ann) n
+    PStrLit s _ -> return ("\"" ++ T.unpack s ++ "\"")
+    PListLit pats -> do
+      patStrs <- mapM (renderPatPC cache fsm "") pats
+      return ("[" ++ intercalate ", " patStrs ++ "]")
+
 -- | Render an expression with a requested grammatical case.
 renderExpWithCase :: RenderCache -- ^ Render cache.
                   -> FSM -- ^ Morphology FSM.
@@ -806,8 +1250,8 @@ renderExpWithCase cache fsm evalSt cas exp =
         Just (ctorName, (argTys, _))
           | length argTys == length args -> do
               argStrs <- sequence
-                [ renderExpWithCase cache fsm evalSt (selectArgCase ty arg) arg
-                | (ty, arg) <- zip argTys args
+                [ renderExpWithCase cache fsm evalSt (selectCtorArgCase ctorName idx ty arg) arg
+                | (idx, (ty, arg)) <- zip [0 :: Int ..] (zip argTys args)
                 ]
               let argStrs' = map wrapIfNeeded argStrs
                   fnCases
@@ -897,6 +1341,20 @@ selectArgCase :: Ty Ann -- ^ Argument type.
 selectArgCase ty _ =
   annCase (annTy ty)
 
+-- | Pick argument case with constructor-specific rendering rules.
+selectCtorArgCase :: Identifier -- ^ Constructor/function identifier.
+                  -> Int -- ^ Argument index.
+                  -> Ty Ann -- ^ Argument type.
+                  -> Exp Ann -- ^ Argument expression.
+                  -> Case -- ^ Selected case.
+selectCtorArgCase ident idx ty arg
+  | isEkiCtor ident && idx == 1 = Dat
+  | otherwise = selectArgCase ty arg
+  where
+    isEkiCtor (_, n) =
+      let s = T.unpack n
+      in s == "ek" || s == "eki" || "ek" `isInfixOf` s
+
 -- | Apply a case suffix to the last word in a phrase.
 applyCaseToLastWord :: RenderCache -- ^ Render cache.
                     -> FSM -- ^ Morphology FSM.
@@ -906,19 +1364,78 @@ applyCaseToLastWord :: RenderCache -- ^ Render cache.
 applyCaseToLastWord cache fsm cas s =
   case splitLastWord s of
     Nothing -> return s
-    Just (prefix, word, suffix) -> do
-      inflected <- renderIdentWithCases cache fsm ([], T.pack word) [cas]
-      return (prefix ++ inflected ++ suffix)
+    Just (prefix, punctPrefix, word, punctSuffix, suffix) ->
+      if null word
+        then return s
+        else do
+          inflected <-
+            if cas == Acc
+              then do
+                analyses <- map T.unpack <$> upsCached cache fsm (T.pack word)
+                case find ("<p3s>" `isInfixOf`) analyses of
+                  Just an -> do
+                    let root = T.takeWhile (/= '<') (T.pack an)
+                    renderIdentWithCases cache fsm ([], root) [P3s, Acc]
+                  Nothing -> renderIdentWithCases cache fsm ([], T.pack word) [cas]
+              else renderIdentWithCases cache fsm ([], T.pack word) [cas]
+          prefix' <-
+            if cas == Acc && "eki" `isPrefixOf` inflected
+              then promotePreviousWordDat prefix
+              else return prefix
+          return (prefix' ++ punctPrefix ++ inflected ++ punctSuffix ++ suffix)
   where
-    -- | Split a string into prefix, last word, and trailing whitespace.
+    -- | Split a string into prefix, punctuation, last word, punctuation, and trailing whitespace.
     splitLastWord :: String -- ^ Input phrase.
-                  -> Maybe (String, String, String) -- ^ Prefix, last word, and suffix.
+                  -> Maybe (String, String, String, String, String)
     splitLastWord input =
       let (revSuffix, revBody) = span isSpace (reverse input)
-          (revWord, revPrefix) = break isSpace revBody
+          (revPunctSuffix, revBody1) = break isAlphaNum revBody
+          (revWord, revBody2) = span isAlphaNum revBody1
+          (revPunctPrefix, revPrefix) = break isSpace revBody2
       in if null revWord
         then Nothing
-        else Just (reverse revPrefix, reverse revWord, reverse revSuffix)
+        else
+          Just
+            ( reverse revPrefix
+            , reverse revPunctPrefix
+            , reverse revWord
+            , reverse revPunctSuffix
+            , reverse revSuffix
+            )
+
+    promotePreviousWordDat :: String -> IO String
+    promotePreviousWordDat pref =
+      case splitPrevWord pref of
+        Nothing -> return pref
+        Just (pref0, w, suff) -> do
+          mDat <- inferDatSurfaceViaUps cache fsm w
+          case mDat of
+            Just dat -> return (pref0 ++ dat ++ suff)
+            Nothing -> return pref
+
+    splitPrevWord :: String -> Maybe (String, String, String)
+    splitPrevWord input =
+      let (revSuff, revBody) = span isSpace (reverse input)
+          (revWord, revPref) = break isSpace revBody
+      in if null revWord
+           then Nothing
+           else Just (reverse revPref, reverse revWord, reverse revSuff)
+
+-- | Render a quoted string literal with a case suffix (if any).
+renderStrLitWithCase :: RenderCache -> FSM -> Case -> Text -> IO String
+renderStrLitWithCase cache fsm cas litText = do
+  let bare = T.unpack litText
+      quoted = "\"" ++ bare ++ "\""
+  if cas == Nom
+    then return quoted
+    else do
+      inflected <- renderIdentWithCases cache fsm ([], litText) [cas]
+      let suffix = maybe "'i" quoteSuffix (stripPrefix bare inflected)
+      return (quoted ++ suffix)
+  where
+    quoteSuffix "" = ""
+    quoteSuffix s@('\'':_) = s
+    quoteSuffix s = '\'' : s
 
 -- | Wrap a string in parentheses when it contains whitespace.
 wrapIfNeeded :: String -- ^ Input string.
@@ -950,11 +1467,25 @@ renderFloatWithCase :: RenderCache -- ^ Render cache.
 renderFloatWithCase cache fsm cas n = do
   let base = show (abs n)
       prefix = if n < 0 then "-" else ""
-  if cas == Nom
+      commaBase = map (\c -> if c == '.' then ',' else c) base
+      suffixFrom inflected =
+        listToMaybe
+          [ s
+          | b <- [base, commaBase]
+          , s <- maybeToList (stripPrefix b inflected)
+          ]
+      withQuoteSuffix "" = ""
+      withQuoteSuffix s@('\'':_) = s
+      withQuoteSuffix s = '\'' : s
+  if cas == Nom || cas == P3s
     then return (prefix ++ base)
     else do
       inflected <- renderIdentWithCases cache fsm ([], T.pack base) [cas]
-      return (prefix ++ inflected)
+      let rendered =
+            case suffixFrom inflected of
+              Just suf -> base ++ withQuoteSuffix suf
+              Nothing -> inflected
+      return (prefix ++ rendered)
 
 -- | Render a variable with the requested case, using candidates if present.
 renderVarWithCase :: RenderCache -- ^ Render cache.
@@ -964,15 +1495,31 @@ renderVarWithCase :: RenderCache -- ^ Render cache.
                   -> [(Identifier, Case)] -- ^ Candidate identifiers.
                   -> Case -- ^ Target case.
                   -> IO String -- ^ Rendered identifier.
-renderVarWithCase cache fsm name annExp candidates targetCase =
-  case find (\(_, cas) -> cas == targetCase) candidates of
-    Just (ident, _) -> renderIdentWithCases cache fsm ident [targetCase]
-    Nothing ->
-      if annCase annExp == targetCase
+renderVarWithCase cache fsm name annExp candidates targetCase = do
+  preserveSurface <- shouldPreserveSurfaceForm cache fsm name
+  preserveCopula <- shouldPreserveCopulaSurface cache fsm name
+  verbByMorph <- isVerbLike cache fsm name
+  let verbByCase = any (\(_, cas) -> cas == Cond) candidates
+      isVerb = verbByMorph || verbByCase
+  lemma <-
+    if isVerb
+      then pickLemmaIdentifier cache fsm name candidates
+      else return (pickLemmaCandidate name candidates)
+  let renderBase = renderIdentWithCases cache fsm lemma [targetCase]
+  if annCase annExp == targetCase
+    then
+      if preserveSurface || (preserveCopula && not isVerb)
         then return (prettyIdent name)
-        else case candidates of
-          (ident, _):_ -> renderIdentWithCases cache fsm ident [targetCase]
-          [] -> renderIdentWithCases cache fsm name [targetCase]
+        else if isVerb
+        then
+          renderBase
+        else
+          if targetCase == Dat
+            then do
+              mDat <- inferDatSurfaceViaUps cache fsm (prettyIdent name)
+              return (fromMaybe (prettyIdent name) mDat)
+            else return (prettyIdent name)
+    else renderBase
 
 -- | Look up a constructor signature by candidate identifiers.
 lookupCtorSig :: [(Identifier, ([Ty Ann], Ty Ann))] -- ^ Constructor signatures.

@@ -18,17 +18,18 @@ import Control.Monad.Trans.Except
 import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class
 import Control.Exception (SomeException, try)
+import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import System.IO (hFlush, stdout)
 import System.Environment (lookupEnv)
 import System.FilePath (takeFileName, takeDirectory, (</>), isRelative)
 import System.Random (randomRIO)
 import Data.Word (Word32)
-import Control.Monad (guard, zipWithM)
+import Control.Monad (guard, unless, zipWithM)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Text.Read (readMaybe)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, maybeToList)
 import Data.List (find, foldl', intersect, nub)
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
@@ -103,6 +104,13 @@ data EvalStep
   = Done (Exp Ann)
   | Continue (HM.HashMap Identifier (Exp Ann)) (Exp Ann)
 
+-- | A single recorded evaluation step for tracing.
+data TraceStep = TraceStep
+  { tsDepth  :: Int     -- ^ Call-stack depth (0 = top-level).
+  , tsInput  :: Exp Ann -- ^ Expression before this step.
+  , tsOutput :: Exp Ann -- ^ Expression after this step.
+  }
+
 -- | Evaluate an expression with a local environment.
 -- |
 -- | This is a trampoline: tail-position transitions return 'Continue' so the
@@ -124,6 +132,167 @@ evalExpLoop localEnv e = do
   evalStep localEnv e >>= \case
     Done v -> return v
     Continue env' e' -> evalExpLoop env' e'
+
+-- | Evaluate an expression and collect evaluation trace steps.
+evalExpTraced :: Exp Ann -> EvalM (Exp Ann, [TraceStep])
+evalExpTraced e = do
+  ref <- liftIO (newIORef [])
+  ctr <- liftIO (newIORef (0 :: Int))
+  result <- evalExpLoopTraced ref ctr 0 HM.empty e
+  steps <- liftIO (readIORef ref)
+  return (result, reverse steps)
+
+-- | Step limit for traced evaluation.
+traceStepLimit :: Int
+traceStepLimit = 1000
+
+-- | Traced trampoline loop. Records a 'TraceStep' for each step that
+-- produces a different output than its input (skipping trivial literal
+-- identity steps). Falls back to the normal 'evalExpLoop' when the step
+-- counter reaches 'traceStepLimit'.
+evalExpLoopTraced :: IORef [TraceStep] -> IORef Int -> Int
+                  -> HM.HashMap Identifier (Exp Ann) -> Exp Ann
+                  -> EvalM (Exp Ann)
+evalExpLoopTraced ref ctr depth localEnv e = do
+  count <- liftIO (readIORef ctr)
+  if count >= traceStepLimit
+    then evalExpLoop localEnv e
+    else do
+      subsRef <- liftIO (newIORef [])
+      let trackingSubEval env sub = do
+            result <- evalSubTraced ref ctr depth env sub
+            unless (sameExp sub result) $
+              liftIO (modifyIORef' subsRef ((sub, result) :))
+            return result
+      evalStepWith trackingSubEval localEnv e >>= \case
+        Done v -> do
+          let shownInput = substituteTraceEnv localEnv e
+          let shownOutput = substituteTraceEnv localEnv v
+          -- Always use original expression as input for display clarity
+          unless (sameExp shownInput shownOutput) $ do
+            liftIO (modifyIORef' ctr (+ 1))
+            liftIO (modifyIORef' ref (TraceStep depth shownInput shownOutput :))
+          return v
+        Continue env' e' -> do
+          let shownInput = substituteTraceEnv localEnv e
+          let shownOutput = substituteTraceEnv env' e'
+          -- Use original expression as input, Continue target as output
+          liftIO (modifyIORef' ctr (+ 1))
+          liftIO (modifyIORef' ref (TraceStep depth shownInput shownOutput :))
+          evalExpLoopTraced ref ctr depth env' e'
+
+-- | Sub-evaluator for traced mode: evaluates at depth + 1.
+evalSubTraced :: IORef [TraceStep] -> IORef Int -> Int
+              -> HM.HashMap Identifier (Exp Ann) -> Exp Ann
+              -> EvalM (Exp Ann)
+evalSubTraced ref ctr depth = evalExpLoopTraced ref ctr (depth + 1)
+
+-- | Substitute local environment bindings into an expression for trace display.
+-- This is only for human-readable tracing and does not affect evaluation.
+substituteTraceEnv :: HM.HashMap Identifier (Exp Ann) -> Exp Ann -> Exp Ann
+substituteTraceEnv env = go 0
+  where
+    maxDepth :: Int
+    maxDepth = 64
+
+    go :: Int -> Exp Ann -> Exp Ann
+    go depth expr
+      | depth >= maxDepth = expr
+      | otherwise =
+          case expr of
+            Var ann name candidates ->
+              case lookupByCandidatesHM env candidates of
+                Just bound ->
+                  let bound' = go (depth + 1) bound
+                  in bound' { annExp = setAnnCase (annExp bound') (annCase ann) }
+                Nothing ->
+                  case lookupByCandidateSuffixHM env candidates of
+                    Just bound ->
+                      let bound' = go (depth + 1) bound
+                      in bound' { annExp = setAnnCase (annExp bound') (annCase ann) }
+                    Nothing ->
+                      case lookupBySuffixHM env name of
+                        Just bound ->
+                          let bound' = go (depth + 1) bound
+                          in bound' { annExp = setAnnCase (annExp bound') (annCase ann) }
+                        Nothing -> expr
+            App ann fn args ->
+              App ann (go depth fn) (map (go depth) args)
+            Bind ann nm na bexp ->
+              Bind ann nm na (go depth bexp)
+            Seq ann first second ->
+              Seq ann (go depth first) (go depth second)
+            Match ann scrut cls ->
+              Match ann (go depth scrut) (map substClause cls)
+            Let ann nm body ->
+              Let ann nm (go depth body)
+            Ascribe ann ty ascExp ->
+              Ascribe ann ty (go depth ascExp)
+            _ -> expr
+
+    substClause :: Clause Ann -> Clause Ann
+    substClause (Clause pat body) = Clause pat (go 0 body)
+
+-- | Check whether two expressions are trivially the same (literal identity).
+sameExp :: Exp Ann -> Exp Ann -> Bool
+sameExp (IntLit _ a) (IntLit _ b) = a == b
+sameExp (FloatLit _ a) (FloatLit _ b) = a == b
+sameExp (StrLit _ a) (StrLit _ b) = a == b
+sameExp (Var _ n1 _) (Var _ n2 _) = n1 == n2
+sameExp _ _ = False
+
+-- | Check if two expressions are structurally equal, ignoring annotations.
+eqIgnoringAnn :: Exp Ann -> Exp Ann -> Bool
+eqIgnoringAnn (Var _ n1 c1) (Var _ n2 c2) = n1 == n2 && c1 == c2
+eqIgnoringAnn (App _ f1 a1) (App _ f2 a2) =
+  eqIgnoringAnn f1 f2 && length a1 == length a2 && and (zipWith eqIgnoringAnn a1 a2)
+eqIgnoringAnn (IntLit _ n1) (IntLit _ n2) = n1 == n2
+eqIgnoringAnn (FloatLit _ n1) (FloatLit _ n2) = n1 == n2
+eqIgnoringAnn (StrLit _ s1) (StrLit _ s2) = s1 == s2
+eqIgnoringAnn (Bind _ n1 na1 e1) (Bind _ n2 na2 e2) =
+  n1 == n2 && na1 == na2 && eqIgnoringAnn e1 e2
+eqIgnoringAnn (Seq _ f1 s1) (Seq _ f2 s2) =
+  eqIgnoringAnn f1 f2 && eqIgnoringAnn s1 s2
+eqIgnoringAnn (Match _ sc1 cl1) (Match _ sc2 cl2) =
+  eqIgnoringAnn sc1 sc2 && length cl1 == length cl2 && and (zipWith eqClause cl1 cl2)
+  where eqClause (Clause p1 e1) (Clause p2 e2) = p1 == p2 && eqIgnoringAnn e1 e2
+eqIgnoringAnn (Let _ n1 b1) (Let _ n2 b2) =
+  n1 == n2 && eqIgnoringAnn b1 b2
+eqIgnoringAnn (Ascribe _ t1 e1) (Ascribe _ t2 e2) =
+  t1 == t2 && eqIgnoringAnn e1 e2
+eqIgnoringAnn _ _ = False
+
+-- | Substitute evaluated sub-expressions in a parent expression.
+-- Takes a list of (original, result) pairs from the tracking sub-evaluator
+-- and recursively walks the tree, replacing any nodes that match.
+-- The case annotation from the original child position is preserved on the result.
+substituteChildren :: [(Exp Ann, Exp Ann)] -> Exp Ann -> Exp Ann
+substituteChildren subs parent =
+  -- First check if the parent itself matches
+  case find (\(orig, _) -> eqIgnoringAnn orig parent) subs of
+    Just (orig, result) ->
+      result { annExp = setAnnCase (annExp result) (annCase (annExp orig)) }
+    Nothing ->
+      -- If not, recursively substitute in children
+      case parent of
+        App ann fn args ->
+          App ann (replaceChild fn) (map replaceChild args)
+        Match ann scr cls ->
+          Match ann (replaceChild scr) (map (\(Clause p e) -> Clause p (replaceChild e)) cls)
+        Seq ann first second ->
+          case first of
+            Bind bAnn nm na bexp ->
+              Seq ann (Bind bAnn nm na (replaceChild bexp)) (replaceChild second)
+            _ -> Seq ann (replaceChild first) (replaceChild second)
+        Bind ann nm na bexp ->
+          Bind ann nm na (replaceChild bexp)
+        Let ann nm body ->
+          Let ann nm (replaceChild body)
+        Ascribe ann ty e ->
+          Ascribe ann ty (replaceChild e)
+        _ -> parent
+  where
+    replaceChild = substituteChildren subs
 
 -- | One evaluation step.
 -- |
@@ -166,7 +335,16 @@ evalExpLoop localEnv e = do
 evalStep :: HM.HashMap Identifier (Exp Ann) -- ^ Local environment bindings.
          -> Exp Ann -- ^ Expression to evaluate.
          -> EvalM EvalStep -- ^ Trampoline step.
-evalStep localEnv e =
+evalStep = evalStepWith evalExpLoop
+
+-- | Parameterized evaluation step that uses a given sub-evaluator for
+-- non-tail recursive calls. This allows the same step logic to be reused
+-- for both normal and traced evaluation.
+evalStepWith :: (HM.HashMap Identifier (Exp Ann) -> Exp Ann -> EvalM (Exp Ann))
+             -> HM.HashMap Identifier (Exp Ann) -- ^ Local environment bindings.
+             -> Exp Ann -- ^ Expression to evaluate.
+             -> EvalM EvalStep -- ^ Trampoline step.
+evalStepWith subEval localEnv e =
   case e of
     Var {annExp, varName, varCandidates} ->
       case lookupByCandidatesHM localEnv varCandidates of
@@ -188,8 +366,8 @@ evalStep localEnv e =
                   return (Continue localEnv v)
     App {annExp = annApp, fn, args} -> do
       -- Non-tail: we must compute function and arguments before applying.
-      fn' <- evalExpLoop localEnv fn
-      args' <- mapM (evalExpLoop localEnv) args
+      fn' <- subEval localEnv fn
+      args' <- mapM (subEval localEnv) args
       let (fnResolved, preAppliedArgs) = flattenApplied fn'
           allArgs = preAppliedArgs ++ args'
       case fnResolved of
@@ -244,21 +422,21 @@ evalStep localEnv e =
       return (Done (FloatLit annExp floatVal))
     Bind {annExp, bindName, bindNameAnn, bindExp} -> do
       -- Non-tail: evaluate the binding expression, but the bind itself is a value.
-      v <- evalExpLoop localEnv bindExp
+      v <- subEval localEnv bindExp
       return (Done (Bind annExp bindName bindNameAnn v))
     Seq {annExp, first, second} -> do
       case first of
         Bind {bindName, bindNameAnn, bindExp} -> do
           -- Tail position: continue with the extended environment and second.
-          v <- evalExpLoop localEnv bindExp
+          v <- subEval localEnv bindExp
           return (Continue (HM.insert bindName v localEnv) second)
         _ -> do
           -- Evaluate the first expression, then tail-continue into second.
-          _ <- evalExpLoop localEnv first
+          _ <- subEval localEnv first
           return (Continue localEnv second)
     Match {annExp, scrutinee, clauses} -> do
       -- Non-tail: we need the scrutinee value to select the clause.
-      scrutinee' <- evalExpLoop localEnv scrutinee
+      scrutinee' <- subEval localEnv scrutinee
       case findClause scrutinee' clauses of
         Nothing -> throwError NoMatchingClause
         Just (Clause _ body, patBindings) -> do
@@ -725,11 +903,7 @@ lookupBySuffixList :: [(Identifier, a)] -- ^ Local environment bindings.
                    -> Identifier -- ^ Surface identifier.
                    -> Maybe a -- ^ Matching binding when found.
 lookupBySuffixList env (mods, word) =
-  let stripped =
-        [ (mods, root)
-        | suf <- bareCaseSuffixes
-        , Just root <- [T.stripSuffix suf word]
-        ]
+  let stripped = stripCaseRoots mods word
   in findMatch stripped
   where
     findMatch [] = Nothing
@@ -743,11 +917,7 @@ lookupBySuffixMap :: Map.Map Identifier a -- ^ Local environment bindings.
                   -> Identifier -- ^ Surface identifier.
                   -> Maybe a -- ^ Matching binding when found.
 lookupBySuffixMap env (mods, word) =
-  let stripped =
-        [ (mods, root)
-        | suf <- bareCaseSuffixes
-        , Just root <- [T.stripSuffix suf word]
-        ]
+  let stripped = stripCaseRoots mods word
   in findMatch stripped
   where
     findMatch [] = Nothing
@@ -776,11 +946,7 @@ lookupBySuffixHM :: HM.HashMap Identifier a -- ^ Local environment bindings.
                  -> Identifier -- ^ Surface identifier.
                  -> Maybe a -- ^ Matching binding when found.
 lookupBySuffixHM env (mods, word) =
-  let stripped =
-        [ (mods, root)
-        | suf <- bareCaseSuffixes
-        , Just root <- [T.stripSuffix suf word]
-        ]
+  let stripped = stripCaseRoots mods word
   in findMatch stripped
   where
     findMatch [] = Nothing
@@ -788,6 +954,30 @@ lookupBySuffixHM env (mods, word) =
       case HM.lookup ident env of
         Just v -> Just v
         Nothing -> findMatch rest
+
+-- | Produce likely local variable roots by removing visible case suffixes.
+-- Includes a trailing-`n` fallback (`bun` -> `bu`) for pronoun stems.
+stripCaseRoots :: [Text] -> Text -> [Identifier]
+stripCaseRoots mods word =
+  nub
+    [ (mods, root')
+    | suf <- bareCaseSuffixes
+    , Just root <- [T.stripSuffix suf word]
+    , root' <- root : maybeToList (T.stripSuffix "n" root)
+    , not (T.null root')
+    ]
+
+-- | Lookup by suffix fallback over all candidates in order.
+lookupByCandidateSuffixHM :: HM.HashMap Identifier a
+                          -> [(Identifier, Case)]
+                          -> Maybe a
+lookupByCandidateSuffixHM env = go
+  where
+    go [] = Nothing
+    go (((mods, word), _):rest) =
+      case lookupBySuffixHM env (mods, word) of
+        Just v -> Just v
+        Nothing -> go rest
 
 bareCaseSuffixes :: [Text]
 bareCaseSuffixes =

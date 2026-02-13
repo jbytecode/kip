@@ -18,6 +18,7 @@ module Kip.Primitive
 
 import qualified Data.Text as T
 import Data.Text (Text)
+import Data.Bifunctor (second)
 import Kip.AST (Identifier, Ty(..), Arg, Ann)
 
 -- | A primitive function definition with its variants
@@ -211,7 +212,7 @@ allPrimitives =
 -- | Check if a primitive function signature is implemented
 isImplementedPrimitive :: Identifier -> [Arg Ann] -> Bool
 isImplementedPrimitive name args =
-  let normalizedArgs = map (\(arg, ty) -> (arg, normalizePrimTy ty)) args
+  let normalizedArgs = map (second normalizePrimTy) args
       numArgs = length normalizedArgs
       matchingPrims = filter (\p -> primId p == name) allPrimitives
       hasUnknownTyVar = any (containsTyVar . snd) normalizedArgs
