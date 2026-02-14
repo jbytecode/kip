@@ -1,11 +1,11 @@
 {
-  "name": "kip",
-  "displayName": "Kip",
+  "name": "kipdili",
+  "displayName": "Kip Programlama Dili",
   "description": "Language support for Kip with LSP features and procedural type highlighting.",
   "version": "0.1.0",
-  "publisher": "kip",
+  "publisher": "kipdili",
   "author": {
-    "name": "Kip Contributors",
+    "name": "Joomy Korkut",
     "email": "joomy@type.systems"
   },
   "license": "MIT",

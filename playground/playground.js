@@ -137,7 +137,6 @@ const keywordList = [
   "var",
   "olamaz",
   "değilse",
-  "yazdır",
   "olsun",
   "olarak",
   "dersek",

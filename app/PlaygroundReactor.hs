@@ -17,12 +17,13 @@ prepared by the worker.
 -}
 module Main where
 
-import Control.Exception (SomeException, displayException, try)
+import Control.Exception (SomeException, displayException, fromException, try)
 import Data.Int (Int32)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Foreign.C.Types (CInt(..))
+import System.Exit (ExitCode(..))
 import System.IO (hPutStrLn, stderr)
 
 import Kip.Playground
@@ -101,8 +102,12 @@ kipRun modeRaw langRaw =
       result <- try (runPlaygroundRequest (mkRequest mode lang)) :: IO (Either SomeException PlaygroundOutput)
       case result of
         Left err -> do
-          emitReactorError (ReactorRuntimeFailure (T.pack (displayException err)))
-          return 1
+          case fromException err of
+            Just ExitSuccess -> return 0
+            Just (ExitFailure n) -> return (fromIntegral n)
+            Nothing -> do
+              emitReactorError (ReactorRuntimeFailure (T.pack (displayException err)))
+              return 1
         Right PlaygroundNoOutput ->
           return 0
         Right (PlaygroundTextOutput txt) -> do

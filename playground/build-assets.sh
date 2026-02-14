@@ -6,6 +6,7 @@ DIST_DIR="${ROOT_DIR}/playground/dist"
 ASSET_DIR="${DIST_DIR}/assets"
 EXAMPLES_DIR="${ASSET_DIR}/examples"
 
+rm -rf "${ASSET_DIR}/lib" "${ASSET_DIR}/vendor" "${EXAMPLES_DIR}"
 mkdir -p "${ASSET_DIR}/lib" "${ASSET_DIR}/vendor" "${EXAMPLES_DIR}"
 
 cp -R "${ROOT_DIR}/lib/." "${ASSET_DIR}/lib/"

@@ -1,15 +1,16 @@
 import { WASI, File, Directory, PreopenDirectory, ConsoleStdout, Fd } from "https://esm.sh/@bjorn3/browser_wasi_shim@0.4.2";
 
 // Library modules shipped into the in-memory WASI filesystem.
+// Keep this list aligned with `lib/` module layout in the repository.
 const libSources = [
   "giriş",
   "temel",
-  "temel-doğruluk",
-  "temel-dizge",
-  "temel-etki",
-  "temel-liste",
-  "temel-tam-sayı",
-  "temel-ondalık-sayı",
+  "temel/doğruluk",
+  "temel/dizge",
+  "temel/etki",
+  "temel/liste",
+  "temel/tam-sayı",
+  "temel/ondalık-sayı",
 ];
 const libFiles = [
   ...libSources.map((name) => `${name}.kip`),
@@ -231,15 +232,47 @@ function extractModeAndLang(args) {
 }
 
 async function buildLibDirectoryContents() {
-  // Materialize immutable lib directory from cached files.
-  const libContents = new Map();
+  // Materialize immutable lib directory tree from cached files.
+  const root = new Map();
+
+  const ensureChildDir = (dirMap, name) => {
+    const existing = dirMap.get(name);
+    if (existing instanceof Map) {
+      return existing;
+    }
+    const next = new Map();
+    dirMap.set(name, next);
+    return next;
+  };
+
+  const insertPath = (relativePath, fileObj) => {
+    const parts = relativePath.split("/");
+    let dir = root;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      dir = ensureChildDir(dir, parts[i]);
+    }
+    dir.set(parts[parts.length - 1], fileObj);
+  };
+
+  const materialize = (dirMap) => {
+    const out = new Map();
+    for (const [name, value] of dirMap.entries()) {
+      if (value instanceof Map) {
+        out.set(name, new Directory(materialize(value)));
+      } else {
+        out.set(name, value);
+      }
+    }
+    return out;
+  };
+
   for (const file of libFiles) {
     const fileObj = await loadLibFile(file);
     if (fileObj) {
-      libContents.set(file, fileObj);
+      insertPath(file, fileObj);
     }
   }
-  return libContents;
+  return materialize(root);
 }
 
 async function buildVendorDirectoryContents() {
@@ -348,6 +381,11 @@ async function runWasmReactor({ args, source, signal, buffer }) {
   // - same in-memory FS tree
   // - replace only /main.kip and stdin buffers per invocation
   const reactorState = await getReactorState();
+  // In reactor mode, Haskell process-global hash caches survive between runs.
+  // If we keep /main.iz, stale module caches can be reused for changed source.
+  // Force fresh typecheck of the user buffer on every run.
+  reactorState.rootContents.delete("main.iz");
+  reactorState.rootContents.delete("main.kip.iz");
   reactorState.rootContents.set("main.kip", new File(encoder.encode(source)));
   reactorState.stdinFile.setBuffers(signal, buffer);
 
