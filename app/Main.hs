@@ -98,6 +98,7 @@ data CompilerMsg
   | MsgLibMissing
   | MsgFileNotFound FilePath
   | MsgModuleNotFound Identifier
+  | MsgUnknownCodegenTarget Text
   | MsgParseError (ParseErrorBundle Text ParserError)
   | MsgRunFailed
   | MsgTCError TCError (Maybe Text) [Identifier] [(Identifier, [Identifier])]
@@ -111,6 +112,12 @@ data CompilerMsg
   | MsgPrimFuncAdded Identifier [Arg Ann] Bool [Identifier] [(Identifier, [Identifier])]
   | MsgTypeAdded Identifier
   | MsgPrimTypeAdded Identifier
+
+-- | Internal renderer-context failures that indicate a programming bug.
+data InternalRenderError
+  = MissingRenderCacheAndFsm
+  | MissingParserCaches
+  | MissingFsmOnly
 
 -- | Rendering context for diagnostics and output.
 data RenderCtx =
@@ -230,6 +237,19 @@ renderError :: Bool -- ^ Whether to colorize output.
             -> Text -- ^ Input text.
             -> Text -- ^ Styled output.
 renderError useColor = applyColor useColor red
+
+-- | Render internal context failures in the selected language.
+renderInternalRenderError :: Lang -- ^ Language selection.
+                          -> InternalRenderError -- ^ Internal failure category.
+                          -> Text -- ^ Localized diagnostic text.
+renderInternalRenderError lang err =
+  case (lang, err) of
+    (LangTr, MissingRenderCacheAndFsm) -> "İç hata: render için önbellek ve biçimbirim çözümleyici gerekli."
+    (LangEn, MissingRenderCacheAndFsm) -> "Internal error: rendering requires RenderCache and FSM."
+    (LangTr, MissingParserCaches) -> "İç hata: ayrıştırıcı önbellek erişimi için biçimbirim önbellekleri gerekli."
+    (LangEn, MissingParserCaches) -> "Internal error: parser cache access requires morphology caches."
+    (LangTr, MissingFsmOnly) -> "İç hata: render için biçimbirim çözümleyici gerekli."
+    (LangEn, MissingFsmOnly) -> "Internal error: rendering requires FSM."
 
 -- | Emit a message using a concrete render context in IO.
 emitMsgIO :: RenderCtx -- ^ Render context.
@@ -548,7 +568,8 @@ requireCacheFsm = do
   ctx <- ask
   case (rcCache ctx, rcFsm ctx) of
     (Just cache, Just fsm) -> return (cache, fsm)
-    _ -> error "Internal error: rendering requires RenderCache and FSM"
+    _ -> liftIO . ioError . userError . T.unpack $
+      renderInternalRenderError (rcLang ctx) MissingRenderCacheAndFsm
 
 -- | Require parser morphology caches from the context.
 requireParserCaches :: RenderM (MorphCache, MorphCache) -- ^ Parser ups/downs caches.
@@ -556,7 +577,8 @@ requireParserCaches = do
   ctx <- ask
   case (rcUpsCache ctx, rcDownsCache ctx) of
     (Just ups, Just downs) -> return (ups, downs)
-    _ -> error "Internal error: parser cache access requires morphology caches"
+    _ -> liftIO . ioError . userError . T.unpack $
+      renderInternalRenderError (rcLang ctx) MissingParserCaches
 
 -- | Require an FSM from the context.
 requireFsm :: RenderM FSM -- ^ Morphology FSM.
@@ -564,7 +586,8 @@ requireFsm = do
   ctx <- ask
   case rcFsm ctx of
     Just fsm -> return fsm
-    Nothing -> error "Internal error: rendering requires FSM"
+    Nothing -> liftIO . ioError . userError . T.unpack $
+      renderInternalRenderError (rcLang ctx) MissingFsmOnly
 
 -- | Render messages that do not require extra context.
 renderCompilerMsgBasic :: CompilerMsg -- ^ Message to render.
@@ -609,6 +632,11 @@ renderCompilerMsgBasic msg = do
           case rcLang ctx of
             LangTr -> renderError (rcUseColor ctx) (T.pack (prettyIdent name) <> " modülü bulunamadı.")
             LangEn -> renderError (rcUseColor ctx) ("Module not found: " <> T.pack (prettyIdent name))
+      MsgUnknownCodegenTarget target ->
+        Just $
+          case rcLang ctx of
+            LangTr -> renderError (rcUseColor ctx) ("Bilinmeyen kod üretim hedefi: " <> target)
+            LangEn -> renderError (rcUseColor ctx) ("Unknown codegen target: " <> target)
       MsgParseError err ->
         Just (renderError (rcUseColor ctx) (renderParseError (rcLang ctx) err))
       MsgRunFailed ->
@@ -896,7 +924,7 @@ main = do
           TIO.putStrLn (codegenProgram allStmts)
           exitSuccess
         _ ->
-          die ("Unknown codegen target: " ++ T.unpack target)
+          die . T.unpack =<< runReaderT (render (MsgUnknownCodegenTarget target)) basicCtx
     ModeBuild -> do
       when (null (optFiles opts)) $
         die . T.unpack =<< runReaderT (render MsgNeedFileOrDir) basicCtx

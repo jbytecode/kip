@@ -19,6 +19,8 @@ module Main where
 
 import Control.Exception (SomeException, displayException, try)
 import Data.Int (Int32)
+import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Foreign.C.Types (CInt(..))
 import System.IO (hPutStrLn, stderr)
@@ -36,13 +38,27 @@ data ReactorMode
   | ReactorCodegenJs
   deriving (Eq, Show)
 
+-- | Structured reactor-level failures.
+data ReactorError
+  = UnknownReactorMode CInt
+  | ReactorRuntimeFailure Text
+
+-- | Render reactor failures in the selected language.
+renderReactorError :: Lang -> ReactorError -> Text
+renderReactorError lang err =
+  case (lang, err) of
+    (LangTr, UnknownReactorMode n) -> "Bilinmeyen reaktör kipi: " <> T.pack (show n)
+    (LangEn, UnknownReactorMode n) -> "Unknown reactor mode: " <> T.pack (show n)
+    (LangTr, ReactorRuntimeFailure msg) -> "Reaktör çalışma hatası: " <> msg
+    (LangEn, ReactorRuntimeFailure msg) -> "Reactor runtime failure: " <> msg
+
 -- | Decode host mode integer into 'ReactorMode'.
-decodeMode :: CInt -> Either String ReactorMode
+decodeMode :: CInt -> Either ReactorError ReactorMode
 decodeMode n =
   case n of
     0 -> Right ReactorExec
     1 -> Right ReactorCodegenJs
-    _ -> Left ("Unknown reactor mode: " ++ show n)
+    _ -> Left (UnknownReactorMode n)
 
 -- | Decode host language integer into runner language.
 decodeLang :: CInt -> Lang
@@ -73,16 +89,19 @@ state and therefore prevents user-definition leakage between consecutive calls.
 -}
 kipRun :: CInt -> CInt -> IO CInt
 kipRun modeRaw langRaw =
+  let lang = decodeLang langRaw
+      emitReactorError :: ReactorError -> IO ()
+      emitReactorError e = hPutStrLn stderr (T.unpack (renderReactorError lang e))
+  in
   case decodeMode modeRaw of
-    Left msg -> do
-      hPutStrLn stderr msg
+    Left err -> do
+      emitReactorError err
       return 2
     Right mode -> do
-      let lang = decodeLang langRaw
       result <- try (runPlaygroundRequest (mkRequest mode lang)) :: IO (Either SomeException PlaygroundOutput)
       case result of
         Left err -> do
-          hPutStrLn stderr (displayException err)
+          emitReactorError (ReactorRuntimeFailure (T.pack (displayException err)))
           return 1
         Right PlaygroundNoOutput ->
           return 0

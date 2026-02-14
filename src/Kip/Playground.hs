@@ -85,6 +85,20 @@ data PlaygroundOutput
   | PlaygroundTextOutput Text
   deriving (Eq, Show)
 
+-- | Bootstrap-time playground failures before full runtime init.
+data PlaygroundBootstrapError
+  = PlaygroundTrmorphMissing
+  | PlaygroundLibMissing
+
+-- | Render bootstrap failures for the selected language.
+renderPlaygroundBootstrapError :: Lang -> PlaygroundBootstrapError -> Text
+renderPlaygroundBootstrapError lang err =
+  case (lang, err) of
+    (LangTr, PlaygroundTrmorphMissing) -> "vendor/trmorph.fst bulunamadı."
+    (LangEn, PlaygroundTrmorphMissing) -> "vendor/trmorph.fst not found."
+    (LangTr, PlaygroundLibMissing) -> "lib/temel.kip bulunamadı."
+    (LangEn, PlaygroundLibMissing) -> "lib/temel.kip not found."
+
 {- |
 Execute one request with fresh compiler and evaluator state.
 
@@ -131,7 +145,7 @@ runPlaygroundRequest req = do
           js <- runReaderT (emitJsFilesWithDeps moduleDirs preludePst preludeTC Set.empty (prFiles req)) renderCtx
           return (PlaygroundTextOutput js)
         _ ->
-          die ("Unknown codegen target: " ++ T.unpack target)
+          die . T.unpack =<< runReaderT (renderMsg (MsgUnknownCodegenTarget target)) renderCtx
 
 -- | Locate @trmorph.fst@ path with data-dir fallback behavior.
 locateTrmorph :: Lang -> IO FilePath
@@ -140,10 +154,7 @@ locateTrmorph lang = do
   exists <- doesFileExist path
   if exists
     then return path
-    else die . T.unpack $
-      case lang of
-        LangTr -> "vendor/trmorph.fst bulunamadı."
-        LangEn -> "vendor/trmorph.fst not found."
+    else die . T.unpack $ renderPlaygroundBootstrapError lang PlaygroundTrmorphMissing
 
 -- | Locate stdlib root (@lib/temel.kip@) with data-dir fallback behavior.
 locateLibDir :: Lang -> IO FilePath
@@ -152,10 +163,7 @@ locateLibDir lang = do
   exists <- doesFileExist path
   if exists
     then return (takeDirectory path)
-    else die . T.unpack $
-      case lang of
-        LangTr -> "lib/temel.kip bulunamadı."
-        LangEn -> "lib/temel.kip not found."
+    else die . T.unpack $ renderPlaygroundBootstrapError lang PlaygroundLibMissing
 
 {- |
 Resolve a packaged data file path from runtime candidates.

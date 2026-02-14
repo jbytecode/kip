@@ -113,6 +113,7 @@ data CompilerMsg
   | MsgLibMissing
   | MsgFileNotFound FilePath
   | MsgModuleNotFound Identifier
+  | MsgUnknownCodegenTarget Text
   | MsgParseError (ParseErrorBundle Text ParserError)
   | MsgRunFailed
   | MsgTCError TCError (Maybe Text) [Identifier] [(Identifier, [Identifier])]
@@ -194,6 +195,11 @@ renderMsg msg = do
         case rcLang ctx of
           LangTr -> T.pack (prettyIdent name) <> " modülü bulunamadı."
           LangEn -> "Module not found: " <> T.pack (prettyIdent name)
+    MsgUnknownCodegenTarget target ->
+      return $
+        case rcLang ctx of
+          LangTr -> "Bilinmeyen kod üretim hedefi: " <> target
+          LangEn -> "Unknown codegen target: " <> target
     MsgParseError err ->
       return (renderParseError (rcLang ctx) err)
     MsgRunFailed ->
