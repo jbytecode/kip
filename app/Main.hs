@@ -1283,9 +1283,8 @@ main = do
           retPart <-
             case mRet of
               Just ty -> do
-                tyStr <- renderTy cache fsm paramTyCons tyMods (normalizeTyNom ty)
-                tyStr' <- inflectLastWord cache fsm P3s tyStr
-                return (Just (renderTypeText (rcUseColor ctx) (T.pack tyStr')))
+                tyParts <- renderTyPartsPossessive cache fsm paramTyCons tyMods (normalizeTyNom ty)
+                return (Just (colorizeTyParts (rcUseColor ctx) tyParts))
               Nothing -> return Nothing
           let retStr =
                 case retPart of
@@ -1306,22 +1305,6 @@ main = do
             TySkolem ann name -> TySkolem (setAnnCase ann Nom) name
             Arr ann d i -> Arr (setAnnCase ann Nom) (normalizeTyNom d) (normalizeTyNom i)
             TyApp ann ctor args -> TyApp (setAnnCase ann Nom) (normalizeTyNom ctor) (map normalizeTyNom args)
-
-        -- | Inflect the last word of a type string for signature display.
-        inflectLastWord :: RenderCache -- ^ Render cache.
-                        -> FSM -- ^ Morphology FSM.
-                        -> Case -- ^ Target case.
-                        -> String -- ^ Input string.
-                        -> IO String -- ^ Inflected string.
-        inflectLastWord cache fsm cas s =
-          case words s of
-            [] -> return s
-            ws ->
-              case reverse ws of
-                lastWord:revRest -> do
-                  inflected <- renderIdentWithCases cache fsm ([], T.pack lastWord) [cas]
-                  return (unwords (reverse (inflected : revRest)))
-                [] -> return s
 
     -- | Evaluate a REPL statement and update the evaluator state.
     evalReplStmt :: [Identifier] -- ^ Type parameters for rendering.

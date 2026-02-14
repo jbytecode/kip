@@ -11,6 +11,7 @@ module Kip.Render
   , renderTy
   , renderTyNom
   , renderTyParts
+  , renderTyPartsPossessive
   , renderTyPossessive
   , renderArg
   , renderArgParts
@@ -503,7 +504,7 @@ renderTyParts cache fsm paramTyCons tyMods ty =
   case ty of
     TyInd ann name -> do
       s <- renderIdentWithCase cache fsm (applyTyMods tyMods name) (annCase ann)
-      return [(s, False)]
+      return [(s, isLikelyTypeVar name)]
     TyVar ann name -> do
       s <- renderIdentWithCase cache fsm name (annCase ann)
       return [(s, True)]
@@ -535,9 +536,17 @@ renderTyParts cache fsm paramTyCons tyMods ty =
     TyString ann -> do
       s <- renderIdentWithCase cache fsm ([], T.pack "dizge") (annCase ann)
       return [(s, False)]
-    Arr {} -> do
-      s <- renderTy cache fsm paramTyCons tyMods ty
-      return [(s, False)]
+    Arr ann d i -> do
+      let d' = setTyCase Gen d
+          i' = setTyCase Nom i
+      domParts <- renderTyParts cache fsm paramTyCons tyMods d'
+      imgBaseParts <- renderTyPartsPossessive cache fsm paramTyCons tyMods i'
+      imgParts <-
+        if annCase ann == Nom
+          then return imgBaseParts
+          else inflectLastPartCase cache fsm (annCase ann) imgBaseParts
+      let normalizedImgParts = map (B.first normalizePossIns) imgParts
+      return (domParts ++ [(" ", False)] ++ normalizedImgParts)
 
 -- | Render a typed argument as a single string.
 renderArg :: RenderCache -- ^ Render cache.
@@ -663,7 +672,7 @@ renderTyPartsPossessive cache fsm paramTyCons tyMods ty =
   case ty of
     TyInd ann name -> do
       s <- renderIdentWithCases cache fsm (applyTyMods tyMods name) (possessiveCases (annCase ann))
-      return [(s, False)]
+      return [(s, isLikelyTypeVar name)]
     TyVar ann name -> do
       s <- renderIdentWithCases cache fsm name (possessiveCases (annCase ann))
       return [(s, True)]
@@ -691,9 +700,37 @@ renderTyPartsPossessive cache fsm paramTyCons tyMods ty =
     TyString ann -> do
       s <- renderIdentWithCases cache fsm ([], T.pack "dizge") (possessiveCases (annCase ann))
       return [(s, False)]
-    Arr {} -> do
-      s <- renderTyPossessive cache fsm paramTyCons tyMods ty
-      return [(s, False)]
+    Arr ann d i -> do
+      let d' = setTyCase Gen d
+          i' = setTyCase Nom i
+      domParts <- renderTyParts cache fsm paramTyCons tyMods d'
+      imgBaseParts <- renderTyPartsPossessive cache fsm paramTyCons tyMods i'
+      imgParts <-
+        if annCase ann == Nom
+          then return imgBaseParts
+          else inflectLastPartCase cache fsm (annCase ann) imgBaseParts
+      let normalizedImgParts = map (B.first normalizePossIns) imgParts
+      return (domParts ++ [(" ", False)] ++ normalizedImgParts)
+
+-- | Apply a grammatical case to the last rendered type part.
+inflectLastPartCase :: RenderCache
+                    -> FSM
+                    -> Case
+                    -> [(String, Bool)]
+                    -> IO [(String, Bool)]
+inflectLastPartCase cache fsm cas parts =
+  case reverse parts of
+    [] -> return []
+    (lastTxt, isVar):restRev -> do
+      inflected <- applyCaseToLastWord cache fsm cas lastTxt
+      return (reverse ((inflected, isVar) : restRev))
+
+-- | Heuristic: treat single-letter identifiers as type variables for coloring.
+isLikelyTypeVar :: Identifier -> Bool
+isLikelyTypeVar (mods, name) =
+  null mods
+    && T.length name == 1
+    && T.all (\c -> isLetter c && isLower c) name
 
 -- | Build a possessive-then-case sequence.
 possessiveCases :: Case -- ^ Target case.
