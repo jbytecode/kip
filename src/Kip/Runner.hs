@@ -13,8 +13,10 @@ module Kip.Runner
     -- * Error rendering
   , ParserErrorTr(..)
   , ParserErrorEn(..)
+  , ParseErrorRenderTarget(..)
   , renderMsg
   , renderParseError
+  , renderParseErrorFor
   , renderEvalError
   , renderTCError
   , renderTCErrorWithSource
@@ -46,6 +48,7 @@ import Control.Monad (forM, when, unless, filterM)
 import Control.Monad.IO.Class
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
 import Data.List (intercalate, isPrefixOf, nub, tails, findIndex, foldl')
+import Data.Char (isDigit)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -136,6 +139,12 @@ instance ShowErrorComponent ParserErrorTr where
 instance ShowErrorComponent ParserErrorEn where
   showErrorComponent (ParserErrorEn err) = T.unpack (renderParserErrorEn err)
 
+-- | Output target for parse error rendering.
+data ParseErrorRenderTarget
+  = ParseErrorForCli
+  | ParseErrorForLsp
+  deriving (Eq, Show)
+
 {- | Render evaluation errors with proper localization.
 
 Evaluation errors occur at runtime and include:
@@ -222,7 +231,11 @@ emitMsgIO ctx msg = do
 
 -- | Render a parse error bundle in the requested language.
 renderParseError :: Lang -> ParseErrorBundle Text ParserError -> Text
-renderParseError lang err =
+renderParseError = renderParseErrorFor ParseErrorForCli
+
+-- | Render a parse error bundle for a concrete output target.
+renderParseErrorFor :: ParseErrorRenderTarget -> Lang -> ParseErrorBundle Text ParserError -> Text
+renderParseErrorFor target lang err =
   case findUnrecognizedWordError err of
     Just (wordTxt, sp, suggestions, source) ->
       let header =
@@ -233,15 +246,50 @@ renderParseError lang err =
             case lang of
               LangTr -> renderParserErrorTr (ErrUnrecognizedTurkishWord wordTxt sp suggestions)
               LangEn -> renderParserErrorEn (ErrUnrecognizedTurkishWord wordTxt sp suggestions)
-      in header <> renderSpanSnippet source sp <> "\n" <> msg
+      in case target of
+           ParseErrorForCli -> header <> renderSpanSnippet source sp <> "\n" <> msg
+           ParseErrorForLsp -> header <> msg
     Nothing ->
       case lang of
         LangTr ->
           let trBundle = mapParseErrorBundle ParserErrorTr err
-          in "Sözdizim hatası:\n" <> T.pack (turkifyParseError (errorBundlePretty trBundle))
+              pretty = T.pack (turkifyParseError (errorBundlePretty trBundle))
+          in "Sözdizim hatası:\n" <> compactPretty target pretty
         LangEn ->
           let enBundle = mapParseErrorBundle ParserErrorEn err
-          in "Syntax error:\n" <> T.pack (errorBundlePretty enBundle)
+              pretty = T.pack (errorBundlePretty enBundle)
+          in "Syntax error:\n" <> compactPretty target pretty
+
+-- | Remove location/snippet gutter emitted by Megaparsec pretty printer.
+compactPretty :: ParseErrorRenderTarget -> Text -> Text
+compactPretty target txt =
+  case target of
+    ParseErrorForCli -> txt
+    ParseErrorForLsp ->
+      T.intercalate "\n" (filter (not . isSnippetLine) (T.lines txt))
+  where
+    isSnippetLine ln =
+      let s = T.strip ln
+      in isLocationLine s || isGutterLine s || isCodeLine s || isCaretLine s
+    isLocationLine s =
+      case T.breakOnEnd ":" s of
+        ("", _) -> False
+        _ ->
+          case reverse (T.splitOn ":" (T.dropWhileEnd (== ':') s)) of
+            colTxt:lineTxt:_ ->
+              T.all isDigit colTxt && T.all isDigit lineTxt
+            _ -> False
+    isGutterLine s = s == "|"
+    isCodeLine s =
+      case T.breakOn "|" s of
+        (lhs, rhs) ->
+          not (T.null rhs) && T.all (\c -> isDigit c || c == ' ') (T.strip lhs)
+    isCaretLine s =
+      case T.breakOn "|" s of
+        (_, rhs) | T.null rhs -> False
+        (_, rhs) ->
+          let marker = T.strip (T.drop 1 rhs)
+          in not (T.null marker) && T.all (== '^') marker
 
 -- | Find the custom unrecognized-word parser error, if present.
 findUnrecognizedWordError :: ParseErrorBundle Text ParserError -> Maybe (Text, Span, [Text], Text)

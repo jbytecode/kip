@@ -67,7 +67,7 @@ import Kip.Eval (EvalState, emptyEvalState)
 import Kip.Parser
 import Kip.Render
 import qualified Kip.Render as Render
-import Kip.Runner (RenderCtx(..), Lang(..), renderParseError, renderTCError, tcErrSpan, loadPreludeState)
+import Kip.Runner (RenderCtx(..), Lang(..), ParseErrorRenderTarget(..), renderParseErrorFor, renderTCError, tcErrSpan, loadPreludeState)
 import Kip.TypeCheck
 import Language.Foma
 import Paths_kip (getDataFileName)
@@ -1842,7 +1842,7 @@ parseErrorToDiagnostic source bundle =
               ]
           _ -> Nothing
       range = fromMaybe (Range pos pos) customRange
-      msg = renderParseError LangTr bundle
+      msg = renderParseErrorFor ParseErrorForLsp LangTr bundle
   in Diagnostic range (Just DiagnosticSeverity_Error) Nothing Nothing (Just "kip") msg Nothing Nothing Nothing
 
 -- | Render a typechecker error into a diagnostic using the LSP render context.
