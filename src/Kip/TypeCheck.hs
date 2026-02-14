@@ -416,6 +416,14 @@ tcExp1With allowEffect e =
                                     expCase == Acc &&
                                     argCase == P3s &&
                                     hasExpectedCaseCandidate expCase arg
+                                  ambiguousP3sBareAccHead =
+                                    expCase == Acc &&
+                                    argCase == P3s &&
+                                    case arg of
+                                      App {fn = Var {varName}} ->
+                                        not (T.isSuffixOf (T.pack "ki") (snd varName)) &&
+                                        isBareAccInCtx varName
+                                      _ -> False
                                   ambiguousBareAcc =
                                     expCase == Acc &&
                                     argCase == Acc &&
@@ -424,7 +432,7 @@ tcExp1With allowEffect e =
                                         not (T.isSuffixOf (T.pack "ki") (snd varName)) &&
                                         isBareAccInCtx varName
                                       _ -> False
-                              in ambiguousP3sAcc || ambiguousBareAcc || (expCase /= argCase && (not flexible || strictGenToIns) && not higherOrder)
+                              in ambiguousP3sAcc || ambiguousP3sBareAccHead || ambiguousBareAcc || (expCase /= argCase && (not flexible || strictGenToIns) && not higherOrder)
                         in if hasCaseMismatch
                              then Nothing
                              else if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTysForSig tys)
