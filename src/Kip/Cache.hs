@@ -18,7 +18,6 @@ import System.Environment (getExecutablePath)
 import Control.Exception (try, SomeException)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import qualified Data.Map.Strict as Map
-import qualified Data.MultiMap as MultiMap
 import qualified Data.Set as Set
 import System.IO.Unsafe (unsafePerformIO)
 import Data.Time.Clock (UTCTime)
@@ -27,6 +26,7 @@ import Crypto.Hash.SHA256 (hash, hashlazy)
 import qualified Data.ByteString as BS
 import Data.ByteString.Lazy (fromStrict, toStrict)
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.HashTable.IO as HT
 
 import Kip.AST
 import Kip.Parser (ParserState(..), MorphCache)
@@ -72,6 +72,11 @@ data CachedModule = CachedModule
 instance Binary CachedModule
 
 -- | Serialized parser state subset needed to restore a module.
+--
+-- ==== Performance note (Optimization 10)
+-- Stores serialized snapshots of parser morphology caches
+-- ('pupsCache'/'pdownsCache') so repeated runs can avoid cold-start Foma
+-- calls after loading @.iz@ files.
 data CachedParserState = CachedParserState
   { pctx :: [Identifier] -- ^ Parser context identifiers.
   , pctors :: [Identifier] -- ^ Constructor identifiers.
@@ -80,35 +85,52 @@ data CachedParserState = CachedParserState
   , ptyMods :: [(Identifier, [Identifier])] -- ^ Type modifier expansions.
   , pprimTypes :: [Identifier] -- ^ Primitive type identifiers.
   , pdefSpans :: Map.Map Identifier [Span] -- ^ Definition spans.
+  , pupsCache :: [(T.Text, [T.Text])] -- ^ Persisted morphology analysis cache.
+  , pdownsCache :: [(T.Text, [T.Text])] -- ^ Persisted morphology generation cache.
   } deriving (Generic)
 
 instance Binary CachedParserState
 
 -- | Convert a parser state into a cached representation.
+--
+-- ==== Performance note (Optimization 10)
+-- Materializes parser hash-table morphology caches into lists so they can be
+-- persisted in the module cache.
 toCachedParserState ::
   ParserState -- ^ Parser state to serialize.
-  -> CachedParserState -- ^ Compact cached payload.
-toCachedParserState ps =
-  CachedParserState
-    { pctx = Set.toList (parserCtx ps)
-    , pctors = parserCtors ps
-    , ptyParams = parserTyParams ps
-    , ptyCons = parserTyCons ps
-    , ptyMods = parserTyMods ps
-    , pprimTypes = parserPrimTypes ps
-    , pdefSpans = parserDefSpans ps
-    }
+  -> IO CachedParserState -- ^ Compact cached payload.
+toCachedParserState ps = do
+  upsEntries <- HT.toList (parserUpsCache ps)
+  downsEntries <- HT.toList (parserDownsCache ps)
+  return
+    CachedParserState
+      { pctx = Set.toList (parserCtx ps)
+      , pctors = parserCtors ps
+      , ptyParams = parserTyParams ps
+      , ptyCons = parserTyCons ps
+      , ptyMods = parserTyMods ps
+      , pprimTypes = parserPrimTypes ps
+      , pdefSpans = parserDefSpans ps
+      , pupsCache = upsEntries
+      , pdownsCache = downsEntries
+      }
 
 -- | Restore a parser state from its cached representation.
+--
+-- ==== Performance note (Optimization 10)
+-- Rehydrates persisted morphology cache entries into the shared parser cache
+-- tables before returning the parser state.
 fromCachedParserState ::
   FSM -- ^ Morphology FSM handle.
   -> Maybe FilePath -- ^ Path to the cached module (for validation).
   -> MorphCache -- ^ Shared ups cache.
   -> MorphCache -- ^ Shared downs cache.
   -> CachedParserState -- ^ Cached parser snapshot.
-  -> ParserState -- ^ Rehydrated parser state.
-fromCachedParserState fsm cachePath upsCache downsCache CachedParserState{..} =
-  MkParserState fsm (Set.fromList pctx) pctors ptyParams ptyCons ptyMods pprimTypes pdefSpans cachePath upsCache downsCache
+  -> IO ParserState -- ^ Rehydrated parser state.
+fromCachedParserState fsm cachePath upsCache downsCache CachedParserState{..} = do
+  mapM_ (uncurry (HT.insert upsCache)) pupsCache
+  mapM_ (uncurry (HT.insert downsCache)) pdownsCache
+  return (MkParserState fsm (Set.fromList pctx) pctors ptyParams ptyCons ptyMods pprimTypes pdefSpans cachePath upsCache downsCache)
 
 -- | Cached wrapper for the type checker state.
 newtype CachedTCState = CachedTCState TCState
@@ -123,10 +145,20 @@ toCachedTCState ::
 toCachedTCState = CachedTCState
 
 -- | Unwrap a cached type checker state.
+--
+-- ==== Performance note (A1)
+-- 'TCState' stores overloadable entries as @Map k [v]@ encoded by flattening
+-- each list entry; decoding via @Map.fromListWith (++)@ reverses per-key order.
+-- We reverse those lists here to preserve declaration order expected by REPL
+-- signature rendering and cached/non-cached parity.
 fromCachedTCState ::
   CachedTCState -- ^ Cached state wrapper.
   -> TCState -- ^ Restored type checker state.
-fromCachedTCState (CachedTCState s) = s
+fromCachedTCState (CachedTCState s) =
+  s
+    { tcFuncs = fmap reverse (tcFuncs s)
+    , tcFuncSigs = fmap reverse (tcFuncSigs s)
+    }
 
 -- | Serialized evaluator state without closures.
 data CachedEvalState = CachedEvalState
@@ -146,8 +178,8 @@ toCachedEvalState ::
 toCachedEvalState es =
   CachedEvalState
     { evals = Map.toList (evalVals es)
-    , efuncs = MultiMap.toList (evalFuncs es)
-    , eselectors = MultiMap.toList (evalSelectors es)
+    , efuncs = [(k, v) | (k, vs) <- Map.toList (evalFuncs es), v <- vs]
+    , eselectors = [(k, v) | (k, vs) <- Map.toList (evalSelectors es), v <- vs]
     , ectors = Map.toList (evalCtors es)
     , etyCons = Map.toList (evalTyCons es)
     }
@@ -161,9 +193,9 @@ fromCachedEvalState ::
 fromCachedEvalState cache fsm CachedEvalState{..} =
   MkEvalState
     { evalVals = Map.fromList evals
-    , evalFuncs = MultiMap.fromList efuncs
-    , evalPrimFuncs = MultiMap.empty -- Rebuilt at load time
-    , evalSelectors = MultiMap.fromList eselectors
+    , evalFuncs = Map.fromListWith (++) [(k, [v]) | (k, v) <- efuncs]
+    , evalPrimFuncs = Map.empty -- Rebuilt at load time
+    , evalSelectors = Map.fromListWith (++) [(k, [v]) | (k, v) <- eselectors]
     , evalCtors = Map.fromList ectors
     , evalTyCons = Map.fromList etyCons
     , evalCurrentFile = Nothing

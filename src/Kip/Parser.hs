@@ -388,6 +388,19 @@ ordNub = go Set.empty
       | x `Set.member` seen = go seen xs
       | otherwise = x : go (Set.insert x seen) xs
 
+-- | Append items to an already deduplicated list, keeping first occurrence.
+--
+-- ==== Performance note (Optimization 12)
+-- This avoids re-running 'ordNub' over the entire left list when only a
+-- small right list is appended.
+ordNubAppend :: Ord a => [a] -> [a] -> [a]
+ordNubAppend xs = go (Set.fromList xs) xs
+  where
+    go _ acc [] = acc
+    go seen acc (z:zs)
+      | z `Set.member` seen = go seen acc zs
+      | otherwise = go (Set.insert z seen) (acc ++ [z]) zs
+
 -- | Whitespace parser.
 ws :: KipParser () -- ^ No result.
 ws = L.space space1 empty empty <?> "boşluk"
@@ -638,16 +651,16 @@ estimateCandidates useCtx (ss, s) = do
                   -- Also allow a candidate inferred from the surface suffix
                   -- when morphology doesn't provide a case.
                   candidates0' = addSurfaceCaseCandidate s candidates0
-                  candidates0'' = ordNub (candidates0' ++ bareCaseCandidates)
+                  candidates0'' = ordNubAppend (ordNub candidates0') bareCaseCandidates
                   hasCond = any (\(_, cas) -> cas == Cond) candidates0'
               -- Conditional (-sa/-se) gets special casing to avoid losing
               -- constructor matches when morphology is ambiguous.
               condExtra0 <- condCandidatesM s
-              let candidates = ordNub (candidates0'' ++ condExtra0)
+              let candidates = ordNubAppend candidates0'' condExtra0
                   filtered0 = filter (\(ident, _) -> ident `Set.member` parserCtx) candidates
                   filtered =
                     if any (\(_, cas) -> cas == Cond) candidates
-                      then ordNub (filtered0 ++ filter (\(_, cas) -> cas == Cond) candidates)
+                      then ordNubAppend (ordNub filtered0) (filter (\(_, cas) -> cas == Cond) candidates)
                       else filtered0
               if useCtx && not isIpSurface && not (null filtered)
                 then return filtered
@@ -678,7 +691,7 @@ estimateCandidates useCtx (ss, s) = do
                               | root <- fallbackRoots
                               , (ss, root) `Set.member` parserCtx
                               ]
-                            allMatches = ordNub (ipCandidatesFromAnalyses ++ fallbackMatches)
+                            allMatches = ordNubAppend (ordNub ipCandidatesFromAnalyses) fallbackMatches
                             pickLongest xs =
                               case xs of
                                 [] -> []
@@ -714,14 +727,14 @@ estimateCandidates useCtx (ss, s) = do
                                       Just (base, cas) | not useCtx || base `Set.member` parserCtx -> [(base, cas)]
                                       _ -> []
                                   candidates1' = addSurfaceCaseCandidate stripped candidates1
-                                  candidates1'' = ordNub (candidates1' ++ bareCaseCandidates1)
+                                  candidates1'' = ordNubAppend (ordNub candidates1') bareCaseCandidates1
                                   hasCond1 = any (\(_, cas) -> cas == Cond) candidates1'
                               condExtra1 <- condCandidatesM stripped
-                              let candidates' = ordNub (candidates1'' ++ condExtra1)
+                              let candidates' = ordNubAppend candidates1'' condExtra1
                                   filtered1 = filter (\(ident, _) -> ident `Set.member` parserCtx) candidates'
                                   filtered' =
                                     if any (\(_, cas) -> cas == Cond) candidates'
-                                      then ordNub (filtered1 ++ filter (\(_, cas) -> cas == Cond) candidates')
+                                      then ordNubAppend (ordNub filtered1) (filter (\(_, cas) -> cas == Cond) candidates')
                                       else filtered1
                               let candidatesForMatch =
                                     if null candidates'
@@ -1208,10 +1221,24 @@ pickCase allowP3s candidates =
            (_, cas):_ -> cas
 
 -- | Find a case that has multiple distinct identifiers (potential ambiguity).
+--
+-- ==== Performance note (Optimization 12)
+-- Uses a single pass to build case order and per-case identifier sets,
+-- replacing repeated @ordNub@ and per-case list scans.
 findAmbiguousCase :: [(Identifier, Case)] -> Maybe Case
 findAmbiguousCase candidates =
-  let groupedByCases = [(cas, ordNub [ident | (ident, c) <- candidates, c == cas]) | cas <- ordNub (map snd candidates)]
-      ambiguousCases = [cas | (cas, idents) <- groupedByCases, length idents > 1]
+  let (caseOrderRev, grouped, _) =
+        foldl'
+          (\(order, groups, seenCases) (ident, cas) ->
+              let groups' = M.insertWith Set.union cas (Set.singleton ident) groups
+                  seen = Set.member cas seenCases
+                  order' = if seen then order else cas : order
+                  seenCases' = if seen then seenCases else Set.insert cas seenCases
+              in (order', groups', seenCases'))
+          ([], M.empty, Set.empty)
+          candidates
+      caseOrder = reverse caseOrderRev
+      ambiguousCases = [cas | cas <- caseOrder, maybe False (\idents -> Set.size idents > 1) (M.lookup cas grouped)]
   in case ambiguousCases of
        (cas:_) -> Just cas
        [] -> Nothing
@@ -1229,13 +1256,21 @@ identRoot :: Identifier -- ^ Identifier to inspect.
 identRoot (_, x) = x
 
 -- | Match a context identifier by inflected surface forms.
+--
+-- ==== Performance note (Optimization 12)
+-- Builds the candidate case list in one pass while preserving first-seen
+-- order, reducing repeated dedup work in this hot matching path.
 matchCtxByInflection :: Set.Set Identifier -- ^ Context identifiers.
                      -> Identifier -- ^ Surface identifier.
                      -> [(Identifier, Case)] -- ^ Candidate identifiers.
                      -> KipParser (Maybe (Identifier, Case)) -- ^ Matched candidate, if any.
 matchCtxByInflection ctx ident candidates = do
   let (mods, surfaceRoot) = ident
-      cases = ordNub (map snd candidates)
+      cases = reverse (snd (foldl' (\(seen, acc) (_, cas) ->
+                  if cas `Set.member` seen
+                    then (seen, acc)
+                    else (Set.insert cas seen, cas : acc)
+                ) (Set.empty, []) candidates))
       ctxFiltered =
         if null mods
           then ctx

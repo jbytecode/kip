@@ -28,7 +28,6 @@ import Data.Maybe (fromMaybe, isJust, maybeToList, listToMaybe, mapMaybe)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Map.Strict as Map
-import qualified Data.MultiMap as MultiMap
 import Text.Megaparsec (ParseErrorBundle(..), PosState(..), errorBundlePretty)
 import Text.Megaparsec.Error (ParseError(..), ErrorFancy(..), ShowErrorComponent(..))
 import qualified Data.List.NonEmpty as NE
@@ -45,7 +44,7 @@ import Kip.TypeCheck
 import qualified Kip.TypeCheck as TC
 import Kip.Render
 import Kip.Cache
-import Repl.Steps (formatSteps, setTopCaseNom, shouldSkipInfinitiveSteps, stripStepsCopulaTRmorph)
+import Repl.Steps (formatStepsStreaming, setTopCaseNom, shouldSkipInfinitiveSteps, stripStepsCopulaTRmorph)
 import Kip.Runner (Lang(..), renderEvalError)
 import Kip.Codegen.JS (codegenProgram)
 import Data.Word
@@ -845,33 +844,42 @@ main = do
   opts <- execParser (info (cliParser <**> helper) (fullDesc <> progDesc "The compiler and interpreter for the Kip programming language"))
   let lang = optLang opts
       useColor = optMode opts == ModeRepl
-  trmorphPath <- locateTrmorph lang useColor
-  libDir <- locateLibDir lang useColor
-  fsm <- fsmReadBinaryFile trmorphPath
-  -- Create shared caches that will be used by both parser and renderer
-  upsCache <- HT.new
-  populateDemonstrativeCache upsCache
-  downsCache <- HT.new
-  let renderCache = mkRenderCache upsCache downsCache
       title = T.pack ("Kip " ++ showVersion version)
-      moduleDirs = nub (libDir : optIncludeDirs opts)
       showHeader = optMode opts == ModeRepl
       showDefn = optMode opts == ModeRepl || optMode opts == ModeTest
       basicCtx = RenderCtx lang useColor Nothing Nothing Nothing Nothing
-      renderCtx = RenderCtx lang useColor (Just renderCache) (Just fsm) (Just upsCache) (Just downsCache)
+      -- | Initialize runtime resources only for modes that actually execute code.
+      --
+      -- This intentionally defers TRmorph/FSM + shared morphology/render cache setup
+      -- until after mode-specific argument validation, so non-REPL invocations do not
+      -- eagerly start runtime machinery they may not need.
+      initRuntime :: IO (RenderCtx, [FilePath], RenderCache, FSM, MorphCache, MorphCache)
+      initRuntime = do
+        trmorphPath <- locateTrmorph lang useColor
+        libDir <- locateLibDir lang useColor
+        fsm <- fsmReadBinaryFile trmorphPath
+        upsCache <- HT.new
+        populateDemonstrativeCache upsCache
+        downsCache <- HT.new
+        let renderCache = mkRenderCache upsCache downsCache
+            moduleDirs = nub (libDir : optIncludeDirs opts)
+            renderCtx = RenderCtx lang useColor (Just renderCache) (Just fsm) (Just upsCache) (Just downsCache)
+        return (renderCtx, moduleDirs, renderCache, fsm, upsCache, downsCache)
   case optMode opts of
     ModeTest -> do
-      (preludePst, preludeTC, preludeEval, preludeLoaded) <-
-        runReaderT (loadPreludeState (optNoPrelude opts) moduleDirs renderCache fsm upsCache downsCache) renderCtx
       when (null (optFiles opts)) $
         die . T.unpack =<< runReaderT (render MsgNeedFile) basicCtx
+      (renderCtx, moduleDirs, renderCache, fsm, upsCache, downsCache) <- initRuntime
+      (preludePst, preludeTC, preludeEval, preludeLoaded) <-
+        runReaderT (loadPreludeState (optNoPrelude opts) moduleDirs renderCache fsm upsCache downsCache) renderCtx
       _ <- runReaderT (runFiles showDefn showDefn False preludePst preludeTC preludeEval moduleDirs preludeLoaded (optFiles opts)) renderCtx
       exitSuccess
     ModeExec -> do
-      (preludePst, preludeTC, preludeEval, preludeLoaded) <-
-        runReaderT (loadPreludeState (optNoPrelude opts) moduleDirs renderCache fsm upsCache downsCache) renderCtx
       when (null (optFiles opts)) $
         die . T.unpack =<< runReaderT (render MsgNeedFile) basicCtx
+      (renderCtx, moduleDirs, renderCache, fsm, upsCache, downsCache) <- initRuntime
+      (preludePst, preludeTC, preludeEval, preludeLoaded) <-
+        runReaderT (loadPreludeState (optNoPrelude opts) moduleDirs renderCache fsm upsCache downsCache) renderCtx
       _ <- runReaderT (runFiles False False False preludePst preludeTC preludeEval moduleDirs preludeLoaded (optFiles opts)) renderCtx
       exitSuccess
     ModeCodegen target -> do
@@ -879,6 +887,7 @@ main = do
         die . T.unpack =<< runReaderT (render MsgNeedFile) basicCtx
       case target of
         "js" -> do
+          (renderCtx, moduleDirs, _, fsm, upsCache, downsCache) <- initRuntime
           -- Parse and type-check files, collect all statements
           (codegenPst, codegenTC, codegenLoaded) <-
             runReaderT (loadPreludeCodegenState (optNoPrelude opts) moduleDirs fsm upsCache downsCache) renderCtx
@@ -889,10 +898,11 @@ main = do
         _ ->
           die ("Unknown codegen target: " ++ T.unpack target)
     ModeBuild -> do
-      (preludePst, preludeTC, preludeEval, preludeLoaded) <-
-        runReaderT (loadPreludeState (optNoPrelude opts) moduleDirs renderCache fsm upsCache downsCache) renderCtx
       when (null (optFiles opts)) $
         die . T.unpack =<< runReaderT (render MsgNeedFileOrDir) basicCtx
+      (renderCtx, moduleDirs, renderCache, fsm, upsCache, downsCache) <- initRuntime
+      (preludePst, preludeTC, preludeEval, preludeLoaded) <-
+        runReaderT (loadPreludeState (optNoPrelude opts) moduleDirs renderCache fsm upsCache downsCache) renderCtx
       buildTargets <- resolveBuildTargets (optFiles opts)
       let extraDirs = nub (concatMap takeDirectories buildTargets)
           buildModuleDirs = nub (moduleDirs ++ extraDirs)
@@ -901,7 +911,9 @@ main = do
       _ <- runReaderT (runFiles False False True preludeBuildPst preludeBuildTC preludeBuildEval buildModuleDirs preludeBuildLoaded buildTargets) renderCtx
       exitSuccess
     ModeRepl ->
-      if null (optFiles opts)
+      do
+        (renderCtx, moduleDirs, renderCache, fsm, upsCache, downsCache) <- initRuntime
+        if null (optFiles opts)
         then do
           (preludePst, preludeTC, preludeEval, preludeLoaded) <-
             runReaderT (loadPreludeState (optNoPrelude opts) moduleDirs renderCache fsm upsCache downsCache) renderCtx
@@ -1016,7 +1028,7 @@ main = do
               lift (outputStrLn path)
             loop rs
       | input == ":functions" = do
-          let names = nub (map snd (MultiMap.keys (tcFuncSigs (replTCState rs))))
+          let names = nub (map snd (Map.keys (tcFuncSigs (replTCState rs))))
           forM_ (sort names) $ \name ->
             lift (outputStrLn (T.unpack name))
           loop rs
@@ -1054,15 +1066,24 @@ main = do
                       sigs =
                         [ (name, args)
                         | name <- candidateNames
-                        , args <- MultiMap.lookup name (tcFuncSigs (replTCState rs))
+                        , args <- Map.findWithDefault [] name (tcFuncSigs (replTCState rs))
                         ]
+                      isInfinitive = isJust (infinitiveRoot varName)
+                      isEffectfulName ident =
+                        ident == ([], T.pack "oku")
+                          || Set.member ident (tcInfinitives (replTCState rs))
+                      hasEffectfulCandidate = any isEffectfulName candidateNames
+                      hasAmbiguousEffectCall = hasEffectfulCandidate && not isInfinitive && length sigs > 1
                   if null sigs
                     then inferExprType ctx paramTyCons parsed expr
+                    else if hasAmbiguousEffectCall
+                      then do
+                        emitMsgTCtx (MsgTCError (Ambiguity (annSpan (annExp parsed))) (Just (T.pack expr)) paramTyCons (replTyMods rs))
+                        loop rs
                     else do
                       (cache, fsm) <- runApp requireCacheFsm
                       let sigs' = reverse sigs
                           sigs'' = nubBy (\(n1, a1) (n2, a2) -> n1 == n2 && a1 == a2) sigs'
-                          isInfinitive = isJust (infinitiveRoot varName)
                       forM_ sigs'' $ \(name, args) -> do
                         let mRet = Map.lookup (name, map snd args) (tcFuncSigRets (replTCState rs))
                         line <- liftIO (renderReplSig ctx cache fsm paramTyCons (replTyMods rs) isInfinitive varName name args mRet)
@@ -1130,8 +1151,9 @@ main = do
                           let renderSteps exp = renderExpPreservingCase cache fsm' evalSt' exp >>= stripStepsCopulaTRmorph cache fsm'
                               rInput = renderSteps
                               rOutput = renderSteps . setTopCaseNom
-                          formatted <- liftIO (formatSteps (rcUseColor ctx) rInput rOutput result steps)
-                          lift (outputStrLn formatted)
+                          let rInputM = liftIO . rInput
+                              rOutputM = liftIO . rOutput
+                          formatStepsStreaming (rcUseColor ctx) rInputM rOutputM result steps (lift . outputStrLn)
                           loop rs
       | otherwise = do
           fsm <- runApp requireFsm
@@ -1263,7 +1285,7 @@ main = do
               Just ty -> do
                 tyStr <- renderTy cache fsm paramTyCons tyMods (normalizeTyNom ty)
                 tyStr' <- inflectLastWord cache fsm P3s tyStr
-                return (Just (T.pack tyStr'))
+                return (Just (renderTypeText (rcUseColor ctx) (T.pack tyStr')))
               Nothing -> return Nothing
           let retStr =
                 case retPart of
@@ -1365,12 +1387,12 @@ main = do
           mCached <- liftIO (loadCachedModule cachePath)
           case mCached of
             Just cached -> do
+              pstCached <- liftIO (fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached))
               let loaded' = Set.insert absPath loaded
-                  pstCached = fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached)
-                  tcCached = fromCachedTCState (cachedTC cached)
+                  tcCached = mergeTCState tcSt (fromCachedTCState (cachedTC cached))
                   stmts = cachedTypedStmts cached
               (_, _, newStmts, loaded'') <-
-                foldM' (collectCachedStmt moduleDirs) (pst, tcSt, [], loaded') stmts
+                foldM' (collectCachedStmt moduleDirs) (pstCached, tcCached, [], loaded') stmts
               return (pstCached, tcCached, accStmts ++ newStmts, loaded'')
             Nothing -> do
               input <- liftIO (TIO.readFile path)
@@ -1472,14 +1494,14 @@ main = do
               if buildOnly
                 then return (pst, tcSt, evalSt, loaded')
                 else do
-                  let pst' = fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached)
-                      tcSt' = tcSt
+                  pst' <- liftIO (fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached))
+                  let tcSt' = mergeTCState tcSt (fromCachedTCState (cachedTC cached))
                       evalSt' = evalSt
-                      stmts = cachedStmts cached
+                      stmts = cachedTypedStmts cached
                       paramTyCons = [name | (name, arity) <- parserTyCons pst', arity > 0]
                       source = ""
                       primRefs = collectNonInfinitiveRefs stmts
-                  foldM' (runStmt showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) (pst', tcSt', evalSt', loaded') stmts
+                  foldM' (runTypedStmt showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) (pst', tcSt', evalSt', loaded') stmts
             Nothing -> do
               input <- liftIO (TIO.readFile path)
               liftIO (parseFromFile pst input) >>= \case
@@ -1519,6 +1541,7 @@ main = do
                         Nothing -> return ()
                         Just compilerHash -> do
                           mSourceMeta <- liftIO (getFileMeta absPath)
+                          cachedParserState <- liftIO (toCachedParserState pstFinal)
                           let sourceBytes = encodeUtf8 input
                               sourceDigest = hash sourceBytes
                               fallbackSourceSize = fromIntegral (BS.length sourceBytes)
@@ -1534,13 +1557,40 @@ main = do
                                 { metadata = meta
                                 , cachedStmts = stmts
                                 , cachedTypedStmts = typedStmts
-                                , cachedParser = toCachedParserState pstFinal
+                                , cachedParser = cachedParserState
                                 , cachedTC = toCachedTCState tcSt'
                                 , cachedEval = toCachedEvalState evalSt'
                                 }
                           liftIO (saveCachedModule cachePath cachedModule)
 
                       return (pstFinal, tcSt', evalSt', loaded')
+
+    -- | Merge a cached type-checker snapshot into the current state.
+    --
+    -- Cached entries are preferred for overlapping keys so that overloaded
+    -- signature order stays stable with the source module that produced the
+    -- cache. Current-state entries are retained for keys not present in cache.
+    mergeTCState :: TCState -- ^ Current TC state.
+                 -> TCState -- ^ Cached TC state.
+                 -> TCState -- ^ Combined TC state.
+    mergeTCState cur cached =
+      MkTCState
+        { tcCtx = Set.union (tcCtx cur) (tcCtx cached)
+        , tcFuncs = Map.union (tcFuncs cached) (tcFuncs cur)
+        , tcFuncSigs = Map.union (tcFuncSigs cached) (tcFuncSigs cur)
+        , tcFuncSigRets = Map.union (tcFuncSigRets cached) (tcFuncSigRets cur)
+        , tcVarTys = tcVarTys cached ++ tcVarTys cur
+        , tcVals = Map.union (tcVals cached) (tcVals cur)
+        , tcCtors = Map.union (tcCtors cached) (tcCtors cur)
+        , tcTyCons = Map.union (tcTyCons cached) (tcTyCons cur)
+        , tcInfinitives = Set.union (tcInfinitives cur) (tcInfinitives cached)
+        , tcResolvedNames = tcResolvedNames cached ++ tcResolvedNames cur
+        , tcResolvedSigs = tcResolvedSigs cached ++ tcResolvedSigs cur
+        , tcResolvedTypes = tcResolvedTypes cached ++ tcResolvedTypes cur
+        , tcDefLocations = Map.union (tcDefLocations cached) (tcDefLocations cur)
+        , tcFuncSigLocs = Map.union (tcFuncSigLocs cached) (tcFuncSigLocs cur)
+        }
+
     -- | Run a single statement in the context of a file.
     runStmt :: Bool -- ^ Whether to show definitions.
             -> Bool -- ^ Whether to show load messages.
@@ -1604,6 +1654,69 @@ main = do
                       msg <- renderMsg (MsgEvalError evalErr)
                       liftIO (die (T.unpack msg))
                     Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded)
+
+    -- | Run a pre-typechecked statement in the context of a file.
+    --
+    -- This path is used when a valid module cache is loaded. It avoids
+    -- re-running 'tcStmt' and any forward-declaration pre-pass by assuming the
+    -- incoming statement list is already type-checked ('cachedTypedStmts').
+    runTypedStmt :: Bool -- ^ Whether to show definitions.
+                 -> Bool -- ^ Whether to show load messages.
+                 -> Bool -- ^ Whether to build-only.
+                 -> [FilePath] -- ^ Module search paths.
+                 -> FilePath -- ^ Current file path.
+                 -> [Identifier] -- ^ Type parameters for rendering.
+                 -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
+                 -> [Identifier] -- ^ Non-infinitive primitive refs.
+                 -> Text -- ^ Source input.
+                 -> (ParserState, TCState, EvalState, Set FilePath) -- ^ Current states.
+                 -> Stmt Ann -- ^ Statement to run.
+                 -> AppM (ParserState, TCState, EvalState, Set FilePath) -- ^ Updated states.
+    runTypedStmt showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods primRefs _source (pst, tcSt, evalSt, loaded) stmt =
+      case stmt of
+        Load name -> do
+          path <- resolveModulePath moduleDirs name
+          absPath <- liftIO (canonicalizePath path)
+          if Set.member absPath loaded
+            then do
+              when showLoad $
+                emitMsgIOCtx (MsgLoaded name)
+              return (pst, tcSt, evalSt, loaded)
+            else do
+              (pst', tcSt', evalSt', loaded') <- runFile False False buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path
+              when showLoad $
+                emitMsgIOCtx (MsgLoaded name)
+              return (pst', tcSt', evalSt', loaded')
+        _ -> do
+          when showDefn $
+            case stmt of
+              Defn name _ _ -> emitMsgIOCtx (MsgDefnAdded name)
+              Function name args retTy _ isInfinitive ->
+                if isExplicitRetTy retTy
+                  then emitMsgIOCtx (MsgFuncLoaded name args isInfinitive paramTyCons tyMods)
+                  else emitMsgIOCtx (MsgFuncAdded name args isInfinitive paramTyCons tyMods)
+              PrimFunc name args _ isInfinitive -> do
+                when (name `elem` primRefs || isWritePrim name) $
+                  emitMsgIOCtx (MsgPrimFuncAdded name args isInfinitive paramTyCons tyMods)
+              NewType name _ _ -> emitMsgIOCtx (MsgTypeAdded name)
+              PrimType name -> emitMsgIOCtx (MsgPrimTypeAdded name)
+              _ -> return ()
+          if buildOnly
+            then
+              case stmt of
+                ExpStmt _ -> return (pst, tcSt, evalSt, loaded)
+                _ ->
+                  liftIO (runEvalM (evalStmtInFile (Just currentPath) stmt) evalSt) >>= \case
+                    Left evalErr -> do
+                      msg <- renderMsg (MsgEvalError evalErr)
+                      liftIO (die (T.unpack msg))
+                    Right (_, evalSt') -> return (pst, tcSt, evalSt', loaded)
+            else
+              liftIO (runEvalM (evalStmtInFile (Just currentPath) stmt) evalSt) >>= \case
+                Left evalErr -> do
+                  msg <- renderMsg (MsgEvalError evalErr)
+                  liftIO (die (T.unpack msg))
+                Right (_, evalSt') -> return (pst, tcSt, evalSt', loaded)
 
     -- | Run a single statement while collecting type-checked statements for caching.
     runStmtCollect :: Bool -- ^ Whether to show definitions.
@@ -1782,7 +1895,7 @@ main = do
       let pst = newParserStateWithCaches fsm (Just path) uCache dCache
       let cachePath = cacheFilePath absPath
       liftIO (loadCachedModule cachePath) >>= \case
-        Just cached -> return (fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached))
+        Just cached -> liftIO (fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached))
         Nothing -> do
           input <- liftIO (TIO.readFile path)
           liftIO (parseFromFile pst input) >>= \case
@@ -1808,7 +1921,8 @@ main = do
           liftIO (loadCachedModule cachePath) >>= \case
             Just cached -> do
               depPaths <- liftIO $ mapM (canonicalizePath . (\(p, _, _, _) -> p)) (dependencies (metadata cached))
-              let pst' = fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached)
+              pst' <- liftIO (fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached))
+              let
                   tcSt' = fromCachedTCState (cachedTC cached)
                   loaded = Set.fromList (absPath : depPaths)
               return (pst', tcSt', loaded)

@@ -9,16 +9,28 @@ module Kip.AST where
 
 import GHC.Generics (Generic)
 import Data.List
+import Data.Bits ((.|.), (.&.), shiftL, shiftR)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Megaparsec.Pos (SourcePos(..), Pos, unPos, mkPos)
 import Data.Binary (Binary(..), Get)
-import Data.Word (Word8)
+import Data.Word (Word8, Word32, Word64)
+import Data.Binary.Get (getWord32be, getWord64be)
+import Data.Binary.Put (putWord32be, putWord64be)
 
--- | Binary instance for source positions.
+-- | Binary instance for parser positions.
+--
+-- ==== Performance note (Optimization 11)
+-- Encodes 'Pos' as a fixed-width 'Word32' to reduce decode overhead and
+-- allocation pressure compared to generic integer decoding.
 instance Binary Pos where
-  put = put . unPos
-  get = mkPos <$> get
+  put p = putWord32be (fromIntegral (unPos p) :: Word32)
+  get = do
+    w <- getWord32be
+    let n = fromIntegral w
+    if n <= 0
+      then fail "Invalid Pos (must be >= 1)"
+      else return (mkPos n)
 
 -- | Fully qualified identifier with namespace parts.
 type Identifier = ([Text], Text)
@@ -37,12 +49,25 @@ data Case =
   deriving (Show, Eq, Ord, Generic, Binary)
 
 -- | Binary instance for source positions.
+--
+-- ==== Performance note (Optimization 11)
+-- Packs line and column into a single 'Word64' payload for faster cache
+-- deserialization of span-heavy ASTs.
 instance Binary SourcePos where
   put (SourcePos name line col) = do
     put name
-    put line
-    put col
-  get = SourcePos <$> get <*> get <*> get
+    let packedLineCol =
+          (fromIntegral (unPos line) `shiftL` 32)
+            .|. fromIntegral (unPos col) :: Word64
+    putWord64be packedLineCol
+  get = do
+    name <- get
+    packedLineCol <- getWord64be
+    let lineW = fromIntegral (packedLineCol `shiftR` 32) :: Int
+        colW = fromIntegral (packedLineCol .&. 0xffffffff) :: Int
+    if lineW <= 0 || colW <= 0
+      then fail "Invalid SourcePos coordinates (must be >= 1)"
+      else return (SourcePos name (mkPos lineW) (mkPos colW))
 
 -- | Source span for diagnostics.
 data Span =
@@ -102,9 +127,9 @@ data Ty a =
 data Exp a =
     Var    { annExp :: a , varName :: Identifier , varCandidates :: [(Identifier, Case)] } -- ^ Variable reference.
   | App    { annExp :: a , fn :: Exp a , args :: [Exp a] } -- ^ Function application.
-  | StrLit { annExp :: a , lit :: Text } -- ^ String literal.
-  | IntLit { annExp :: a , intVal :: Integer } -- ^ Integer literal.
-  | FloatLit { annExp :: a , floatVal :: Double } -- ^ Floating-point literal.
+  | StrLit { annExp :: a , lit :: !Text } -- ^ String literal.
+  | IntLit { annExp :: a , intVal :: !Integer } -- ^ Integer literal.
+  | FloatLit { annExp :: a , floatVal :: !Double } -- ^ Floating-point literal.
   | Bind   { annExp :: a , bindName :: Identifier , bindNameAnn :: a , bindExp :: Exp a } -- ^ Binding expression.
   | Seq    { annExp :: a , first :: Exp a , second :: Exp a } -- ^ Sequential composition.
   | Match  { annExp :: a , scrutinee :: Exp a , clauses :: [Clause a] } -- ^ Pattern match.
@@ -113,14 +138,20 @@ data Exp a =
   deriving (Show, Eq, Generic, Functor, Binary)
 
 -- | Flatten nested applications into a root function and accumulated arguments.
+--
+-- ==== Performance note
+-- Uses a difference list (@[Exp a] -> [Exp a]@) to collect arguments in
+-- a single pass.  The previous version built the result via
+-- @prefixArgs ++ appArgs@ at each recursive step, which is O(n^2) for
+-- deeply nested applications because @(++)@ traverses its left operand.
+-- The difference list composes in O(1) and materializes in O(n).
 flattenApplied :: Exp a -- ^ Expression to inspect.
               -> (Exp a, [Exp a]) -- ^ Root function and arguments in call order.
-flattenApplied exp =
-  case exp of
-    App {fn = appFn, args = appArgs} ->
-      let (root, prefixArgs) = flattenApplied appFn
-      in (root, prefixArgs ++ appArgs)
-    _ -> (exp, [])
+flattenApplied = go id
+  where
+    go dl e = case e of
+      App {fn = appFn, args = appArgs} -> go ((appArgs ++) . dl) appFn
+      _ -> (e, dl [])
 
 -- | Reorder values to expected cases, allowing nominative values to fill
 -- unmatched expected cases.
@@ -323,9 +354,15 @@ data Stmt ann =
 --   TypeCheck Ty' = ()
 
 -- | Check whether a string contains more than one word.
+--
+-- ==== Performance note
+-- Pattern-matches on @words s@ instead of computing @length (words s)@,
+-- which would traverse the entire result list just to compare with 1.
 isMultiWord :: String -- ^ Candidate string.
             -> Bool -- ^ True when the string has multiple words.
-isMultiWord s = length (words s) /= 1
+isMultiWord s = case words s of
+  [_] -> False
+  _   -> True
 
 -- | Pretty-print an expression for fallback rendering.
 prettyExp :: Exp a -- ^ Expression to render.

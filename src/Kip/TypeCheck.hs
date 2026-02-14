@@ -114,7 +114,6 @@ import Control.Monad.IO.Class
 import Data.List (find, foldl', intersect, nub, zipWith4)
 import Data.Maybe (fromMaybe, catMaybes, mapMaybe, isJust, maybeToList, listToMaybe)
 import qualified Data.Map.Strict as Map
-import qualified Data.MultiMap as MultiMap
 import System.FilePath (FilePath)
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -146,8 +145,8 @@ recordFuncSigLocations path defs =
 data TCState =
   MkTCState
     { tcCtx :: Set.Set Identifier -- ^ Names in scope.
-    , tcFuncs :: MultiMap.MultiMap Identifier Int -- ^ Known function arities (MultiMap for overloading).
-    , tcFuncSigs :: MultiMap.MultiMap Identifier [Arg Ann] -- ^ Function argument signatures (MultiMap for overloading).
+    , tcFuncs :: Map.Map Identifier [Int] -- ^ Known function arities (list for overloading).
+    , tcFuncSigs :: Map.Map Identifier [[Arg Ann]] -- ^ Function argument signatures (list for overloading).
     , tcFuncSigRets :: Map.Map (Identifier, [Ty Ann]) (Ty Ann) -- ^ Function return types by arg types.
     , tcVarTys :: [(Identifier, Ty Ann)] -- ^ Variable type bindings (list for shadowing).
     , tcVals :: Map.Map Identifier (Exp Ann) -- ^ Value bindings for inlining.
@@ -166,8 +165,8 @@ data TCState =
 instance Binary TCState where
   put MkTCState{..} = do
     B.put tcCtx
-    B.put (MultiMap.toList tcFuncs)
-    B.put (MultiMap.toList tcFuncSigs)
+    B.put [(k, v) | (k, vs) <- Map.toList tcFuncs, v <- vs]
+    B.put [(k, v) | (k, vs) <- Map.toList tcFuncSigs, v <- vs]
     B.put (Map.toList tcFuncSigRets)
     B.put tcVarTys
     B.put (Map.toList tcVals)
@@ -181,8 +180,8 @@ instance Binary TCState where
     B.put tcFuncSigLocs
   get = do
     ctx <- B.get
-    funcs <- MultiMap.fromList <$> B.get
-    funcSigs <- MultiMap.fromList <$> B.get
+    funcs <- Map.fromListWith (++) . map (\(k,v) -> (k,[v])) <$> B.get
+    funcSigs <- Map.fromListWith (++) . map (\(k,v) -> (k,[v])) <$> B.get
     funcSigRets <- Map.fromList <$> B.get
     varTys <- B.get
     vals <- Map.fromList <$> B.get
@@ -197,7 +196,14 @@ instance Binary TCState where
 
 -- | Empty type checker state.
 emptyTCState :: TCState -- ^ Empty type checker state.
-emptyTCState = MkTCState Set.empty MultiMap.empty MultiMap.empty Map.empty [] Map.empty Map.empty Map.empty Set.empty [] [] [] Map.empty Map.empty
+emptyTCState = MkTCState Set.empty Map.empty Map.empty Map.empty [] Map.empty Map.empty Map.empty Set.empty [] [] [] Map.empty Map.empty
+
+-- | Prepend a single value to the list stored under a key in a 'Map.Map'.
+--
+-- Replaces @Data.MultiMap.insert@ with the same prepend semantics.
+-- Used for overloadable bindings ('tcFuncs', 'tcFuncSigs').
+mmInsert :: Ord k => k -> v -> Map.Map k [v] -> Map.Map k [v]
+mmInsert k v = Map.insertWith (++) k [v]
 
 -- | Type checker errors.
 data TCError =
@@ -269,7 +275,7 @@ tcExp1With allowEffect e =
           forM_ mTy (recordResolvedType (annSpan annRes))
           unless allowEffect (rejectReadEffect annExp ident)
           MkTCState{tcFuncs} <- get
-          if 0 `elem` MultiMap.lookup ident tcFuncs
+          if 0 `elem` Map.findWithDefault [] ident tcFuncs
             then do
               recordResolvedSig (annSpan annRes) ident []
               return (App annExp resolved [])
@@ -322,7 +328,7 @@ tcExp1With allowEffect e =
                   lift (throwE (NoType (annSpan annApp)))
             _ -> return ()
           let tyNames = Map.keys tcTyCons
-              funcNames = MultiMap.keys tcFuncSigs
+              funcNames = Map.keys tcFuncSigs
           case allArgs of
             [arg] | any (\(ident, _) -> ident `elem` tyNames) varCandidates
                   , not (any (\(ident, _) -> ident `elem` funcNames) varCandidates) ->
@@ -333,9 +339,9 @@ tcExp1With allowEffect e =
                       (ident, _):_ -> ident
                       [] -> varName
               let fnNames = map fst varCandidates
-                  allSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs]
-                  exactSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig == length allArgs]
-                  partialSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig > length allArgs]
+                  allSigs = [(n, sig) | n <- fnNames, sig <- Map.findWithDefault [] n tcFuncSigs]
+                  exactSigs = [(n, sig) | n <- fnNames, sig <- Map.findWithDefault [] n tcFuncSigs, length sig == length allArgs]
+                  partialSigs = [(n, sig) | n <- fnNames, sig <- Map.findWithDefault [] n tcFuncSigs, length sig > length allArgs]
               if null exactSigs && null partialSigs
                 then do
                   case lookupByCandidatesMap tcCtors varCandidates of
@@ -525,7 +531,7 @@ tcExp1With allowEffect e =
                     exactSigs =
                       [ sig
                       | name <- fnNames
-                      , sig <- MultiMap.lookup name tcFuncSigs
+                      , sig <- Map.findWithDefault [] name tcFuncSigs
                       , length sig == length args
                       ]
                 in length exactSigs > 1
@@ -598,7 +604,7 @@ resolveVar annExp originalName mArity candidates = do
             case mArity of
               Nothing -> filtered
               Just arity ->
-                let names = nub [name | (name, ar) <- MultiMap.toList tcFuncs, arity == ar]
+                let names = nub [name | (name, ars) <- Map.toList tcFuncs, ar <- ars, arity == ar]
                     narrowed = filter (\(ident, _) -> ident `elem` names) filtered
                 in if null names || null narrowed
                      then filtered
@@ -770,8 +776,8 @@ tcStmt stmt =
               lift (throwE (NoType NoSpan))
           Nothing -> return ()
       modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
-                      , tcFuncs = MultiMap.insert name (length args) (tcFuncs s)
-                      , tcFuncSigs = MultiMap.insert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
+                      , tcFuncs = mmInsert name (length args) (tcFuncs s)
+                      , tcFuncSigs = mmInsert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
                       , tcFuncSigRets =
                           let explicit = annSpan (annTy ty) /= NoSpan
                               defaultInfRet = TyInd (mkAnn Nom NoSpan) ([], T.pack "bitim")
@@ -790,8 +796,8 @@ tcStmt stmt =
         lift (throwE (UnimplementedPrimitive name args NoSpan))
       modify (\s ->
         s { tcCtx = Set.insert name (tcCtx s)
-          , tcFuncs = MultiMap.insert name (length args) (tcFuncs s)
-          , tcFuncSigs = MultiMap.insert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
+          , tcFuncs = mmInsert name (length args) (tcFuncs s)
+          , tcFuncSigs = mmInsert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
           , tcFuncSigRets = Map.insert (name, map (normalizePrimTy . snd) args) (normalizePrimTy ty) (tcFuncSigRets s)
           , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
           })
@@ -1040,8 +1046,8 @@ inferType e =
                   argTys <- mapM inferType args
                   let fnNames = map fst varCandidates
                       argCount = length args
-                      exactSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig == argCount]
-                      partialSigs = [(n, sig) | n <- fnNames, sig <- MultiMap.lookup n tcFuncSigs, length sig > argCount]
+                      exactSigs = [(n, sig) | n <- fnNames, sig <- Map.findWithDefault [] n tcFuncSigs, length sig == argCount]
+                      partialSigs = [(n, sig) | n <- fnNames, sig <- Map.findWithDefault [] n tcFuncSigs, length sig > argCount]
                       matchExactSig (name, argsSig) =
                         let tys = map snd argsSig
                         in if and (zipWith (typeMatchesAllowUnknown tcTyCons) argTys tys)
@@ -1071,7 +1077,7 @@ inferType e =
                         Just retTy -> return (Just retTy)
                         Nothing ->
                           let inCtx = any (\(ident, _) -> Set.member ident tcCtx) varCandidates
-                              inSigs = any (\(ident, _) -> not (null (MultiMap.lookup ident tcFuncSigs))) varCandidates
+                              inSigs = any (\(ident, _) -> not (null (Map.findWithDefault [] ident tcFuncSigs))) varCandidates
                           in case find (\(ident, _) -> Set.member ident tcCtx) varCandidates of
                                Just (ident, _) -> return (Just (TyVar (mkAnn (annCase annFn) NoSpan) ident))
                                Nothing ->
@@ -1099,7 +1105,7 @@ inferType e =
             _ -> Nothing
 
     inferFunctionValueType :: [(Identifier, Case)]
-                           -> MultiMap.MultiMap Identifier [Arg Ann]
+                           -> Map.Map Identifier [[Arg Ann]]
                            -> Map.Map (Identifier, [Ty Ann]) (Ty Ann)
                            -> Maybe (Ty Ann)
     inferFunctionValueType candidates sigs retMap =
@@ -1107,7 +1113,7 @@ inferType e =
           sigEntries =
             [ (name, map snd argsSig)
             | name <- candidateNames
-            , argsSig <- MultiMap.lookup name sigs
+            , argsSig <- Map.findWithDefault [] name sigs
             , not (null argsSig)
             ]
           buildFunctionType argTys retTy =
@@ -1151,8 +1157,8 @@ withFuncSig :: Identifier -- ^ Function name.
             -> TCM a -- ^ Result of the computation.
 withFuncSig name args m = do
   st <- get
-  put st { tcFuncs = MultiMap.insert name (length args) (tcFuncs st)
-         , tcFuncSigs = MultiMap.insert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs st)
+  put st { tcFuncs = mmInsert name (length args) (tcFuncs st)
+         , tcFuncSigs = mmInsert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs st)
          }
   res <- m
   modify (\s -> s { tcFuncs = tcFuncs st, tcFuncSigs = tcFuncSigs st })
@@ -1975,16 +1981,16 @@ registerForwardDecls = mapM_ registerStmt
       case stmt of
         Function name args _ _ isInfinitive ->
           modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
-                          , tcFuncs = MultiMap.insert name (length args) (tcFuncs s)
-                          , tcFuncSigs = MultiMap.insert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
+                          , tcFuncs = mmInsert name (length args) (tcFuncs s)
+                          , tcFuncSigs = mmInsert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
                           , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
                           })
         PrimFunc name args _ isInfinitive -> do
           unless (Prim.isImplementedPrimitive name args) $
             lift (throwE (UnimplementedPrimitive name args NoSpan))
           modify (\s -> s { tcCtx = Set.insert name (tcCtx s)
-                          , tcFuncs = MultiMap.insert name (length args) (tcFuncs s)
-                          , tcFuncSigs = MultiMap.insert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
+                          , tcFuncs = mmInsert name (length args) (tcFuncs s)
+                          , tcFuncSigs = mmInsert name (map (Bifunctor.second normalizePrimTy) args) (tcFuncSigs s)
                           , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
                           })
         Defn name _ _ ->

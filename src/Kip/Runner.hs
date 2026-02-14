@@ -572,18 +572,14 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
           if buildOnly
             then return (pst, tcSt, evalSt, loaded')
             else do
-              let pst' = fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached)
+              pst' <- liftIO (fromCachedParserState fsm (Just path) uCache dCache (cachedParser cached))
+              let tcSt' = mergeTCState tcSt (fromCachedTCState (cachedTC cached))
                   evalSt' = evalSt
-                  stmts = cachedStmts cached
+                  stmts = cachedTypedStmts cached
                   paramTyCons = [name | (name, arity) <- parserTyCons pst', arity > 0]
                   source = ""
                   primRefs = collectNonInfinitiveRefs stmts
-              let defSpansRaw = defSpansFromStmts stmts (parserDefSpans pst')
-                  sigSpans = funcSigSpansFromStmts stmts (parserDefSpans pst')
-              tcStWithDefs <- liftIO $ runTCM (recordDefLocations absPath defSpansRaw >> recordFuncSigLocations absPath sigSpans) tcSt >>= \case
-                Left _ -> return tcSt
-                Right (_, tcStDefs) -> return tcStDefs
-              foldM' (runStmt showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) (pst', tcStWithDefs, evalSt', loaded') stmts
+              foldM' (runTypedStmt showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) (pst', tcSt', evalSt', loaded') stmts
         Nothing -> do
           input <- liftIO (TIO.readFile path)
           liftIO (parseFromFile pst { parserFilePath = Just path } input) >>= \case
@@ -624,6 +620,7 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
                     Nothing -> return ()
                     Just compilerHash -> do
                       mSourceMeta <- liftIO (getFileMeta absPath)
+                      cachedParserState <- liftIO (toCachedParserState pstFinal)
                       let sourceBytes = encodeUtf8 input
                           sourceDigest = hash sourceBytes
                           fallbackSourceSize = fromIntegral (BS.length sourceBytes)
@@ -639,12 +636,36 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
                             { metadata = meta
                             , cachedStmts = stmts
                             , cachedTypedStmts = typedStmts
-                            , cachedParser = toCachedParserState pstFinal
+                            , cachedParser = cachedParserState
                             , cachedTC = toCachedTCState tcSt'
                             , cachedEval = toCachedEvalState evalSt'
                             }
                       liftIO (saveCachedModule cachePath cachedModule)
                   return (pstFinal, tcSt', evalSt', loaded')
+
+-- | Merge a cached type-checker snapshot into the current state.
+--
+-- Cached entries are preferred for overlapping keys so that overloaded
+-- signature order stays stable with the source module that produced the
+-- cache. Current-state entries are retained for keys not present in cache.
+mergeTCState :: TCState -> TCState -> TCState
+mergeTCState cur cached =
+  MkTCState
+    { tcCtx = Set.union (tcCtx cur) (tcCtx cached)
+    , tcFuncs = Map.union (tcFuncs cached) (tcFuncs cur)
+    , tcFuncSigs = Map.union (tcFuncSigs cached) (tcFuncSigs cur)
+    , tcFuncSigRets = Map.union (tcFuncSigRets cached) (tcFuncSigRets cur)
+    , tcVarTys = tcVarTys cached ++ tcVarTys cur
+    , tcVals = Map.union (tcVals cached) (tcVals cur)
+    , tcCtors = Map.union (tcCtors cached) (tcCtors cur)
+    , tcTyCons = Map.union (tcTyCons cached) (tcTyCons cur)
+    , tcInfinitives = Set.union (tcInfinitives cur) (tcInfinitives cached)
+    , tcResolvedNames = tcResolvedNames cached ++ tcResolvedNames cur
+    , tcResolvedSigs = tcResolvedSigs cached ++ tcResolvedSigs cur
+    , tcResolvedTypes = tcResolvedTypes cached ++ tcResolvedTypes cur
+    , tcDefLocations = Map.union (tcDefLocations cached) (tcDefLocations cur)
+    , tcFuncSigLocs = Map.union (tcFuncSigLocs cached) (tcFuncSigLocs cur)
+    }
 
 -- | Run a single statement in the context of a file.
 runStmt :: Bool -> Bool -> Bool -> [FilePath] -> FilePath -> [Identifier] -> [(Identifier, [Identifier])] -> [Identifier] -> Text -> (ParserState, TCState, EvalState, Set FilePath) -> Stmt Ann -> RenderM (ParserState, TCState, EvalState, Set FilePath)
@@ -682,6 +703,42 @@ runStmt showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods pr
                   msg <- renderMsg (MsgEvalError evalErr)
                   liftIO (die (T.unpack msg))
                 Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded)
+
+-- | Run a pre-typechecked statement in the context of a file.
+--
+-- This path is used when a valid module cache is loaded. It avoids
+-- re-running 'tcStmt' and any forward-declaration pre-pass by assuming the
+-- incoming statement list is already type-checked ('cachedTypedStmts').
+runTypedStmt :: Bool -> Bool -> Bool -> [FilePath] -> FilePath -> [Identifier] -> [(Identifier, [Identifier])] -> [Identifier] -> Text -> (ParserState, TCState, EvalState, Set FilePath) -> Stmt Ann -> RenderM (ParserState, TCState, EvalState, Set FilePath)
+runTypedStmt showDefn showLoad buildOnly moduleDirs currentPath _paramTyCons _tyMods _primRefs _source (pst, tcSt, evalSt, loaded) stmt =
+  case stmt of
+    Load name -> do
+      path <- resolveModulePath moduleDirs name
+      absPath <- liftIO (canonicalizePath path)
+      if Set.member absPath loaded
+        then return (pst, tcSt, evalSt, loaded)
+        else do
+          (pst', tcSt', evalSt', loaded') <- runFile False False buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path
+          when showLoad $ return ()
+          return (pst', tcSt', evalSt', loaded')
+    _ -> do
+      when showDefn $ return ()
+      if buildOnly
+        then
+          case stmt of
+            ExpStmt _ -> return (pst, tcSt, evalSt, loaded)
+            _ ->
+              liftIO (runEvalM (evalStmtInFile (Just currentPath) stmt) evalSt) >>= \case
+                Left evalErr -> do
+                  msg <- renderMsg (MsgEvalError evalErr)
+                  liftIO (die (T.unpack msg))
+                Right (_, evalSt') -> return (pst, tcSt, evalSt', loaded)
+        else
+          liftIO (runEvalM (evalStmtInFile (Just currentPath) stmt) evalSt) >>= \case
+            Left evalErr -> do
+              msg <- renderMsg (MsgEvalError evalErr)
+              liftIO (die (T.unpack msg))
+            Right (_, evalSt') -> return (pst, tcSt, evalSt', loaded)
 
 -- | Run a single statement while collecting type-checked statements for caching.
 runStmtCollect :: Bool -> Bool -> Bool -> [FilePath] -> FilePath -> [Identifier] -> [(Identifier, [Identifier])] -> [Identifier] -> Text -> (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann]) -> Stmt Ann -> RenderM (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann])

@@ -1,16 +1,17 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
 module Repl.Steps
   ( formatSteps
+  , formatStepsStreaming
   , stripStepsCopulaTRmorph
   , shouldSkipInfinitiveSteps
   , setTopCaseNom
   ) where
 
 import Control.Applicative ((<|>))
-import Control.Monad (foldM)
+import Control.Monad (foldM, when)
+import Data.IORef (newIORef, readIORef, modifyIORef')
 import Data.Char (isAlpha, isAsciiLower, isAsciiUpper, isDigit, toLower)
 import qualified Data.Map.Strict as Map
 import Data.List (find, findIndex, foldl', intercalate, isInfixOf, isPrefixOf, isSuffixOf, nub, splitAt, tails)
@@ -37,8 +38,28 @@ formatSteps :: Bool
             -> Exp Ann                -- ^ Final evaluated expression.
             -> [TraceStep] -> IO String
 formatSteps useColor renderInput renderOutput finalExp steps = do
+  outRef <- newIORef []
+  formatStepsStreaming useColor renderInput renderOutput finalExp steps (\line ->
+    modifyIORef' outRef (line :))
+  rendered <- readIORef outRef
+  return (intercalate "\n" (reverse rendered))
+
+-- | Stream trace steps as soon as they are formatted.
+--
+-- Unlike 'formatSteps', this avoids building one large intermediate string
+-- before printing. It is intended for interactive REPL output where users
+-- should see step rendering progress incrementally.
+formatStepsStreaming :: Monad m
+                     => Bool
+                     -> (Exp Ann -> m String) -- ^ Preserving-case renderer (for inputs).
+                     -> (Exp Ann -> m String) -- ^ Nominative renderer (for outputs).
+                     -> Exp Ann               -- ^ Final evaluated expression.
+                     -> [TraceStep]
+                     -> (String -> m ())      -- ^ Output sink (e.g. @outputStrLn@).
+                     -> m ()
+formatStepsStreaming useColor renderInput renderOutput finalExp steps emit = do
   let truncated = length steps >= 1000
-  formatted <- formatStepsReplay useColor renderInput renderOutput steps
+  mLastLine <- formatStepsReplayStreaming useColor renderInput renderOutput steps emit
   finalLine <- do
     finalStr <- renderOutput finalExp
     let arrow = if useColor then dim "⇝ " else "⇝ "
@@ -48,16 +69,20 @@ formatSteps useColor renderInput renderOutput finalExp steps = do
     finalStr <- renderInput finalExp
     let arrow = if useColor then dim "⇝ " else "⇝ "
     return (arrow ++ finalStr)
-  let formattedPlain = stripAnsiForCompare formatted
-      finalPlain = stripAnsiForCompare finalLine
+  let finalPlain = stripAnsiForCompare finalLine
       finalPreservedPlain = stripAnsiForCompare finalLinePreserved
-      formatted'
-        | null formatted = finalLine
-        | finalPlain `isSuffixOf` formattedPlain
-          || finalPreservedPlain `isSuffixOf` formattedPlain = formatted
-        | otherwise = formatted ++ "\n\n" ++ finalLine
-  let suffix = if truncated then "(1000 adım sınırına ulaşıldı)\n" else ""
-  return (formatted' ++ suffix)
+  case mLastLine of
+    Nothing ->
+      emit finalLine
+    Just lastLine -> do
+      let lastPlain = stripAnsiForCompare lastLine
+      if lastPlain == finalPlain || lastPlain == finalPreservedPlain
+        then return ()
+        else do
+          emit ""
+          emit finalLine
+  when truncated $
+    emit "(1000 adım sınırına ulaşıldı)"
 
 -- | Check whether a :steps expression is an infinitive reference.
 -- Such expressions should not be stepped or evaluated in :steps mode.
@@ -91,16 +116,34 @@ formatStepsReplay :: Bool
                   -> (Exp Ann -> IO String)
                   -> [TraceStep]
                   -> IO String
-formatStepsReplay _ _ _ [] = return ""
 formatStepsReplay useColor renderInput renderOutput steps = do
+  outRef <- newIORef []
+  _ <- formatStepsReplayStreaming useColor renderInput renderOutput steps (\line ->
+    modifyIORef' outRef (line :))
+  rendered <- readIORef outRef
+  return (intercalate "\n" (reverse rendered))
+
+-- | Stream replayed trace transitions and return the last emitted line.
+formatStepsReplayStreaming :: Monad m
+                           => Bool
+                           -> (Exp Ann -> m String)
+                           -> (Exp Ann -> m String)
+                           -> [TraceStep]
+                           -> (String -> m ())
+                           -> m (Maybe String)
+formatStepsReplayStreaming _ _ _ [] _ = return Nothing
+formatStepsReplayStreaming useColor renderInput renderOutput steps emit = do
   let arrow = if useColor then dim "⇝ " else "⇝ "
       pointerIndent = "  "
       mStartIdx = findIndex (\s -> tsDepth s == 0) steps
       replay expr rest = do
         txt <- renderOutput expr
-        (_, _, outLines) <- replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput
-          (expr, txt, [arrow ++ txt]) rest
-        return (intercalate "\n" outLines)
+        let firstLine = arrow ++ txt
+        emit firstLine
+        (_, _, lastLine) <-
+          replayUntilFixedPointStreaming useColor arrow pointerIndent renderInput renderOutput
+            (expr, txt, firstLine) rest emit
+        return (Just lastLine)
   case mStartIdx of
     Just i ->
       let top = steps !! i
@@ -111,7 +154,7 @@ formatStepsReplay useColor renderInput renderOutput steps = do
            then replay (tsInput top) (before ++ after)  -- Seq: start from input, replay all
          else if not (null after) then replay (tsOutput top) after    -- expansion (e.g. factorial)
          else if not (null before) then replay (tsInput top) before  -- sub-eval (e.g. nested sum)
-         else return ""                                              -- simple one-step result
+         else return Nothing                                          -- simple one-step result
     Nothing -> case steps of
       s : _ -> replay (tsInput s) steps
 
@@ -157,7 +200,7 @@ replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur
           sep = [""]
           newLines = accLines ++ pointerLines ++ sep ++ [arrow ++ highlightedNext]
       replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (nextTop, nextTopText, newLines) steps
-    _ -> pickStep current currentText renderInput steps >>= \case
+    _ -> case pickStep current currentText renderInput steps of
       Nothing -> continueOrFallback (current, currentText, accLines) steps
       Just (idx, step, next) -> do
         let matchedChild = fromMaybe (tsInput step) (findFirstChild (tsInput step) current)
@@ -244,6 +287,120 @@ replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur
               sep = [""]
               linesAcc' = linesAcc ++ pointerLines ++ sep ++ [arrow ++ highlightedCur]
           replayUntilFixedPoint useColor arrow pointerIndent renderInput renderOutput (cur', curText', linesAcc') restSteps
+
+-- | Streaming variant of 'replayUntilFixedPoint'.
+--
+-- Emits each newly formatted line immediately and keeps only minimal state
+-- needed to continue replaying transitions.
+replayUntilFixedPointStreaming :: Monad m
+                               => Bool
+                               -> String
+                               -> String
+                               -> (Exp Ann -> m String)
+                               -> (Exp Ann -> m String)
+                               -> (Exp Ann, String, String)
+                               -> [TraceStep]
+                               -> (String -> m ())
+                               -> m (Exp Ann, String, String)
+replayUntilFixedPointStreaming _ _ _ _ _ state [] _ = return state
+replayUntilFixedPointStreaming useColor arrow pointerIndent renderInput renderOutput (current, currentText, lastLine) steps emit =
+  case reduceBooleanMatchFirst current of
+    Just (oldSub, newSub, nextTop) -> do
+      oldSubText <- renderInput oldSub
+      newSubText <- renderOutput newSub
+      nextTopText <- renderInput nextTop
+      let pointerLines = pointerLinesForColored useColor pointerIndent currentText oldSubText newSubText
+          highlightedNext = highlightSubstring useColor newSubText nextTopText
+          emitted = pointerLines ++ ["", arrow ++ highlightedNext]
+      mapM_ emit emitted
+      replayUntilFixedPointStreaming useColor arrow pointerIndent renderInput renderOutput (nextTop, nextTopText, arrow ++ highlightedNext) steps emit
+    _ -> case pickStep current currentText renderInput steps of
+      Nothing -> continueOrFallback (current, currentText, lastLine) steps
+      Just (idx, step, next) -> do
+        let matchedChild = fromMaybe (tsInput step) (findFirstChild (tsInput step) current)
+            rest = removeAt idx steps
+            (next', useOutputRender) = collapseSeqAfterStep next
+            renderInput' = if useOutputRender then renderOutput else renderInput
+        subInput <- renderSubInputForPointer currentText matchedChild
+        subOutput <- renderOutput (tsOutput step)
+        nextText <- renderInput' next'
+        if stripAnsiForCompare nextText == stripAnsiForCompare currentText
+          then replayUntilFixedPointStreaming useColor arrow pointerIndent renderInput' renderOutput (next', nextText, lastLine) rest emit
+          else do
+            let pointerLines = pointerLinesForColored useColor pointerIndent currentText subInput subOutput
+                highlightedNext = highlightSubstring useColor subOutput nextText
+                emitted = pointerLines ++ ["", arrow ++ highlightedNext]
+            mapM_ emit emitted
+            replayUntilFixedPointStreaming useColor arrow pointerIndent renderInput' renderOutput (next', nextText, arrow ++ highlightedNext) rest emit
+  where
+    renderSubInputForPointer curTxt subExpr = do
+      base <- renderInput subExpr
+      let baseNorm = stripAnsiForCompare base
+          curNorm = stripAnsiForCompare curTxt
+      let ann = annExp subExpr
+          dummyName = ([], T.pack "_")
+          bindExpr = Bind ann dummyName ann subExpr
+      bindTxt <- renderInput bindExpr
+      let marker = "için "
+          markerLen = length marker
+          alt =
+            case findIndex (isPrefixOf marker) (tails bindTxt) of
+              Just i -> drop (i + markerLen) bindTxt
+              Nothing -> bindTxt
+          altNorm = stripAnsiForCompare alt
+          baseHit = length baseNorm >= 3 && baseNorm `isInfixOf` curNorm
+          altHit = length altNorm >= 3 && altNorm `isInfixOf` curNorm
+      case (baseHit, altHit) of
+        (True, True) -> return (if length altNorm > length baseNorm then alt else base)
+        (False, True) -> return alt
+        _ -> return base
+
+    continueOrFallback state@(cur, curText, stateLastLine) restSteps =
+      case findHeadFallback cur restSteps of
+        Just (idx, oldSub, newSub, cur') -> do
+          oldSubText <- renderInput oldSub
+          newSubText <- renderOutput newSub
+          curText' <- renderInput cur'
+          let pointerLines = pointerLinesForColored useColor pointerIndent curText oldSubText newSubText
+              highlightedCur = highlightSubstring useColor newSubText curText'
+              emitted = pointerLines ++ ["", arrow ++ highlightedCur]
+          mapM_ emit emitted
+          replayUntilFixedPointStreaming useColor arrow pointerIndent renderInput renderOutput (cur', curText', arrow ++ highlightedCur) (removeAt idx restSteps) emit
+        Nothing -> reduceSeqFallback state restSteps
+    findHeadFallback curExpr steps' =
+      let candidates =
+            [ (i, oldSub, newSub, cur')
+            | (i, s) <- zip [0..] steps'
+            , tsDepth s > 0
+            , Just (oldSub, newSub, cur') <- [substituteFirstByHead (tsInput s) (tsOutput s) curExpr]
+            ]
+      in case candidates of
+          x:_ -> Just x
+          [] -> Nothing
+    reduceSeqFallback state@(cur, curText, stateLastLine) restSteps =
+      case reduceSeqFirst cur of
+        Nothing -> reduceBooleanFallback state restSteps
+        Just (oldSub, newSub, cur') -> do
+          oldSubText <- renderInput oldSub
+          newSubText <- renderOutput newSub
+          curText' <- renderInput cur'
+          let pointerLines = pointerLinesForColored useColor pointerIndent curText oldSubText newSubText
+              highlightedCur = highlightSubstring useColor newSubText curText'
+              emitted = pointerLines ++ ["", arrow ++ highlightedCur]
+          mapM_ emit emitted
+          replayUntilFixedPointStreaming useColor arrow pointerIndent renderInput renderOutput (cur', curText', arrow ++ highlightedCur) restSteps emit
+    reduceBooleanFallback state@(cur, curText, stateLastLine) restSteps =
+      case reduceBooleanMatchFirst cur of
+        Nothing -> return state
+        Just (oldSub, newSub, cur') -> do
+          oldSubText <- renderInput oldSub
+          newSubText <- renderOutput newSub
+          curText' <- renderInput cur'
+          let pointerLines = pointerLinesForColored useColor pointerIndent curText oldSubText newSubText
+              highlightedCur = highlightSubstring useColor newSubText curText'
+              emitted = pointerLines ++ ["", arrow ++ highlightedCur]
+          mapM_ emit emitted
+          replayUntilFixedPointStreaming useColor arrow pointerIndent renderInput renderOutput (cur', curText', arrow ++ highlightedCur) restSteps emit
 -- | Try to substitute by matching the "head" of application expressions.
 -- This is a more lenient matching strategy used as a fallback.
 --
@@ -312,13 +469,13 @@ substituteFirstByHead from to = go False
 -- Returns the step index, the step itself, and the expression after applying it.
 pickStep :: Exp Ann
          -> String
-         -> (Exp Ann -> IO String)
+         -> (Exp Ann -> a)
          -> [TraceStep]
-         -> IO (Maybe (Int, TraceStep, Exp Ann))
-pickStep current currentText renderInput steps = do
+         -> Maybe (Int, TraceStep, Exp Ann)
+pickStep current _currentText _renderInput steps =
   case reduceTopBooleanMatch current of
-    Just (_, nextTop) -> return (findMatchingNextTop 0 nextTop steps)
-    Nothing -> return (findFirstApplicable 0 steps)
+    Just (_, nextTop) -> findMatchingNextTop 0 nextTop steps
+    Nothing -> findFirstApplicable 0 steps
   where
     findFirstApplicable _ [] = Nothing
     findFirstApplicable i (s:ss) =

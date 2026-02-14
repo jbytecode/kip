@@ -39,7 +39,6 @@ import Data.List (foldl', nub, isPrefixOf, sortOn)
 import Data.Char (isAlphaNum, isDigit, ord)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList, listToMaybe, isJust)
 import qualified Data.Map.Strict as Map
-import qualified Data.MultiMap as MultiMap
 import qualified Data.Set as Set
 import qualified Data.HashMap.Strict as HM
 import Data.Text (Text)
@@ -891,7 +890,7 @@ onHover req respond = do
                   Just (sigName, argTys)
                     | cursorMatchesSig sigName -> do
                       let mRetTy = Map.lookup (sigName, argTys) (tcFuncSigRets tcSt)
-                          matchingArgs = [args | args <- MultiMap.lookup sigName (tcFuncSigs tcSt), map snd args == argTys]
+                          matchingArgs = [args | args <- Map.findWithDefault [] sigName (tcFuncSigs tcSt), map snd args == argTys]
                           mArgs = listToMaybe matchingArgs
                           candidatePool = infinitiveCandidates [sigName]
                           defInf = findInfinitiveDef candidatePool (dsStmts doc)
@@ -949,7 +948,7 @@ onHover req respond = do
                         mFnDef = findFunctionDef resolvedName (dsStmts doc)
                         mRetTy = Map.lookup (sigName, argTys) (tcFuncSigRets tcSt)
                         -- Find the function signature that matches the argument types
-                        matchingArgs = [(sigName, args) | args <- MultiMap.lookup sigName (tcFuncSigs tcSt), map snd args == argTys]
+                        matchingArgs = [(sigName, args) | args <- Map.findWithDefault [] sigName (tcFuncSigs tcSt), map snd args == argTys]
                         mArgs = listToMaybe [args | (_, args) <- matchingArgs]
                         -- Check both base TC state (prelude) and document TC state (current file) for infinitives
                         -- Check if any morphological candidate is an infinitive
@@ -992,8 +991,8 @@ onHover req respond = do
                     -- No resolved signature, try to find function definition
                     let tcSt = dsTC doc
                         mFnDef = findFunctionDef resolvedName (dsStmts doc)
-                        -- Get first signature from MultiMap (for hover, we show the first overload)
-                        mTCFuncSig = listToMaybe (MultiMap.lookup resolvedName (tcFuncSigs tcSt))
+                        -- Get first signature (for hover, we show the first overload)
+                        mTCFuncSig = listToMaybe (Map.findWithDefault [] resolvedName (tcFuncSigs tcSt))
                         -- Check both base TC state (prelude) and document TC state (current file) for infinitives
                         -- Check if any morphological candidate is an infinitive
                         candidates = case varExp of
@@ -1470,7 +1469,7 @@ onCompletion req respond = do
       let pst = dsParser doc
           ctxIdents = parserCtx pst
           typeNames = map fst (parserTyCons pst) ++ parserPrimTypes pst
-          funcNames = MultiMap.keys (tcFuncSigs (dsTC doc))
+          funcNames = Map.keys (tcFuncSigs (dsTC doc))
           candidates = Set.toList (ctxIdents `Set.union` Set.fromList (typeNames ++ funcNames))
           items = map completionItem candidates
       respond (Right (InL items))
@@ -1742,14 +1741,12 @@ loadCachedDoc st uri text =
                   textHash = hash textBytes
                   cachedHash = sourceHash (metadata cached)
               if textHash == cachedHash
-                then return (Just (cachedDocFrom (Just path) cached))
+                then do
+                  pstCached <- fromCachedParserState (lsFsm st) (Just path) (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
+                  let tcCached = fromCachedTCState (cachedTC cached)
+                      stmts = cachedTypedStmts cached
+                  return (Just (pstCached, tcCached, stmts))
                 else return Nothing  -- Text in memory differs from cached version
-  where
-    cachedDocFrom path cached =
-      let pstCached = fromCachedParserState (lsFsm st) path (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
-          tcCached = fromCachedTCState (cachedTC cached)
-          stmts = cachedTypedStmts cached
-      in (pstCached, tcCached, stmts)
 
 -- | Type-check statements without evaluation.
 --
@@ -1804,6 +1801,7 @@ writeCacheForDoc st uri doc = do
         Nothing -> return ()
         Just compilerHash -> do
           mSourceMeta <- getFileMeta absPath
+          cachedParserState <- toCachedParserState (dsParser doc)
           let sourceBytes = encodeUtf8 (dsText doc)
               sourceDigest = hash sourceBytes
               fallbackSourceSize = fromIntegral (BS.length sourceBytes)
@@ -1819,7 +1817,7 @@ writeCacheForDoc st uri doc = do
                 { metadata = meta
                 , cachedStmts = dsStmts doc
                 , cachedTypedStmts = dsStmts doc
-                , cachedParser = toCachedParserState (dsParser doc)
+                , cachedParser = cachedParserState
                 , cachedTC = toCachedTCState (dsTC doc)
                 , cachedEval = toCachedEvalState emptyEvalState
                 }
@@ -2815,8 +2813,8 @@ loadDefsForFile st path = do
   mCached <- loadCachedModule cachePath
   case mCached of
     Just cached -> do
-      let pst = fromCachedParserState (lsFsm st) (Just path) (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
-          stmts = cachedStmts cached
+      pst <- fromCachedParserState (lsFsm st) (Just path) (lsUpsCache st) (lsDownsCache st) (cachedParser cached)
+      let stmts = cachedStmts cached
           defSpans =
             if isStdlib
               then defSpansFromParserIncludeBase stmts pst
