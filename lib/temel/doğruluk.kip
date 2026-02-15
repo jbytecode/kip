@@ -1,16 +1,23 @@
 temeli yükle.
 
 (* Doğruluk fonksiyonları. *)
+
+(* Bir doğruluğun tersini (değilini) verir.
+   Örnek: (doğrunun tersi) *)
 (bu doğruluğun) (ters doğruluğu),
   bu doğruysa, yanlış;
   yanlışsa, doğrudur.
 
+(* İki doğruluğun kesişimini (ve işlemini) verir.
+   Örnek: (doğruyla yanlışın kesişimi) *)
 (bu doğrulukla) (şu doğruluğun) (kesişim doğruluğu),
   bu doğruysa,
     şu;
   yanlışsa,
     yanlıştır.
 
+(* İki doğruluğun birleşimini (veya işlemini) verir.
+   Örnek: (yanlışla doğrunun birleşimi) *)
 (bu doğrulukla) (şu doğruluğun) (birleşim doğruluğu),
   bu doğruysa,
     doğru;

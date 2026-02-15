@@ -13,3 +13,6 @@ cp -R "${ROOT_DIR}/lib/." "${ASSET_DIR}/lib/"
 cp "${ROOT_DIR}/vendor/trmorph.fst" "${ASSET_DIR}/vendor/trmorph.fst"
 cp "${ROOT_DIR}/tests/succeed/"*.kip "${EXAMPLES_DIR}/"
 cp "${ROOT_DIR}/tests/succeed/"*.in "${EXAMPLES_DIR}/"
+cp "${ROOT_DIR}/playground/kip-syntax.js" "${DIST_DIR}/kip-syntax.js"
+
+"${ROOT_DIR}/playground/generate-lib-pages.sh"

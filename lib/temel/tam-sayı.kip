@@ -1,75 +1,116 @@
 temeli yükle.
 
 (* Tam sayı fonksiyonları. *)
+
+(* İki tam sayıyı toplar.
+   Örnek: (2'yle 3'ün toplamı) *)
 (bu tam-sayıyla) (şu tam-sayının) (toplam tam-sayısı),
   yerleşiktir.
 
+(* İki tam sayıyı çarpar.
+   Örnek: (4'le 5'in çarpımı) *)
 (bu tam-sayıyla) (şu tam-sayının) (çarpım tam-sayısı),
   yerleşiktir.
 
+(* İki tam sayının farkını alır.
+   Örnek: (10'la 3'ün farkı) *)
 (bu tam-sayıyla) (şu tam-sayının) (fark tam-sayısı),
   yerleşiktir.
 
+(* Bir tam sayıyı diğerine böler.
+   Örnek: (10'un 2'ye bölümü) *)
 (bu tam-sayının) (şu tam-sayıya) (bölüm tam-sayısı),
   yerleşiktir.
 
+(* İki tam sayının eşit olup olmadığını döndürür.
+   Örnek: (3'le 3'ün eşitliği) *)
 (bu tam-sayıyla) (şu tam-sayının) (eşitlik doğruluğu),
   yerleşiktir.
 
+(* İlk sayı ikinci sayıdan küçük mü kontrol eder.
+   Örnek: (2'nin 5'ten küçüklüğü) *)
 (bu tam-sayının) (şu tam-sayıdan) (küçüklük doğruluğu),
   yerleşiktir.
 
+(* İlk sayı ikinci sayıdan küçük-eşit mi kontrol eder.
+   Örnek: (2'nin 2'den küçük-eşitliği) *)
 (bu tam-sayının) (şu tam-sayıdan) (küçük-eşitlik doğruluğu),
   yerleşiktir.
 
+(* İlk sayı ikinci sayıdan büyük mü kontrol eder.
+   Örnek: (7'nin 4'ten büyüklüğü) *)
 (bu tam-sayının) (şu tam-sayıdan) (büyüklük doğruluğu),
   yerleşiktir.
 
+(* İlk sayı ikinci sayıdan büyük-eşit mi kontrol eder.
+   Örnek: (7'yle 7'nin büyük-eşitliği) *)
 (bu tam-sayıyla) (şu tam-sayının) (büyük-eşitlik doğruluğu),
   yerleşiktir.
 
+(* Tam sayılarda kalan işlemini uygular.
+   Örnek: (10'un 3'le kalanı) *)
 (bu tam-sayının) (şu tam-sayıyla) (kalan tam-sayısı),
   yerleşiktir.
 
+(* İlk sayı ikinciye tam bölünüyorsa doğru döndürür.
+   Örnek: (12'yle 3'e bölünürlük) *)
 (bu tam-sayıyla) (şu tam-sayıya) (bölünürlük doğruluğu),
   (bunun şunla kalanıyla) 0'ın eşitliğidir.
 
+(* Tam sayıyı dizgeye çevirir.
+   Örnek: (42'nin dizge-hali) *)
 (bu tam-sayının) (dizge-hal dizgesi),
   yerleşiktir.
 
+(* Bir tam sayının işaretini tersine çevirir.
+   Örnek: (5'in negatifi) *)
 (bu tam-sayının) negatifi,
   0'la bunun farkıdır.
 
+(* Bir sayıyı 1 azaltır.
+   Örnek: (5'in eksilimi) *)
 (n tam-sayısının) (eksilim tam-sayısı),
   n'le 1'in farkıdır.
 
+(* Bir sayıyı 1 artırır.
+   Örnek: (5'in artırımı) *)
 (n tam-sayısının) (artırım tam-sayısı),
   n'le 1'in toplamıdır.
 
+(* Bir tam sayının faktöriyelini hesaplar.
+   Örnek: (5'in faktöriyeli) *)
 (bu tam-sayının) (faktöriyel tam-sayısı),
   (bunun 0'dan küçük-eşitliği) doğruysa,
     1;
   değilse,
     ((bunla 1'in farkının) faktöriyeliyle) bunun çarpımıdır.
 
+(* Bir tam sayının mutlak değerini verir.
+   Örnek: ((-7'nin) mutlak-değeri) *)
 (bu tam-sayının) (mutlak-değer tam-sayısı),
   (bunun 0'dan küçüklüğü) doğruysa,
     (bunun negatifi);
   değilse,
     budur.
 
+(* Bir sayının diğer sayı üssünü hesaplar.
+   Örnek: (2'nin 8'le üssü) *)
 (bu tam-sayının) (şu tam-sayıyla) (üs tam-sayısı),
   (şunun 0'dan küçük-eşitliği) doğruysa,
     1;
   değilse,
     (bunun (şununla 1'in farkıyla) üssünün) bununla çarpımıdır.
 
+(* İki tam sayıdan küçük olanı seçer.
+   Örnek: (4'le 9'un küçüğü) *)
 (bu tam-sayıyla) (şu tam-sayının) (küçük tam-sayısı),
   (bunun şundan küçüklüğü) doğruysa,
     budur;
   değilse,
     şudur.
 
+(* İki tam sayıdan büyük olanı seçer.
+   Örnek: (4'le 9'un büyüğü) *)
 (bu tam-sayıyla) (şu tam-sayının) (büyük tam-sayısı),
   (bunun şundan büyüklüğü) doğruysa,
     budur;

@@ -1,26 +1,43 @@
 temeli yükle.
 
+(* Programı bitiren no-op etkidir.
+   Örnek: durmak *)
 (durmak bitimi),
   bitimliktir.
 
 (* Etkili fonksiyonlar. *)
+
+(* Bir tam-sayıyı çıktıya yazar.
+   Örnek: 5'i yazmak *)
 (bu tam-sayıyı) (yazmak bitimi),
   yerleşiktir.
 
+(* Bir ondalık-sayıyı çıktıya yazar.
+   Örnek: 3.14'ü yazmak *)
 (bu ondalık-sayıyı) (yazmak bitimi),
   yerleşiktir.
 
+(* Bir dizgeyi çıktıya yazar.
+   Örnek: "merhaba"yı yazmak *)
 (bu dizgeyi) (yazmak bitimi),
   yerleşiktir.
 
+(* Standart girdiden bir satır okur.
+   Örnek: okuyup *)
 (okumak dizgesi),
   yerleşiktir.
 
+(* Verilen dosyadan dizge okumayı dener.
+   Örnek: "./notlar.txt"den okumak *)
 (dosya dizgesinden) (okumak dizge olasılığı),
   yerleşiktir.
 
+(* Verilen dizgeyi dosyaya yazar; başarıyı doğrulukla döndürür.
+   Örnek: "./notlar.txt"ye "selam"ı yazmak *)
 (dosya dizgesine) (şu dizgeyi) (yazmak doğruluğu),
   yerleşiktir.
 
+(* Belirtilen aralıkta rastgele tam-sayı üretir.
+   Örnek: 1'den 10'a sayı-çekmek *)
 (bu tam-sayıdan) (şu tam-sayıya) (sayı-çekmek tam-sayısı),
   yerleşiktir.

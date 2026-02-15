@@ -1,17 +1,28 @@
 temeli yükle.
 
 (* Dizge fonksiyonları. *)
+
+(* Bir dizgenin karakter sayısını verir.
+   Örnek: ("merhaba"nın uzunluğu) *)
 (bu dizgenin) (uzunluk tam-sayısı),
   yerleşiktir.
 
+(* İki dizgeyi birleştirir.
+   Örnek: ("merhaba "yla "kip"in birleşimi) *)
 (bu dizgeyle) (şu dizgenin) (birleşim dizgesi),
   yerleşiktir.
 
+(* Bir dizgeyi tam-sayıya çevirmeyi dener; sonuç olasılıktır.
+   Örnek: ("42"nin tam-sayı-hali) *)
 (bu dizgenin) (tam-sayı-hal tam-sayının olasılığı),
   yerleşiktir.
 
+(* Bir dizgeyi ondalık-sayıya çevirmeyi dener; sonuç olasılıktır.
+   Örnek: ("3.14"ün ondalık-sayı-hali) *)
 (bu dizgenin) (ondalık-sayı-hal ondalık-sayının olasılığı),
   yerleşiktir.
 
+(* Bir dizgenin ters çevrilmiş halini verir.
+   Örnek: ("abc"nin tersi) *)
 (bu dizgenin) (ters dizgesi),
   yerleşiktir.
