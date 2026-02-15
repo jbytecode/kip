@@ -422,7 +422,7 @@ function highlightJs(text) {
 }
 
 function highlightNonString(text) {
-  const tokenPattern = /\d+(?:'?\p{L}+)?|\p{L}+(?:'\p{L}+)?(?:-\p{L}+)*|[(),.]/gu;
+  const tokenPattern = /\d+(?:'?\p{L}+)?|\p{L}+(?:'\p{L}+)?(?:-\p{L}+)*|[(),.;]/gu;
   const tokens = [];
   let match;
 
@@ -431,7 +431,7 @@ function highlightNonString(text) {
     const kind =
       token === "(" || token === ")"
         ? "paren"
-        : token === ","
+        : token === "," || token === ";"
           ? "comma"
           : token === "."
             ? "period"
