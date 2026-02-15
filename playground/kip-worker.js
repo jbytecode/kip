@@ -155,6 +155,7 @@ let wasmModulePromise = null;
 let runtimeModePromise = null;
 // Optimization: dedupe preload work and share results across runs.
 let runtimePreloadPromise = null;
+let reactorRuntimePromise = null;
 
 const runtimeModes = {
   command: "command",
@@ -228,6 +229,10 @@ async function preloadRuntime() {
     if (!libFileCache.has("trmorph.fst")) {
       const fst = await loadBinary("./assets/vendor/trmorph.fst");
       libFileCache.set("trmorph.fst", new File(fst, { readonly: true }));
+    }
+    const mode = await detectRuntimeMode();
+    if (mode === runtimeModes.reactor) {
+      await getOrCreateReactorRuntime();
     }
   })();
   return runtimePreloadPromise;
@@ -317,16 +322,16 @@ function createStderrSink() {
   });
 }
 
-async function createReactorState(source, signal, buffer) {
+async function createPersistentReactorRuntime() {
   const libContents = await buildLibDirectoryContents();
   const vendorContents = await buildVendorDirectoryContents();
   const rootContents = new Map();
   rootContents.set("lib", new Directory(libContents));
   rootContents.set("vendor", new Directory(vendorContents));
-  rootContents.set("main.kip", new File(encoder.encode(source)));
+  rootContents.set("main.kip", new File(new Uint8Array()));
 
   const preopen = new PreopenDirectory("/", rootContents);
-  const stdinFile = new InteractiveStdin(signal, buffer);
+  const stdinFile = new InteractiveStdin();
   const stdout = createStdoutSink();
   const stderr = createStderrSink();
   const wasi = new WASI(["kip-playground-reactor"], ["KIP_DATADIR=/", "KIP_PLAYGROUND_PROGRESS=1"], [stdinFile, stdout, stderr, preopen]);
@@ -341,20 +346,24 @@ async function createReactorState(source, signal, buffer) {
   } else if (instance.exports && typeof instance.exports._initialize === "function") {
     instance.exports._initialize();
   }
-  // Reactor builds with `-no-hs-main` require explicit RTS initialization.
-  // Without this, `kip_run` fails with:
-  //   "RTS is not initialised; call hs_init() first"
+  // Reactor builds with `-no-hs-main` need explicit RTS initialization.
   if (instance.exports && typeof instance.exports.hs_init === "function") {
     try {
-      // Common ABI shape for hs_init(argcPtr, argvPtr).
       instance.exports.hs_init(0, 0);
     } catch (err) {
-      // Some toolchains expose a zero-arg wrapper; keep compatibility.
       instance.exports.hs_init();
     }
   }
 
-  return { instance };
+  return { instance, stdinFile, rootContents };
+}
+
+async function getOrCreateReactorRuntime() {
+  if (reactorRuntimePromise) {
+    return reactorRuntimePromise;
+  }
+  reactorRuntimePromise = createPersistentReactorRuntime();
+  return reactorRuntimePromise;
 }
 
 async function runWasmCommand({ args, source, signal, buffer }) {
@@ -388,8 +397,13 @@ async function runWasmCommand({ args, source, signal, buffer }) {
 }
 
 async function runWasmReactor({ args, source, signal, buffer }) {
-  // Keep the worker long-lived, but create a fresh reactor state per run.
-  const reactorState = await createReactorState(source, signal, buffer);
+  const reactorState = await getOrCreateReactorRuntime();
+
+  // Update per-run input and source on the persistent reactor filesystem.
+  reactorState.stdinFile.setBuffers(signal, buffer);
+  reactorState.rootContents.set("main.kip", new File(encoder.encode(source)));
+  // Avoid stale cache artifacts from previous runs.
+  reactorState.rootContents.delete("main.iz");
 
   const exportRun = reactorState.instance.exports && reactorState.instance.exports.kip_run;
   if (typeof exportRun !== "function") {
