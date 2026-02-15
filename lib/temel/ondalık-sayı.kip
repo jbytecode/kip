@@ -2,89 +2,124 @@ temeli yükle.
 
 (* Ondalık sayı fonksiyonları. *)
 
-(* İki ondalık sayıyı toplar.
-   Örnek: (1.5'le 2.25'in toplamı) *)
+(*
+İki ondalık sayıyı toplar.
+Örnek kullanım: (1.5'le 2.25'in toplamı)
+*)
 (bu ondalık-sayıyla) (şu ondalık-sayının) (toplam ondalık-sayısı),
   yerleşiktir.
 
-(* İki ondalık sayıyı çarpar.
-   Örnek: (2.0'la 3.5'in çarpımı) *)
+(*
+İki ondalık sayıyı çarpar.
+Örnek kullanım: (2.0'la 3.5'in çarpımı)
+*)
 (bu ondalık-sayıyla) (şu ondalık-sayının) (çarpım ondalık-sayısı),
   yerleşiktir.
 
-(* İki ondalık sayının farkını alır.
-   Örnek: (5.0'la 1.25'in farkı) *)
+(*
+İlk sayıdan ikinci sayıyı çıkarır.
+Örnek kullanım: (5.0'la 1.25'in farkı)
+*)
 (bu ondalık-sayıyla) (şu ondalık-sayının) (fark ondalık-sayısı),
   yerleşiktir.
 
-(* Bir ondalık sayıyı diğerine böler.
-   Örnek: (7.5'in 2.5'e bölümü) *)
+(*
+İlk sayıyı ikinci sayıya böler.
+Örnek kullanım: (7.5'in 2.5'e bölümü)
+*)
 (bu ondalık-sayının) (şu ondalık-sayıya) (bölüm ondalık-sayısı),
   yerleşiktir.
 
-(* İki ondalık sayının eşit olup olmadığını döndürür.
-   Örnek: (3.0'la 3.0'ın eşitliği) *)
+(*
+İki ondalık sayının eşit olup olmadığını doğruluk olarak döndürür.
+Örnek kullanım: (3.0'la 3.0'ın eşitliği)
+*)
 (bu ondalık-sayıyla) (şu ondalık-sayının) (eşitlik doğruluğu),
   yerleşiktir.
 
-(* İlk sayı ikinci sayıdan küçük mü kontrol eder.
-   Örnek: (2.0'ın 3.0'dan küçüklüğü) *)
+(*
+İlk sayının ikinci sayıdan küçük olup olmadığını döndürür.
+Örnek kullanım: (2.0'ın 3.0'dan küçüklüğü)
+*)
 (bu ondalık-sayının) (şu ondalık-sayıdan) (küçüklük doğruluğu),
   yerleşiktir.
 
-(* İlk sayı ikinci sayıdan küçük-eşit mi kontrol eder.
-   Örnek: (2.0'ın 2.0'dan küçük-eşitliği) *)
+(*
+İlk sayının ikinci sayıdan küçük-eşit olup olmadığını döndürür.
+Örnek kullanım: (2.0'ın 2.0'dan küçük-eşitliği)
+*)
 (bu ondalık-sayının) (şu ondalık-sayıdan) (küçük-eşitlik doğruluğu),
   yerleşiktir.
 
-(* İlk sayı ikinci sayıdan büyük mü kontrol eder.
-   Örnek: (4.2'nin 1.1'den büyüklüğü) *)
+(*
+İlk sayının ikinci sayıdan büyük olup olmadığını döndürür.
+Örnek kullanım: (4.2'nin 1.1'den büyüklüğü)
+*)
 (bu ondalık-sayının) (şu ondalık-sayıdan) (büyüklük doğruluğu),
   yerleşiktir.
 
-(* İlk sayı ikinci sayıdan büyük-eşit mi kontrol eder.
-   Örnek: (4.2'yle 4.2'nin büyük-eşitliği) *)
+(*
+İlk sayının ikinci sayıdan büyük-eşit olup olmadığını döndürür.
+Örnek kullanım: (4.2'yle 4.2'nin büyük-eşitliği)
+*)
 (bu ondalık-sayıyla) (şu ondalık-sayının) (büyük-eşitlik doğruluğu),
   yerleşiktir.
 
-(* Ondalık sayılarda kalan işlemini uygular.
-   Örnek: (7.5'in 2.0'la kalanı) *)
+(*
+Ondalık sayılarda kalan (mod) işlemi uygular.
+Örnek kullanım: (7.5'in 2.0'la kalanı)
+*)
 (bu ondalık-sayının) (şu ondalık-sayıyla) (kalan ondalık-sayısı),
   yerleşiktir.
 
-(* İlk sayı ikinciye tam bölünüyorsa doğru döndürür.
-   Örnek: (6.0'la 3.0'a bölünürlük) *)
+(*
+İlk sayının ikinci sayıya kalansız bölünüp bölünmediğini kontrol eder.
+Kalan 0.0 ise doğru döner.
+Örnek kullanım: (6.0'la 3.0'a bölünürlük)
+*)
 (bu ondalık-sayıyla) (şu ondalık-sayıya) (bölünürlük doğruluğu),
   (bunun şunla kalanıyla) 0.0'ın eşitliğidir.
 
-(* Ondalık sayıyı dizgeye çevirir.
-   Örnek: (3.14'ün dizge-hali) *)
+(*
+Ondalık sayıyı metinsel gösterimine (dizgeye) çevirir.
+Örnek kullanım: (3.14'ün dizge-hali)
+*)
 (bu ondalık-sayının) (dizge-hal dizgesi),
   yerleşiktir.
 
-(* Bir ondalık sayının işaretini tersine çevirir.
-   Örnek: (3.5'in negatifi) *)
+(*
+Bir sayının işaretini tersine çevirir.
+Pozitifse negatif, negatifse pozitif değeri üretir.
+Örnek kullanım: (3.5'in negatifi)
+*)
 (bu ondalık-sayının) negatifi,
   0.0'la bunun farkıdır.
 
-(* Bir ondalık sayının mutlak değerini verir.
-   Örnek: ((-3.5'in) mutlak-değeri) *)
+(*
+Mutlak değer üretir.
+Sayı negatifse negatifini alır, değilse sayıyı olduğu gibi döndürür.
+Örnek kullanım: ((-3.5'in) mutlak-değeri)
+*)
 (bu ondalık-sayının) (mutlak-değer ondalık-sayısı),
   (bunun 0.0'dan küçüklüğü) doğruysa,
     (bunun negatifi);
   değilse,
     budur.
 
-(* İki ondalık sayıdan küçük olanı seçer.
-   Örnek: (2.5'le 7.1'in küçüğü) *)
+(*
+İki ondalık sayıdan küçük olanı seçer.
+Örnek kullanım: (2.5'le 7.1'in küçüğü)
+*)
 (bu ondalık-sayıyla) (şu ondalık-sayının) (küçük ondalık-sayısı),
   (bunun şundan küçüklüğü) doğruysa,
     budur;
   değilse,
     şudur.
 
-(* İki ondalık sayıdan büyük olanı seçer.
-   Örnek: (2.5'le 7.1'in büyüğü) *)
+(*
+İki ondalık sayıdan büyük olanı seçer.
+Örnek kullanım: (2.5'le 7.1'in büyüğü)
+*)
 (bu ondalık-sayıyla) (şu ondalık-sayının) (büyük ondalık-sayısı),
   (bunun şundan büyüklüğü) doğruysa,
     budur;

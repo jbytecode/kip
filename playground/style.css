@@ -622,6 +622,38 @@ a.badge:hover {
   white-space: pre-wrap;
 }
 
+.codegen-progress {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.codegen-progress.hidden {
+  display: none;
+}
+
+.codegen-progress-track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.codegen-progress-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(32, 214, 199, 0.95), rgba(26, 99, 255, 0.95));
+  transition: width 0.2s ease-out;
+}
+
+.codegen-progress span {
+  font-size: 0.86rem;
+  color: rgba(203, 213, 245, 0.9);
+}
+
 .terminal-input {
   display: flex;
   align-items: center;

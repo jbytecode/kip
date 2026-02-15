@@ -2,22 +2,37 @@ temeli yükle.
 
 (* Doğruluk fonksiyonları. *)
 
-(* Bir doğruluğun tersini (değilini) verir.
-   Örnek: (doğrunun tersi) *)
+(*
+Bir doğruluk değerinin tersini üretir.
+- doğru verilirse yanlış döner.
+- yanlış verilirse doğru döner.
+Kısaca mantıksal "değil" işlemini yapar.
+Örnek kullanım: (doğrunun tersi)
+*)
 (bu doğruluğun) (ters doğruluğu),
   bu doğruysa, yanlış;
   yanlışsa, doğrudur.
 
-(* İki doğruluğun kesişimini (ve işlemini) verir.
-   Örnek: (doğruyla yanlışın kesişimi) *)
+(*
+İki doğruluk üzerinde mantıksal "ve" (AND) uygular.
+- Sol taraf doğruysa sonuç sağ tarafa eşit olur.
+- Sol taraf yanlışsa sonuç doğrudan yanlıştır.
+Bu yüzden kısa devreli ve işlemi gibi davranır.
+Örnek kullanım: (doğruyla yanlışın kesişimi)
+*)
 (bu doğrulukla) (şu doğruluğun) (kesişim doğruluğu),
   bu doğruysa,
     şu;
   yanlışsa,
     yanlıştır.
 
-(* İki doğruluğun birleşimini (veya işlemini) verir.
-   Örnek: (yanlışla doğrunun birleşimi) *)
+(*
+İki doğruluk üzerinde mantıksal "veya" (OR) uygular.
+- Sol taraf doğruysa sonuç doğrudan doğrudur.
+- Sol taraf yanlışsa sonuç sağ tarafa eşit olur.
+Bu yüzden kısa devreli veya işlemi gibi davranır.
+Örnek kullanım: (yanlışla doğrunun birleşimi)
+*)
 (bu doğrulukla) (şu doğruluğun) (birleşim doğruluğu),
   bu doğruysa,
     doğru;

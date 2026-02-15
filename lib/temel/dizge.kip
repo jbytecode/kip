@@ -2,27 +2,46 @@ temeli yükle.
 
 (* Dizge fonksiyonları. *)
 
-(* Bir dizgenin karakter sayısını verir.
-   Örnek: ("merhaba"nın uzunluğu) *)
+(*
+Bir dizgedeki karakter sayısını tam-sayı olarak verir.
+Boş dizgede sonuç 0 olur.
+Örnek kullanım: ("merhaba"nın uzunluğu)
+*)
 (bu dizgenin) (uzunluk tam-sayısı),
   yerleşiktir.
 
-(* İki dizgeyi birleştirir.
-   Örnek: ("merhaba "yla "kip"in birleşimi) *)
+(*
+İki dizgeyi soldan sağa birleştirir.
+İlk dizge sonuçta başta, ikinci dizge sonda kalır.
+Örnek kullanım: ("merhaba "yla "kip"in birleşimi)
+*)
 (bu dizgeyle) (şu dizgenin) (birleşim dizgesi),
   yerleşiktir.
 
-(* Bir dizgeyi tam-sayıya çevirmeyi dener; sonuç olasılıktır.
-   Örnek: ("42"nin tam-sayı-hali) *)
+(*
+Bir dizgeyi tam-sayıya çevirmeyi dener.
+- Geçerli sayı biçimiyse "varlık" döner.
+- Değilse "yokluk" döner.
+Böylece hatayı fırlatmak yerine güvenli bir olasılık değeri verir.
+Örnek kullanım: ("42"nin tam-sayı-hali)
+*)
 (bu dizgenin) (tam-sayı-hal tam-sayının olasılığı),
   yerleşiktir.
 
-(* Bir dizgeyi ondalık-sayıya çevirmeyi dener; sonuç olasılıktır.
-   Örnek: ("3.14"ün ondalık-sayı-hali) *)
+(*
+Bir dizgeyi ondalık-sayıya çevirmeyi dener.
+- Geçerli ondalık biçimiyse "varlık" döner.
+- Değilse "yokluk" döner.
+Dönüş tipi olasılık olduğu için çağıran taraf başarısızlığı açıkça ele alır.
+Örnek kullanım: ("3.14"ün ondalık-sayı-hali)
+*)
 (bu dizgenin) (ondalık-sayı-hal ondalık-sayının olasılığı),
   yerleşiktir.
 
-(* Bir dizgenin ters çevrilmiş halini verir.
-   Örnek: ("abc"nin tersi) *)
+(*
+Dizgenin karakter sırasını tersine çevirir.
+İlk karakter sona, son karakter başa gelir.
+Örnek kullanım: ("abc"nin tersi)
+*)
 (bu dizgenin) (ters dizgesi),
   yerleşiktir.

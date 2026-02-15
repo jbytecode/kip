@@ -26,6 +26,7 @@ mkdir -p "${DIST_LIB_DIR}"
 write_common_head() {
   local title="$1"
   local css_path="$2"
+  local body_data_attr="${3:-}"
   cat <<HTML
 <!doctype html>
 <html lang="en">
@@ -39,7 +40,6 @@ write_common_head() {
       body { background: linear-gradient(180deg, var(--bg2), var(--bg)); }
       .lib-main { padding: 2rem 1.25rem; }
       .lib-main-inner { max-width: 1100px; margin: 0 auto; }
-      .lib-page-actions { margin-bottom: 1rem; }
       .lib-title { margin: 0 0 0.8rem; }
       .lib-code { border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.25); background: rgba(0, 0, 0, 0.28); padding: 1rem; overflow: auto; }
       .lib-code pre { margin: 0; white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 0.92rem; line-height: 1.5; }
@@ -48,7 +48,7 @@ write_common_head() {
       .lib-list a:hover { color: var(--accent1); }
     </style>
   </head>
-  <body>
+  <body${body_data_attr}>
     <header class="topbar">
       <div class="topbar-inner">
         <a class="brand" href="${HOME_PATH}">
@@ -135,9 +135,9 @@ write_i18n_script() {
           "aria.github": "Kip on GitHub",
           "aria.twitter": "Kip on Twitter",
           "aria.vscode": "Kip on VS Code Marketplace",
-          "libs.navPlayground": "Playground",
-          "libs.navLibrary": "Library Files",
           "libs.indexTitle": "Standard Library Files",
+          "libs.pageTitleIndex": "Kip Standard Library Explorer",
+          "libs.pageTitleFile": "Kip Standard Library: {file}",
           "footer.subtitle": "A programming language in Turkish where grammatical case and mood are part of the type system.",
         },
         tr: {
@@ -145,9 +145,9 @@ write_i18n_script() {
           "aria.github": "GitHub'da Kip",
           "aria.twitter": "Twitter'da Kip",
           "aria.vscode": "VS Code Marketplace'te Kip",
-          "libs.navPlayground": "Deneme Tahtası",
-          "libs.navLibrary": "Kütüphane Dosyaları",
           "libs.indexTitle": "Standart Kütüphane Dosyaları",
+          "libs.pageTitleIndex": "Kip Standart Kütüphane Gezgini",
+          "libs.pageTitleFile": "Kip Standart Kütüphane: {file}",
           "footer.subtitle": "İsmin halleri ve eylem kiplerinin tip sisteminin bir parçası olduğu Türkçe bir programlama dili.",
         },
       };
@@ -212,6 +212,14 @@ write_i18n_script() {
           const key = node.dataset.i18nAriaLabel;
           node.setAttribute("aria-label", t(lang, key));
         });
+
+        const pageKind = document.body.dataset.pageKind;
+        if (pageKind === "libs-index") {
+          document.title = t(lang, "libs.pageTitleIndex");
+        } else if (pageKind === "libs-file") {
+          const libPath = document.body.dataset.libPath ?? "";
+          document.title = t(lang, "libs.pageTitleFile").replace("{file}", libPath);
+        }
       }
 
       const currentLanguage = detectPreferredLanguage();
@@ -239,12 +247,8 @@ HTML
 HOME_PATH="../index.html"
 LOGO_PATH="../logo.png"
 {
-  write_common_head "Kip Lib Dosyaları" "../style.css"
+  write_common_head "Kip Standard Library Explorer" "../style.css" ' data-page-kind="libs-index"'
   cat <<'HTML'
-        <div class="hero-actions lib-page-actions">
-          <a class="btn ghost" href="../index.html" data-i18n="libs.navPlayground">Playground</a>
-          <a class="btn primary" href="./index.html" data-i18n="libs.navLibrary">Library Files</a>
-        </div>
         <h1 class="lib-title" data-i18n="libs.indexTitle">Standard Library Files</h1>
         <ul class="lib-list">
 HTML
@@ -280,19 +284,14 @@ for src in "${lib_files[@]}"; do
   css_path="${up}style.css"
   HOME_PATH="${up}index.html"
   LOGO_PATH="${up}logo.png"
-  list_path="${up}libs/index.html"
   syntax_path="${up}kip-syntax.js"
 
   display_path="lib/${rel}"
   source_b64="$(base64 < "${src}" | tr -d '\n')"
 
   {
-    write_common_head "${display_path} - Kip Lib" "${css_path}"
+    write_common_head "Kip Standard Library: ${display_path}" "${css_path}" " data-page-kind=\"libs-file\" data-lib-path=\"${display_path}\""
     cat <<HTML
-        <div class="hero-actions lib-page-actions">
-          <a class="btn ghost" href="${HOME_PATH}" data-i18n="libs.navPlayground">Playground</a>
-          <a class="btn primary" href="${list_path}" data-i18n="libs.navLibrary">Library Files</a>
-        </div>
         <h1 class="lib-title">${display_path}</h1>
         <div class="lib-code">
           <pre id="lib-source"></pre>

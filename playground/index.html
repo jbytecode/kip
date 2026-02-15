@@ -216,6 +216,12 @@ olabilir.
 
             <div class="playground-codegen hidden" id="codegen-panel">
               <label for="codegen-output" data-i18n="playground.generatedJs">Generated JavaScript</label>
+              <div class="codegen-progress hidden" id="codegen-progress" role="status" aria-live="polite">
+                <div class="codegen-progress-track">
+                  <div class="codegen-progress-bar" id="codegen-progress-bar"></div>
+                </div>
+                <span id="codegen-progress-text">0%</span>
+              </div>
               <pre id="codegen-output" class="codegen-output"></pre>
             </div>
           </div>

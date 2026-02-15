@@ -1,43 +1,69 @@
 temeli yükle.
 
-(* Programı bitiren no-op etkidir.
-   Örnek: durmak *)
+(*
+Etkili akışı sonlandırmak veya "hiçbir şey yapmamak" için kullanılan temel bitim değeridir.
+Sıralı etkilerde son adım olarak sık kullanılır.
+Örnek kullanım: durmak
+*)
 (durmak bitimi),
   bitimliktir.
 
-(* Etkili fonksiyonlar. *)
+(* Etkili (yan etki üreten) fonksiyonlar. *)
 
-(* Bir tam-sayıyı çıktıya yazar.
-   Örnek: 5'i yazmak *)
+(*
+Verilen tam-sayıyı standart çıktıya yazar.
+Dönüşte bitim verir; yani asıl amacı yazma etkisidir.
+Örnek kullanım: 5'i yazmak
+*)
 (bu tam-sayıyı) (yazmak bitimi),
   yerleşiktir.
 
-(* Bir ondalık-sayıyı çıktıya yazar.
-   Örnek: 3.14'ü yazmak *)
+(*
+Verilen ondalık-sayıyı standart çıktıya yazar.
+Sayısal değeri metne çevirip kullanıcıya gösterir.
+Örnek kullanım: 3.14'ü yazmak
+*)
 (bu ondalık-sayıyı) (yazmak bitimi),
   yerleşiktir.
 
-(* Bir dizgeyi çıktıya yazar.
-   Örnek: "merhaba"yı yazmak *)
+(*
+Verilen dizgeyi standart çıktıya yazar.
+Kullanıcıya mesaj göstermek için en temel yazma işlemdir.
+Örnek kullanım: "merhaba"yı yazmak
+*)
 (bu dizgeyi) (yazmak bitimi),
   yerleşiktir.
 
-(* Standart girdiden bir satır okur.
-   Örnek: okuyup *)
+(*
+Standart girdiden bir satır okur ve dizge döndürür.
+Etkili bağlamda genellikle "okuyup" yapısıyla kullanılır.
+Örnek kullanım: okuyup
+*)
 (okumak dizgesi),
   yerleşiktir.
 
-(* Verilen dosyadan dizge okumayı dener.
-   Örnek: "./notlar.txt"den okumak *)
+(*
+Belirtilen dosya yolundan metin okumayı dener.
+- Okuma başarılıysa dizge varlığı döner.
+- Dosya yoksa veya okunamıyorsa yokluk döner.
+Örnek kullanım: "./notlar.txt"den okumak
+*)
 (dosya dizgesinden) (okumak dizge olasılığı),
   yerleşiktir.
 
-(* Verilen dizgeyi dosyaya yazar; başarıyı doğrulukla döndürür.
-   Örnek: "./notlar.txt"ye "selam"ı yazmak *)
+(*
+Verilen dizgeyi belirtilen dosya yoluna yazmayı dener.
+İşlem sonucu doğruluk döndürür:
+- doğru: yazma başarılı
+- yanlış: yazma başarısız
+Örnek kullanım: "./notlar.txt"ye "selam"ı yazmak
+*)
 (dosya dizgesine) (şu dizgeyi) (yazmak doğruluğu),
   yerleşiktir.
 
-(* Belirtilen aralıkta rastgele tam-sayı üretir.
-   Örnek: 1'den 10'a sayı-çekmek *)
+(*
+Başlangıç ve bitiş değerlerini kapsayan aralıkta rastgele bir tam-sayı üretir.
+Örnek kullanım: 1'den 10'a sayı-çekmek
+*)
 (bu tam-sayıdan) (şu tam-sayıya) (sayı-çekmek tam-sayısı),
   yerleşiktir.

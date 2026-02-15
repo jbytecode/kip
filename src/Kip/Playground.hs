@@ -27,6 +27,8 @@ module Kip.Playground
 import Control.Monad (filterM, unless, when)
 import Control.Monad.IO.Class
 import Control.Monad.Reader (runReaderT)
+import Data.Char (toLower)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (nub)
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -38,7 +40,8 @@ import Paths_kip (getDataFileName)
 import System.Directory (canonicalizePath, doesFileExist)
 import System.Environment (lookupEnv)
 import System.Exit (die)
-import System.FilePath ((</>), takeDirectory)
+import System.FilePath ((</>), takeDirectory, takeFileName)
+import System.IO (stderr)
 
 import Language.Foma
 import Kip.AST
@@ -113,16 +116,26 @@ This function does /not/ persist user definitions across invocations by design.
 -}
 runPlaygroundRequest :: PlaygroundRequest -> IO PlaygroundOutput
 runPlaygroundRequest req = do
+  progressEnabled <- isPlaygroundProgressEnabled
+  let reportProgress pct label =
+        when (progressEnabled && isCodegenMode (prMode req)) $
+          emitPlaygroundProgress pct label
+      trLabel tr en = if prLang req == LangTr then tr else en
+  reportProgress 5 "prepare-data"
   trmorphPath <- locateTrmorph (prLang req)
   libDir <- locateLibDir (prLang req)
+  reportProgress 12 "load-morphology"
   fsm <- fsmReadBinaryFile trmorphPath
+  reportProgress 20 "init-caches"
   upsCache <- HT.new
   downsCache <- HT.new
   let renderCache = mkRenderCache upsCache downsCache
       moduleDirs = nub (libDir : prIncludeDirs req)
       renderCtx = RenderCtx (prLang req) renderCache fsm upsCache downsCache
+  reportProgress 30 "load-prelude"
   (preludePst, preludeTC, preludeEval, preludeLoaded) <-
     runReaderT (loadPreludeState (prNoPrelude req) moduleDirs renderCache fsm upsCache downsCache) renderCtx
+  reportProgress 45 "prelude-ready"
   case prMode req of
     PlaygroundExec -> do
       when (null (prFiles req)) $
@@ -142,10 +155,66 @@ runPlaygroundRequest req = do
     PlaygroundCodegen target ->
       case target of
         "js" -> do
-          js <- runReaderT (emitJsFilesWithDeps moduleDirs preludePst preludeTC Set.empty (prFiles req)) renderCtx
+          discoveredRef <- newIORef Set.empty
+          completedRef <- newIORef (0 :: Int)
+          maxPctRef <- newIORef (55 :: Int)
+          let reportCodegenProgress pct label = do
+                cur <- readIORef maxPctRef
+                let bounded = max 0 (min 100 pct)
+                    monotonic = max cur bounded
+                modifyIORef' maxPctRef (const monotonic)
+                reportProgress monotonic label
+              reportModulePhase path done = do
+                discovered <- readIORef discoveredRef
+                completed <- readIORef completedRef
+                let d = max 1 (Set.size discovered)
+                    c = max 0 (min d completed)
+                    ratio = fromIntegral c / fromIntegral d :: Double
+                    base = if done then 56 else 55
+                    spanPct = 37 :: Int
+                    pct = base + floor (ratio * fromIntegral spanPct)
+                    label
+                      | done =
+                          trLabel
+                            ("modül tamamlandı: " <> T.pack (takeFileName path))
+                            ("module done: " <> T.pack (takeFileName path))
+                      | otherwise =
+                          trLabel
+                            ("modül işleniyor: " <> T.pack (takeFileName path))
+                            ("processing module: " <> T.pack (takeFileName path))
+                reportCodegenProgress pct label
+              onModuleStart path = do
+                modifyIORef' discoveredRef (Set.insert path)
+                reportModulePhase path False
+              onModuleDone path = do
+                modifyIORef' completedRef (+ 1)
+                reportModulePhase path True
+          reportProgress 52 (trLabel "kod üretimi başlatılıyor" "starting code generation")
+          reportProgress 55 "resolve-modules"
+          js <- runReaderT (emitJsFilesWithDeps moduleDirs preludePst preludeTC Set.empty (prFiles req) (Just (onModuleStart, onModuleDone))) renderCtx
+          reportProgress 98 (trLabel "çıktı yazılıyor" "writing output")
           return (PlaygroundTextOutput js)
         _ ->
           die . T.unpack =<< runReaderT (renderMsg (MsgUnknownCodegenTarget target)) renderCtx
+
+isCodegenMode :: PlaygroundMode -> Bool
+isCodegenMode (PlaygroundCodegen _) = True
+isCodegenMode _ = False
+
+isPlaygroundProgressEnabled :: IO Bool
+isPlaygroundProgressEnabled = do
+  mVal <- lookupEnv "KIP_PLAYGROUND_PROGRESS"
+  case fmap (map toLower) mVal of
+    Just "0" -> return False
+    Just "false" -> return False
+    Just "no" -> return False
+    Just "" -> return False
+    Nothing -> return False
+    _ -> return True
+
+emitPlaygroundProgress :: Int -> Text -> IO ()
+emitPlaygroundProgress pct label =
+  TIO.hPutStrLn stderr ("KIP_PROGRESS:" <> T.pack (show pct) <> ":" <> label)
 
 -- | Locate @trmorph.fst@ path with data-dir fallback behavior.
 locateTrmorph :: Lang -> IO FilePath
@@ -191,11 +260,18 @@ Generate one JS program text from entry files and transitive dependencies.
 This intentionally starts from @giriş@ to mirror the runtime prelude that
 normal execution uses.
 -}
-emitJsFilesWithDeps :: [FilePath] -> ParserState -> TCState -> Set FilePath -> [FilePath] -> RenderM Text
-emitJsFilesWithDeps moduleDirs basePst baseTC _preludeLoaded files = do
+emitJsFilesWithDeps ::
+  [FilePath] ->
+  ParserState ->
+  TCState ->
+  Set FilePath ->
+  [FilePath] ->
+  Maybe (FilePath -> IO (), FilePath -> IO ()) ->
+  RenderM Text
+emitJsFilesWithDeps moduleDirs basePst baseTC _preludeLoaded files progressHooks = do
   preludePath <- resolveModulePath moduleDirs ([], T.pack "giriş")
-  (preludeStmts, pst', tcSt', loaded') <- emitJsFileWithDeps moduleDirs ([], basePst, baseTC, Set.empty) preludePath
-  (stmts, _, _, _) <- foldM' (emitJsFileWithDeps moduleDirs) (preludeStmts, pst', tcSt', loaded') files
+  (preludeStmts, pst', tcSt', loaded') <- emitJsFileWithDeps moduleDirs progressHooks ([], basePst, baseTC, Set.empty) preludePath
+  (stmts, _, _, _) <- foldM' (emitJsFileWithDeps moduleDirs progressHooks) (preludeStmts, pst', tcSt', loaded') files
   return (codegenProgram stmts)
 
 {- |
@@ -204,8 +280,13 @@ Parse/typecheck one file and recursively include dependencies for codegen.
 Unlike runtime execution, this path accumulates typed statements and then emits
 a single JS program.
 -}
-emitJsFileWithDeps :: [FilePath] -> ([Stmt Ann], ParserState, TCState, Set FilePath) -> FilePath -> RenderM ([Stmt Ann], ParserState, TCState, Set FilePath)
-emitJsFileWithDeps moduleDirs (acc, pst, tcSt, loaded) path = do
+emitJsFileWithDeps ::
+  [FilePath] ->
+  Maybe (FilePath -> IO (), FilePath -> IO ()) ->
+  ([Stmt Ann], ParserState, TCState, Set FilePath) ->
+  FilePath ->
+  RenderM ([Stmt Ann], ParserState, TCState, Set FilePath)
+emitJsFileWithDeps moduleDirs progressHooks (acc, pst, tcSt, loaded) path = do
   exists <- liftIO (doesFileExist path)
   unless exists $ do
     msg <- renderMsg (MsgFileNotFound path)
@@ -214,6 +295,9 @@ emitJsFileWithDeps moduleDirs (acc, pst, tcSt, loaded) path = do
   if Set.member absPath loaded
     then return (acc, pst, tcSt, loaded)
     else do
+      liftIO $ case progressHooks of
+        Nothing -> return ()
+        Just (onStart, _) -> onStart absPath
       input <- liftIO (TIO.readFile path)
       liftIO (parseFromFile pst input) >>= \case
         Left err -> do
@@ -224,7 +308,7 @@ emitJsFileWithDeps moduleDirs (acc, pst, tcSt, loaded) path = do
               tyMods = parserTyMods pst'
               loaded' = Set.insert absPath loaded
           let loadStmts = [name | Load name <- fileStmts]
-          (depStmts, pst'', tcSt', loaded'') <- foldM' (emitJsLoad moduleDirs paramTyCons tyMods) ([], pst', tcSt, loaded') loadStmts
+          (depStmts, pst'', tcSt', loaded'') <- foldM' (emitJsLoad moduleDirs progressHooks paramTyCons tyMods) ([], pst', tcSt, loaded') loadStmts
           liftIO (runTCM (registerForwardDecls fileStmts) tcSt') >>= \case
             Left tcErr -> do
               msg <- renderMsg (MsgTCError tcErr (Just input) paramTyCons tyMods)
@@ -236,7 +320,11 @@ emitJsFileWithDeps moduleDirs (acc, pst, tcSt, loaded) path = do
                   liftIO (die (T.unpack msg))
                 Right (typedStmts, tcSt'') ->
                   let filteredStmts = filter (not . isLoadStmt) typedStmts
-                  in return (acc ++ depStmts ++ filteredStmts, pst'', tcSt'', loaded'')
+                  in do
+                    liftIO $ case progressHooks of
+                      Nothing -> return ()
+                      Just (_, onDone) -> onDone absPath
+                    return (acc ++ depStmts ++ filteredStmts, pst'', tcSt'', loaded'')
 
 -- | Check whether a statement is @Load@.
 isLoadStmt :: Stmt Ann -> Bool
@@ -244,7 +332,14 @@ isLoadStmt (Load _) = True
 isLoadStmt _ = False
 
 -- | Load one dependency module for JS code generation.
-emitJsLoad :: [FilePath] -> [Identifier] -> [(Identifier, [Identifier])] -> ([Stmt Ann], ParserState, TCState, Set FilePath) -> Identifier -> RenderM ([Stmt Ann], ParserState, TCState, Set FilePath)
-emitJsLoad moduleDirs _paramTyCons _tyMods (acc, pst, tcSt, loaded) name = do
+emitJsLoad ::
+  [FilePath] ->
+  Maybe (FilePath -> IO (), FilePath -> IO ()) ->
+  [Identifier] ->
+  [(Identifier, [Identifier])] ->
+  ([Stmt Ann], ParserState, TCState, Set FilePath) ->
+  Identifier ->
+  RenderM ([Stmt Ann], ParserState, TCState, Set FilePath)
+emitJsLoad moduleDirs progressHooks _paramTyCons _tyMods (acc, pst, tcSt, loaded) name = do
   path <- resolveModulePath moduleDirs name
-  emitJsFileWithDeps moduleDirs (acc, pst, tcSt, loaded) path
+  emitJsFileWithDeps moduleDirs progressHooks (acc, pst, tcSt, loaded) path

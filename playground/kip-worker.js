@@ -161,6 +161,26 @@ const runtimeModes = {
   reactor: "reactor",
 };
 
+const progressPrefix = "KIP_PROGRESS:";
+
+function parseProgressLine(line) {
+  if (typeof line !== "string" || !line.startsWith(progressPrefix)) {
+    return null;
+  }
+  const rest = line.slice(progressPrefix.length);
+  const sep = rest.indexOf(":");
+  if (sep === -1) {
+    return null;
+  }
+  const rawPercent = Number(rest.slice(0, sep));
+  if (!Number.isFinite(rawPercent)) {
+    return null;
+  }
+  const percent = Math.max(0, Math.min(100, Math.round(rawPercent)));
+  const label = rest.slice(sep + 1).trim();
+  return { percent, label };
+}
+
 async function loadWasmModule() {
   if (wasmModulePromise) {
     // Optimization: compile once, instantiate cheaply many times.
@@ -287,7 +307,14 @@ function createStdoutSink() {
 }
 
 function createStderrSink() {
-  return ConsoleStdout.lineBuffered((line) => postMessage({ type: "stderr", line }));
+  return ConsoleStdout.lineBuffered((line) => {
+    const progress = parseProgressLine(line);
+    if (progress) {
+      postMessage({ type: "progress", ...progress });
+      return;
+    }
+    postMessage({ type: "stderr", line });
+  });
 }
 
 async function createReactorState(source, signal, buffer) {
@@ -302,7 +329,7 @@ async function createReactorState(source, signal, buffer) {
   const stdinFile = new InteractiveStdin(signal, buffer);
   const stdout = createStdoutSink();
   const stderr = createStderrSink();
-  const wasi = new WASI(["kip-playground-reactor"], ["KIP_DATADIR=/"], [stdinFile, stdout, stderr, preopen]);
+  const wasi = new WASI(["kip-playground-reactor"], ["KIP_DATADIR=/", "KIP_PLAYGROUND_PROGRESS=1"], [stdinFile, stdout, stderr, preopen]);
 
   const module = await loadWasmModule();
   const instance = await WebAssembly.instantiate(module, {
@@ -344,7 +371,7 @@ async function runWasmCommand({ args, source, signal, buffer }) {
   const stdout = createStdoutSink();
   const stderr = createStderrSink();
   const stdinFile = signal && buffer ? new InteractiveStdin(signal, buffer) : new EmptyStdin();
-  const wasi = new WASI(args, ["KIP_DATADIR=/"], [stdinFile, stdout, stderr, preopen]);
+  const wasi = new WASI(args, ["KIP_DATADIR=/", "KIP_PLAYGROUND_PROGRESS=1"], [stdinFile, stdout, stderr, preopen]);
 
   const module = await loadWasmModule();
   const instance = await WebAssembly.instantiate(module, {

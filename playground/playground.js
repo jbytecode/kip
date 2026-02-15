@@ -16,6 +16,9 @@ const uiLangButtons = Array.from(document.querySelectorAll("[data-ui-lang]"));
 const exampleEl = document.getElementById("example");
 const codegenPanelEl = document.getElementById("codegen-panel");
 const codegenOutputEl = document.getElementById("codegen-output");
+const codegenProgressEl = document.getElementById("codegen-progress");
+const codegenProgressBarEl = document.getElementById("codegen-progress-bar");
+const codegenProgressTextEl = document.getElementById("codegen-progress-text");
 const panelsEl = document.querySelector(".playground-panels");
 const panelDividerEl = document.getElementById("panel-divider");
 const playgroundShellEl = document.querySelector(".playground-shell");
@@ -376,6 +379,25 @@ function setCodegenVisible(isVisible) {
   }
 }
 
+function setCodegenProgress(isRunning) {
+  if (!codegenProgressEl) {
+    return;
+  }
+  codegenProgressEl.classList.toggle("hidden", !isRunning);
+}
+
+function updateCodegenProgress(percent, label = "") {
+  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+  if (codegenProgressBarEl) {
+    codegenProgressBarEl.style.width = `${clamped}%`;
+  }
+  if (codegenProgressTextEl) {
+    codegenProgressTextEl.textContent = label
+      ? `${clamped}% (${label})`
+      : `${clamped}%`;
+  }
+}
+
 function terminateWorker() {
   if (activeWorker) {
     // Explicitly dropping the worker resets all worker-side caches and singleton state.
@@ -468,6 +490,11 @@ function handleWorkerMessage(event) {
         appendTerminalLine(line ?? "");
       }
       break;
+    case "progress":
+      if (activeMode === "codegen") {
+        updateCodegenProgress(event.data.percent ?? 0, event.data.label ?? "");
+      }
+      break;
     case "stdin-request":
       setBusyCursor(false);
       if (activeMode === "codegen") {
@@ -484,6 +511,10 @@ function handleWorkerMessage(event) {
       pendingInput = false;
       hideTerminalInput();
       setBusyCursor(false);
+      if (activeMode === "codegen") {
+        updateCodegenProgress(100, currentLanguage === "tr" ? "tamamlandı" : "done");
+      }
+      setCodegenProgress(false);
       setRunState(false);
       setActiveAction(null);
       break;
@@ -499,6 +530,7 @@ function handleWorkerMessage(event) {
       }
       pendingInput = false;
       hideTerminalInput();
+      setCodegenProgress(false);
       setRunState(false);
       setActiveAction(null);
       break;
@@ -527,6 +559,8 @@ async function runKip() {
   setRunState(true);
   setActiveAction("run");
   clearTerminal();
+  setCodegenProgress(false);
+  updateCodegenProgress(0);
   activeMode = "run";
   interactiveSupported = true;
 
@@ -559,6 +593,8 @@ function runCodegen() {
     activeMode = null;
     setRunState(false);
     setActiveAction(null);
+    setCodegenProgress(false);
+    updateCodegenProgress(0);
     setCodegenVisible(false);
     return;
   }
@@ -568,6 +604,8 @@ function runCodegen() {
   activeMode = "codegen";
   codegenLines = [];
   codegenOutputEl.textContent = "";
+  updateCodegenProgress(0);
+  setCodegenProgress(true);
   setCodegenVisible(true);
 
   const worker = ensureWorker();
