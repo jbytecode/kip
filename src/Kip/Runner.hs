@@ -655,11 +655,10 @@ runFile showDefn showLoad buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path 
                   tcStWithDefs <- liftIO $ runTCM (recordDefLocations absPath defSpansRaw >> recordFuncSigLocations absPath sigSpans) tcStWithDecls >>= \case
                     Left _ -> return tcStWithDecls
                     Right (_, tcStDefs) -> return tcStDefs
-                  let startState = (pst', tcStWithDefs, evalSt, Set.insert absPath loaded, [])
-                  (pstFinal, tcSt', evalSt', loaded', typedStmts) <-
+                  let startState = (pst', tcStWithDefs, evalSt, Set.insert absPath loaded, [], [])
+                  (pstFinal, tcSt', evalSt', loaded', typedStmts, depPathsRaw) <-
                     foldM' (runStmtCollect showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) startState stmts
-                  let depStmts = [name | Load name <- stmts]
-                  depPaths <- mapM (resolveModulePath moduleDirs) depStmts
+                  let depPaths = nub depPathsRaw
                   depHashes <- liftIO $ mapM (\p -> do
                     mDigest <- hashFile p
                     digest <- case mDigest of
@@ -795,18 +794,18 @@ runTypedStmt showDefn showLoad buildOnly moduleDirs currentPath _paramTyCons _ty
             Right (_, evalSt') -> return (pst, tcSt, evalSt', loaded)
 
 -- | Run a single statement while collecting type-checked statements for caching.
-runStmtCollect :: Bool -> Bool -> Bool -> [FilePath] -> FilePath -> [Identifier] -> [(Identifier, [Identifier])] -> [Identifier] -> Text -> (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann]) -> Stmt Ann -> RenderM (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann])
-runStmtCollect showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods primRefs source (pst, tcSt, evalSt, loaded, typedAcc) stmt =
+runStmtCollect :: Bool -> Bool -> Bool -> [FilePath] -> FilePath -> [Identifier] -> [(Identifier, [Identifier])] -> [Identifier] -> Text -> (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann], [FilePath]) -> Stmt Ann -> RenderM (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann], [FilePath])
+runStmtCollect showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods primRefs source (pst, tcSt, evalSt, loaded, typedAcc, depPathsAcc) stmt =
   case stmt of
     Load name -> do
       path <- resolveModulePath moduleDirs name
       absPath <- liftIO (canonicalizePath path)
       if Set.member absPath loaded
-        then return (pst, tcSt, evalSt, loaded, typedAcc ++ [stmt])
+        then return (pst, tcSt, evalSt, loaded, typedAcc ++ [stmt], depPathsAcc ++ [path])
         else do
           (pst', tcSt', evalSt', loaded') <- runFile False False buildOnly moduleDirs (pst, tcSt, evalSt, loaded) path
           when showLoad $ return ()
-          return (pst', tcSt', evalSt', loaded', typedAcc ++ [stmt])
+          return (pst', tcSt', evalSt', loaded', typedAcc ++ [stmt], depPathsAcc ++ [path])
     _ ->
       liftIO (runTCM (tcStmt stmt) tcSt) >>= \case
         Left tcErr -> do
@@ -817,19 +816,19 @@ runStmtCollect showDefn showLoad buildOnly moduleDirs currentPath paramTyCons ty
           if buildOnly
             then
               case stmt' of
-                ExpStmt _ -> return (pst, tcSt', evalSt, loaded, typedAcc ++ [stmt'])
+                ExpStmt _ -> return (pst, tcSt', evalSt, loaded, typedAcc ++ [stmt'], depPathsAcc)
                 _ ->
                   liftIO (runEvalM (evalStmtInFile (Just currentPath) stmt') evalSt) >>= \case
                     Left evalErr -> do
                       msg <- renderMsg (MsgEvalError evalErr)
                       liftIO (die (T.unpack msg))
-                    Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded, typedAcc ++ [stmt'])
+                    Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded, typedAcc ++ [stmt'], depPathsAcc)
             else
               liftIO (runEvalM (evalStmtInFile (Just currentPath) stmt') evalSt) >>= \case
                 Left evalErr -> do
                   msg <- renderMsg (MsgEvalError evalErr)
                   liftIO (die (T.unpack msg))
-                Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded, typedAcc ++ [stmt'])
+                Right (_, evalSt') -> return (pst, tcSt', evalSt', loaded, typedAcc ++ [stmt'], depPathsAcc)
 
 -- | Collect non-infinitive primitive references from statements.
 collectNonInfinitiveRefs :: [Stmt Ann] -> [Identifier]
