@@ -162,6 +162,10 @@ code {
   opacity: 1;
 }
 
+.lang-label-short {
+  display: none;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -917,5 +921,19 @@ pre {
 
   .topbar-inner {
     gap: 0.75rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .lang-label-full {
+    display: none;
+  }
+
+  .lang-label-short {
+    display: inline;
+  }
+
+  .icon-link.vscode-link {
+    display: none;
   }
 }
