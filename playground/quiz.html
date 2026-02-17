@@ -1,0 +1,1766 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Programlama Dili Deneyi</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    #app {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 24px 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 32px;
+      margin-bottom: 24px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    h1 { font-size: 1.8rem; margin-bottom: 16px; }
+    h2 { font-size: 1.4rem; margin-bottom: 12px; }
+    h3 { font-size: 1.15rem; margin-bottom: 8px; }
+    p { margin-bottom: 12px; }
+
+    .btn {
+      display: inline-block;
+      padding: 12px 28px;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary { background: #4a90d9; color: #fff; }
+    .btn-primary:hover { background: #3a7bc8; }
+    .btn-secondary { background: #e8ecf1; color: #1a1a2e; }
+    .btn-secondary:hover { background: #dce1e8; }
+    .btn-warning { background: #f0ad4e; color: #fff; }
+    .btn-warning:hover { background: #e09a3a; }
+    .btn-sm { padding: 8px 18px; font-size: 0.9rem; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-group { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+
+    pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border-radius: 8px;
+      padding: 20px;
+      overflow-x: auto;
+      font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      margin: 12px 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    code {
+      font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+      background: #e8ecf1;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    pre code { background: none; padding: 0; }
+
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #e8ecf1;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .progress-bar .fill {
+      height: 100%;
+      background: #4a90d9;
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+
+    .question-num {
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 8px;
+    }
+
+    .answer-input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #dce1e8;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-family: inherit;
+      margin: 12px 0;
+      transition: border-color 0.2s;
+    }
+    .answer-input:focus { border-color: #4a90d9; outline: none; }
+
+    .mc-options { margin: 16px 0; }
+    .mc-option {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 12px 16px;
+      margin: 8px 0;
+      border: 2px solid #dce1e8;
+      border-radius: 8px;
+      background: #fff;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .mc-option:hover { border-color: #4a90d9; background: #f0f5ff; }
+    .mc-option.selected { border-color: #4a90d9; background: #e3effc; }
+
+    .radio-group { margin: 16px 0; }
+    .radio-label {
+      display: block;
+      padding: 12px 16px;
+      margin: 8px 0;
+      border: 2px solid #dce1e8;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .radio-label:hover { border-color: #4a90d9; background: #f0f5ff; }
+    .radio-label input { margin-right: 10px; }
+
+    .lang-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .lang-badge.kip { background: #e8f5e9; color: #2e7d32; }
+    .lang-badge.python { background: #fff3e0; color: #e65100; }
+    .lang-badge.javascript { background: #fff9c4; color: #f57f17; }
+    .lang-badge.haskell { background: #ede7f6; color: #4527a0; }
+
+    .tutorial-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 24px;
+    }
+    .tutorial-step-indicator {
+      font-size: 0.85rem;
+      color: #666;
+    }
+
+    .tutorial-content h3 { margin-top: 16px; }
+    .tutorial-content ul { margin: 8px 0 8px 24px; }
+    .tutorial-content li { margin: 4px 0; }
+
+    .hidden { display: none !important; }
+
+    .fade-in {
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .result-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 0.9rem;
+    }
+    .result-table th, .result-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #e8ecf1;
+      text-align: left;
+    }
+    .result-table th { font-weight: 600; background: #f5f7fa; }
+    .correct { color: #2e7d32; }
+    .incorrect { color: #c62828; }
+
+    .info-box {
+      background: #e3effc;
+      border-left: 4px solid #4a90d9;
+      padding: 12px 16px;
+      border-radius: 0 8px 8px 0;
+      margin: 12px 0;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ===================================================================
+// CONFIGURATION
+// ===================================================================
+const CONFIG = {
+  serverEndpoint: '/api/quiz-results',
+  totalQuestions: 20,
+  languages: ['python', 'javascript', 'haskell']
+};
+
+// ===================================================================
+// PROGRAMS DATA (20 programs x 4 languages)
+// ===================================================================
+const PROGRAMS = [
+  // ---- EASY (1-7) ----
+  {
+    id: 1, difficulty: 'easy', feature: 'toplama',
+    kip: {
+      code: `(2'yle 3'ün toplamını) yaz.`,
+      answer: '5',
+      choices: ['3', '5', '6', '23']
+    },
+    python: {
+      code: `print(2 + 3)`,
+      answer: '5',
+      choices: ['3', '5', '6', '23']
+    },
+    javascript: {
+      code: `console.log(2 + 3)`,
+      answer: '5',
+      choices: ['3', '5', '6', '23']
+    },
+    haskell: {
+      code: `main = print (2 + 3)`,
+      answer: '5',
+      choices: ['3', '5', '6', '23']
+    }
+  },
+  {
+    id: 2, difficulty: 'easy', feature: 'carpma',
+    kip: {
+      code: `(4'le 7'nin çarpımını) yaz.`,
+      answer: '28',
+      choices: ['11', '21', '28', '47']
+    },
+    python: {
+      code: `print(4 * 7)`,
+      answer: '28',
+      choices: ['11', '21', '28', '47']
+    },
+    javascript: {
+      code: `console.log(4 * 7)`,
+      answer: '28',
+      choices: ['11', '21', '28', '47']
+    },
+    haskell: {
+      code: `main = print (4 * 7)`,
+      answer: '28',
+      choices: ['11', '21', '28', '47']
+    }
+  },
+  {
+    id: 3, difficulty: 'easy', feature: 'dizge-birlestirme',
+    kip: {
+      code: `("Merhaba "'yla "Dünya"'nın birleşimini) yaz.`,
+      answer: 'Merhaba Dünya',
+      choices: ['Merhaba Dünya', 'MerhabaDünya', 'Merhaba', 'Dünya']
+    },
+    python: {
+      code: `print("Merhaba " + "Dünya")`,
+      answer: 'Merhaba Dünya',
+      choices: ['Merhaba Dünya', 'MerhabaDünya', 'Merhaba', 'Dünya']
+    },
+    javascript: {
+      code: `console.log("Merhaba " + "Dünya")`,
+      answer: 'Merhaba Dünya',
+      choices: ['Merhaba Dünya', 'MerhabaDünya', 'Merhaba', 'Dünya']
+    },
+    haskell: {
+      code: `main = putStrLn ("Merhaba " ++ "Dünya")`,
+      answer: 'Merhaba Dünya',
+      choices: ['Merhaba Dünya', 'MerhabaDünya', 'Merhaba', 'Dünya']
+    }
+  },
+  {
+    id: 4, difficulty: 'easy', feature: 'dogruluk-tersi',
+    kip: {
+      code: `(doğrunun tersi) doğruysa,\n  42'yi yaz,\ndeğilse,\n  17'yi yaz.`,
+      answer: '17',
+      choices: ['17', '42', '0', '1']
+    },
+    python: {
+      code: `if not True:\n    print(42)\nelse:\n    print(17)`,
+      answer: '17',
+      choices: ['17', '42', '0', '1']
+    },
+    javascript: {
+      code: `if (!true) {\n    console.log(42);\n} else {\n    console.log(17);\n}`,
+      answer: '17',
+      choices: ['17', '42', '0', '1']
+    },
+    haskell: {
+      code: `main = if not True\n       then print 42\n       else print 17`,
+      answer: '17',
+      choices: ['17', '42', '0', '1']
+    }
+  },
+  {
+    id: 5, difficulty: 'easy', feature: 'karsilastirma',
+    kip: {
+      code: `(7'nin 3'ten büyüklüğü) doğruysa,\n  10'u yaz,\ndeğilse,\n  20'yi yaz.`,
+      answer: '10',
+      choices: ['7', '10', '20', '3']
+    },
+    python: {
+      code: `if 7 > 3:\n    print(10)\nelse:\n    print(20)`,
+      answer: '10',
+      choices: ['7', '10', '20', '3']
+    },
+    javascript: {
+      code: `if (7 > 3) {\n    console.log(10);\n} else {\n    console.log(20);\n}`,
+      answer: '10',
+      choices: ['7', '10', '20', '3']
+    },
+    haskell: {
+      code: `main = if 7 > 3\n       then print 10\n       else print 20`,
+      answer: '10',
+      choices: ['7', '10', '20', '3']
+    }
+  },
+  {
+    id: 6, difficulty: 'easy', feature: 'dizge-uzunluk',
+    kip: {
+      code: `("Merhaba"'nın uzunluğunu) yaz.`,
+      answer: '7',
+      choices: ['5', '6', '7', '8']
+    },
+    python: {
+      code: `print(len("Merhaba"))`,
+      answer: '7',
+      choices: ['5', '6', '7', '8']
+    },
+    javascript: {
+      code: `console.log("Merhaba".length)`,
+      answer: '7',
+      choices: ['5', '6', '7', '8']
+    },
+    haskell: {
+      code: `main = print (length "Merhaba")`,
+      answer: '7',
+      choices: ['5', '6', '7', '8']
+    }
+  },
+  {
+    id: 7, difficulty: 'easy', feature: 'kalan',
+    kip: {
+      code: `(10'un 3'le kalanını) yaz.`,
+      answer: '1',
+      choices: ['0', '1', '3', '7']
+    },
+    python: {
+      code: `print(10 % 3)`,
+      answer: '1',
+      choices: ['0', '1', '3', '7']
+    },
+    javascript: {
+      code: `console.log(10 % 3)`,
+      answer: '1',
+      choices: ['0', '1', '3', '7']
+    },
+    haskell: {
+      code: `main = print (10 \`mod\` 3)`,
+      answer: '1',
+      choices: ['0', '1', '3', '7']
+    }
+  },
+
+  // ---- MEDIUM (8-14) ----
+  {
+    id: 8, difficulty: 'medium', feature: 'ic-ice-aritmetik',
+    kip: {
+      code: `((2'yle 3'ün toplamıyla) 4'ün çarpımını) yaz.`,
+      answer: '20',
+      choices: ['9', '14', '20', '24']
+    },
+    python: {
+      code: `print((2 + 3) * 4)`,
+      answer: '20',
+      choices: ['9', '14', '20', '24']
+    },
+    javascript: {
+      code: `console.log((2 + 3) * 4)`,
+      answer: '20',
+      choices: ['9', '14', '20', '24']
+    },
+    haskell: {
+      code: `main = print ((2 + 3) * 4)`,
+      answer: '20',
+      choices: ['9', '14', '20', '24']
+    }
+  },
+  {
+    id: 9, difficulty: 'medium', feature: 'degisken-baglama',
+    kip: {
+      code: `5'e x dersek, (x'le x'in çarpımını) yaz.`,
+      answer: '25',
+      choices: ['5', '10', '25', '55']
+    },
+    python: {
+      code: `x = 5\nprint(x * x)`,
+      answer: '25',
+      choices: ['5', '10', '25', '55']
+    },
+    javascript: {
+      code: `const x = 5;\nconsole.log(x * x);`,
+      answer: '25',
+      choices: ['5', '10', '25', '55']
+    },
+    haskell: {
+      code: `main = let x = 5\n       in print (x * x)`,
+      answer: '25',
+      choices: ['5', '10', '25', '55']
+    }
+  },
+  {
+    id: 10, difficulty: 'medium', feature: 'cikarma-ic-ice',
+    kip: {
+      code: `((10'la 3'ün farkıyla) 2'nin çarpımını) yaz.`,
+      answer: '14',
+      choices: ['7', '13', '14', '20']
+    },
+    python: {
+      code: `print((10 - 3) * 2)`,
+      answer: '14',
+      choices: ['7', '13', '14', '20']
+    },
+    javascript: {
+      code: `console.log((10 - 3) * 2)`,
+      answer: '14',
+      choices: ['7', '13', '14', '20']
+    },
+    haskell: {
+      code: `main = print ((10 - 3) * 2)`,
+      answer: '14',
+      choices: ['7', '13', '14', '20']
+    }
+  },
+  {
+    id: 11, difficulty: 'medium', feature: 'sirali-baglama',
+    kip: {
+      code: `3'e a dersek,\n(a'yla a'nın çarpımına) b dersek,\n(b'yle a'nın toplamını) yaz.`,
+      answer: '12',
+      choices: ['6', '9', '12', '27']
+    },
+    python: {
+      code: `a = 3\nb = a * a\nprint(b + a)`,
+      answer: '12',
+      choices: ['6', '9', '12', '27']
+    },
+    javascript: {
+      code: `const a = 3;\nconst b = a * a;\nconsole.log(b + a);`,
+      answer: '12',
+      choices: ['6', '9', '12', '27']
+    },
+    haskell: {
+      code: `main = let a = 3\n           b = a * a\n       in print (b + a)`,
+      answer: '12',
+      choices: ['6', '9', '12', '27']
+    }
+  },
+  {
+    id: 12, difficulty: 'medium', feature: 'dogruluk-veya',
+    kip: {
+      code: `(yanlışla doğrunun birleşimi) doğruysa,\n  99'u yaz,\ndeğilse,\n  0'ı yaz.`,
+      answer: '99',
+      choices: ['0', '1', '42', '99']
+    },
+    python: {
+      code: `if False or True:\n    print(99)\nelse:\n    print(0)`,
+      answer: '99',
+      choices: ['0', '1', '42', '99']
+    },
+    javascript: {
+      code: `if (false || true) {\n    console.log(99);\n} else {\n    console.log(0);\n}`,
+      answer: '99',
+      choices: ['0', '1', '42', '99']
+    },
+    haskell: {
+      code: `main = if False || True\n       then print 99\n       else print 0`,
+      answer: '99',
+      choices: ['0', '1', '42', '99']
+    }
+  },
+  {
+    id: 13, difficulty: 'medium', feature: 'faktoriyel',
+    kip: {
+      code: `(5'in faktöriyelini) yaz.`,
+      answer: '120',
+      choices: ['24', '60', '120', '720']
+    },
+    python: {
+      code: `def faktöriyel(n):\n    if n <= 0:\n        return 1\n    return n * faktöriyel(n - 1)\n\nprint(faktöriyel(5))`,
+      answer: '120',
+      choices: ['24', '60', '120', '720']
+    },
+    javascript: {
+      code: `function faktöriyel(n) {\n    if (n <= 0) return 1;\n    return n * faktöriyel(n - 1);\n}\n\nconsole.log(faktöriyel(5));`,
+      answer: '120',
+      choices: ['24', '60', '120', '720']
+    },
+    haskell: {
+      code: `faktöriyel :: Int -> Int\nfaktöriyel n\n    | n <= 0    = 1\n    | otherwise = n * faktöriyel (n - 1)\n\nmain = print (faktöriyel 5)`,
+      answer: '120',
+      choices: ['24', '60', '120', '720']
+    }
+  },
+  {
+    id: 14, difficulty: 'medium', feature: 'us-alma',
+    kip: {
+      code: `(2'nin 8'le üssünü) yaz.`,
+      answer: '256',
+      choices: ['16', '64', '256', '512']
+    },
+    python: {
+      code: `print(2 ** 8)`,
+      answer: '256',
+      choices: ['16', '64', '256', '512']
+    },
+    javascript: {
+      code: `console.log(2 ** 8)`,
+      answer: '256',
+      choices: ['16', '64', '256', '512']
+    },
+    haskell: {
+      code: `main = print (2 ^ 8)`,
+      answer: '256',
+      choices: ['16', '64', '256', '512']
+    }
+  },
+
+  // ---- HARD (15-20) ----
+  {
+    id: 15, difficulty: 'hard', feature: 'aralik-toplam',
+    kip: {
+      code: `((1'den 10'a aralığın) toplamını) yaz.`,
+      answer: '55',
+      choices: ['10', '45', '55', '100']
+    },
+    python: {
+      code: `print(sum(range(1, 11)))`,
+      answer: '55',
+      choices: ['10', '45', '55', '100']
+    },
+    javascript: {
+      code: `let toplam = 0;\nfor (let i = 1; i <= 10; i++) {\n    toplam += i;\n}\nconsole.log(toplam);`,
+      answer: '55',
+      choices: ['10', '45', '55', '100']
+    },
+    haskell: {
+      code: `main = print (sum [1..10])`,
+      answer: '55',
+      choices: ['10', '45', '55', '100']
+    }
+  },
+  {
+    id: 16, difficulty: 'hard', feature: 'fonksiyon-oruntu',
+    kip: {
+      code: `(bu tam-sayının) (çiftlik dizgesi),\n  (bunun 2'yle kalanıyla 0'ın eşitliği) doğruysa,\n    "çift";\n  değilse,\n    "tek"tir.\n\n(7'nin çiftliğini) yaz.`,
+      answer: 'tek',
+      choices: ['çift', 'tek', '7', '1']
+    },
+    python: {
+      code: `def çiftlik(n):\n    if n % 2 == 0:\n        return "çift"\n    else:\n        return "tek"\n\nprint(çiftlik(7))`,
+      answer: 'tek',
+      choices: ['çift', 'tek', '7', '1']
+    },
+    javascript: {
+      code: `function çiftlik(n) {\n    if (n % 2 === 0) {\n        return "çift";\n    } else {\n        return "tek";\n    }\n}\n\nconsole.log(çiftlik(7));`,
+      answer: 'tek',
+      choices: ['çift', 'tek', '7', '1']
+    },
+    haskell: {
+      code: `çiftlik :: Int -> String\nçiftlik n\n    | n \`mod\` 2 == 0 = "çift"\n    | otherwise        = "tek"\n\nmain = putStrLn (çiftlik 7)`,
+      answer: 'tek',
+      choices: ['çift', 'tek', '7', '1']
+    }
+  },
+  {
+    id: 17, difficulty: 'hard', feature: 'ozel-tip-oruntu',
+    kip: {
+      code: `Bir trafik-ışığı\n  ya kırmızı\n  ya sarı\n  ya da yeşil\n  olabilir.\n\n(bu trafik-ışığının) (eylem dizgesi),\n  bu kırmızıysa, "Dur";\n  sarıysa, "Hazırlan";\n  yeşilse, "Geç"tir.\n\n(sarının eylemini) yaz.`,
+      answer: 'Hazırlan',
+      choices: ['Dur', 'Hazırlan', 'Geç', 'sarı']
+    },
+    python: {
+      code: `def eylem(ışık):\n    if ışık == "kırmızı":\n        return "Dur"\n    elif ışık == "sarı":\n        return "Hazırlan"\n    else:\n        return "Geç"\n\nprint(eylem("sarı"))`,
+      answer: 'Hazırlan',
+      choices: ['Dur', 'Hazırlan', 'Geç', 'sarı']
+    },
+    javascript: {
+      code: `function eylem(ışık) {\n    switch (ışık) {\n        case "kırmızı": return "Dur";\n        case "sarı": return "Hazırlan";\n        case "yeşil": return "Geç";\n    }\n}\n\nconsole.log(eylem("sarı"));`,
+      answer: 'Hazırlan',
+      choices: ['Dur', 'Hazırlan', 'Geç', 'sarı']
+    },
+    haskell: {
+      code: `data TrafikIşığı = Kırmızı | Sarı | Yeşil\n\neylem :: TrafikIşığı -> String\neylem Kırmızı = "Dur"\neylem Sarı    = "Hazırlan"\neylem Yeşil   = "Geç"\n\nmain = putStrLn (eylem Sarı)`,
+      answer: 'Hazırlan',
+      choices: ['Dur', 'Hazırlan', 'Geç', 'sarı']
+    }
+  },
+  {
+    id: 18, difficulty: 'hard', feature: 'ic-ice-kosul',
+    kip: {
+      code: `(5'in 3'ten büyüklüğü) doğruysa,\n  (5'in 10'dan küçüklüğü) doğruysa,\n    42'yi yaz,\n  değilse,\n    17'yi yaz,\ndeğilse,\n  99'u yaz.`,
+      answer: '42',
+      choices: ['17', '42', '99', '5']
+    },
+    python: {
+      code: `if 5 > 3:\n    if 5 < 10:\n        print(42)\n    else:\n        print(17)\nelse:\n    print(99)`,
+      answer: '42',
+      choices: ['17', '42', '99', '5']
+    },
+    javascript: {
+      code: `if (5 > 3) {\n    if (5 < 10) {\n        console.log(42);\n    } else {\n        console.log(17);\n    }\n} else {\n    console.log(99);\n}`,
+      answer: '42',
+      choices: ['17', '42', '99', '5']
+    },
+    haskell: {
+      code: `main = if 5 > 3\n       then if 5 < 10\n            then print 42\n            else print 17\n       else print 99`,
+      answer: '42',
+      choices: ['17', '42', '99', '5']
+    }
+  },
+  {
+    id: 19, difficulty: 'hard', feature: 'sabit-tanimlama',
+    kip: {
+      code: `a, 7'yle 3'ün toplamıdır.\nb, a'yla a'nın çarpımıdır.\nb'yi yaz.`,
+      answer: '100',
+      choices: ['21', '49', '100', '200']
+    },
+    python: {
+      code: `a = 7 + 3\nb = a * a\nprint(b)`,
+      answer: '100',
+      choices: ['21', '49', '100', '200']
+    },
+    javascript: {
+      code: `const a = 7 + 3;\nconst b = a * a;\nconsole.log(b);`,
+      answer: '100',
+      choices: ['21', '49', '100', '200']
+    },
+    haskell: {
+      code: `main = let a = 7 + 3\n           b = a * a\n       in print b`,
+      answer: '100',
+      choices: ['21', '49', '100', '200']
+    }
+  },
+  {
+    id: 20, difficulty: 'hard', feature: 'ozyineleme-fibonacci',
+    kip: {
+      code: `(bu tam-sayının) (fib-değer tam-sayısı),\n  (bunla 0'ın eşitliği) doğruysa, 0;\n  (bunla 1'in eşitliği) doğruysa, 1;\n  değilse,\n    ((bunla 1'in farkının) fib-değeriyle\n     (bunla 2'nin farkının) fib-değerinin)\n    toplamıdır.\n\n(7'nin fib-değerini) yaz.`,
+      answer: '13',
+      choices: ['5', '8', '13', '21']
+    },
+    python: {
+      code: `def fib(n):\n    if n == 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        return fib(n - 1) + fib(n - 2)\n\nprint(fib(7))`,
+      answer: '13',
+      choices: ['5', '8', '13', '21']
+    },
+    javascript: {
+      code: `function fib(n) {\n    if (n === 0) return 0;\n    if (n === 1) return 1;\n    return fib(n - 1) + fib(n - 2);\n}\n\nconsole.log(fib(7));`,
+      answer: '13',
+      choices: ['5', '8', '13', '21']
+    },
+    haskell: {
+      code: `fib :: Int -> Int\nfib 0 = 0\nfib 1 = 1\nfib n = fib (n - 1) + fib (n - 2)\n\nmain = print (fib 7)`,
+      answer: '13',
+      choices: ['5', '8', '13', '21']
+    }
+  }
+];
+
+// ===================================================================
+// TUTORIAL DATA
+// ===================================================================
+function kipTutorial(level) {
+  const steps = [];
+
+  steps.push({
+    title: 'Kip Nedir?',
+    html: `
+      <p><strong>Kip</strong>, Türk dilbilgisini temel alan bir programlama dilidir. Programlar neredeyse doğal Türkçe gibi okunur.</p>
+      <p>Kip'te her işlem, Türkçe <strong>isim halleri</strong> kullanılarak ifade edilir. Argümanların sırası değil, hal ekleri önemlidir.</p>
+      <div class="info-box">Bu eğitim boyunca örnekleri dikkatle inceleyerek Kip'in sözdizimini öğreneceksiniz.</div>
+    `
+  });
+
+  steps.push({
+    title: 'Çıktı ve Sayılar',
+    html: `
+      <p>Bir değeri ekrana yazdırmak için <code>yaz</code> kullanılır:</p>
+      <pre><code>5'i yaz.     →  5</code></pre>
+      <p>Sayılara <strong>apostrof</strong> ile hal eki eklenir:</p>
+      <ul>
+        <li><code>5'i</code> &mdash; belirtme hali (neyi?): <em>5'i</em></li>
+        <li><code>5'in</code> &mdash; ilgi hali (neyin?): <em>5'in</em></li>
+        <li><code>5'le</code> &mdash; araç hali (neyle?): <em>5 ile</em></li>
+        <li><code>5'e</code> &mdash; yönelme hali (neye?): <em>5'e</em></li>
+        <li><code>5'ten</code> &mdash; ayrılma hali (nereden?): <em>5'ten</em></li>
+      </ul>
+      <p>Her ifade <strong>nokta</strong> ile biter.</p>
+      ${level === 'none' ? '<div class="info-box">Hal ekleri, kelimenin cümledeki görevini belirtir. Kip bu ekleri kullanarak hangi değerin hangi argüman olduğunu anlar.</div>' : ''}
+    `
+  });
+
+  steps.push({
+    title: 'Aritmetik İşlemler',
+    html: `
+      <p>Temel aritmetik işlemler:</p>
+      <pre><code>(2'yle 3'ün toplamını) yaz.       →  5     (* toplama *)
+(4'le 7'nin çarpımını) yaz.       →  28    (* çarpma *)
+(10'la 3'ün farkını) yaz.         →  7     (* çıkarma *)
+(10'un 3'le kalanını) yaz.        →  1     (* kalan/mod *)
+(2'nin 8'le üssünü) yaz.          →  256   (* üs alma *)
+(5'in faktöriyelini) yaz.         →  120   (* faktöriyel *)</code></pre>
+      <p>İç içe ifadeler <strong>parantez</strong> ile gruplanır:</p>
+      <pre><code>((2'yle 3'ün toplamıyla) 4'ün çarpımını) yaz.  →  20
+(* Önce 2+3=5, sonra 5×4=20 *)</code></pre>
+      <div class="info-box"><code>(* ... *)</code> yorum satırıdır, program tarafından yoksayılır.</div>
+    `
+  });
+
+  steps.push({
+    title: 'Dizgeler (Metinler)',
+    html: `
+      <p>Dizgeler çift tırnak içinde yazılır: <code>"Merhaba"</code></p>
+      <pre><code>(* Birleştirme *)
+("Merhaba "'yla "Dünya"'nın birleşimini) yaz.
+→  Merhaba Dünya
+
+(* Uzunluk *)
+("Merhaba"'nın uzunluğunu) yaz.
+→  7</code></pre>
+      <p>Dizgelere de apostrof ile hal eki eklenir: <code>"abc"'nin</code>, <code>"test"'i</code></p>
+    `
+  });
+
+  steps.push({
+    title: 'Doğruluk Değerleri ve Koşullar',
+    html: `
+      <p>İki doğruluk değeri vardır: <code>doğru</code> ve <code>yanlış</code></p>
+      <p>Temel işlemler:</p>
+      <ul>
+        <li><strong>Ters (NOT):</strong> <code>doğrunun tersi</code> → yanlış</li>
+        <li><strong>Büyüklük:</strong> <code>7'nin 3'ten büyüklüğü</code> → doğru</li>
+        <li><strong>Eşitlik:</strong> <code>3'le 5'in eşitliği</code> → yanlış</li>
+        <li><strong>VE (AND):</strong> <code>doğruyla yanlışın kesişimi</code> → yanlış</li>
+        <li><strong>VEYA (OR):</strong> <code>yanlışla doğrunun birleşimi</code> → doğru</li>
+      </ul>
+      <p><strong>Koşullu ifade:</strong> <code>doğruysa</code> / <code>değilse</code></p>
+      <pre><code>(7'nin 3'ten büyüklüğü) doğruysa,
+  10'u yaz,
+değilse,
+  20'yi yaz.
+→  10</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Değişkenler',
+    html: `
+      <p><code>dersek</code> ile geçici değişken tanımlanır ("diyelim ki" anlamında):</p>
+      <pre><code>5'e x dersek, (x'le x'in çarpımını) yaz.
+→  25</code></pre>
+      <p>Sıralı bağlama (birden fazla değişken):</p>
+      <pre><code>3'e a dersek,
+(a'yla a'nın çarpımına) b dersek,
+(b'yle a'nın toplamını) yaz.
+→  12     (* a=3, b=9, 9+3=12 *)</code></pre>
+      <p><strong>Sabit tanımlama</strong> (<code>-dır/-dir/-dur/-dür</code> eki ile):</p>
+      <pre><code>a, 7'yle 3'ün toplamıdır.   (* a = 10 *)
+b, a'yla a'nın çarpımıdır.  (* b = 100 *)
+b'yi yaz.                    →  100</code></pre>
+      <div class="info-box">Sabit tanımlamaları "<code>a tanımlandı.</code>" gibi bilgi mesajları üretir. Bu mesajları görmezden gelebilirsiniz.</div>
+    `
+  });
+
+  steps.push({
+    title: 'Fonksiyonlar ve Örüntü Eşleme',
+    html: `
+      <p>Fonksiyon tanımı <code>bu</code> parametresi ve dönüş tipi ile yapılır:</p>
+      <pre><code>(bu tam-sayının) (çiftlik dizgesi),
+  (bunun 2'yle kalanıyla 0'ın eşitliği) doğruysa,
+    "çift";
+  değilse,
+    "tek"tir.
+
+(7'nin çiftliğini) yaz.
+→  tek</code></pre>
+      <p><code>bu</code> parametreyi temsil eder. Fonksiyon gövdesinde:</p>
+      <ul>
+        <li><code>bunun</code> = bu'nun (ilgi hali)</li>
+        <li><code>bunla</code> = bu ile (araç hali)</li>
+        <li><code>bunu</code> = bu'nu (belirtme hali)</li>
+      </ul>
+      <p><code>doğruysa</code> ... <code>değilse</code> ile dallanma yapılır (if/else gibi).</p>
+    `
+  });
+
+  steps.push({
+    title: 'Özel Tipler',
+    html: `
+      <p>Yeni tip tanımlamak için <code>Bir ... olabilir.</code> kullanılır:</p>
+      <pre><code>Bir trafik-ışığı
+  ya kırmızı
+  ya sarı
+  ya da yeşil
+  olabilir.</code></pre>
+      <p>Bu tip üzerinde örüntü eşleme:</p>
+      <pre><code>(bu trafik-ışığının) (eylem dizgesi),
+  bu kırmızıysa, "Dur";
+  sarıysa, "Hazırlan";
+  yeşilse, "Geç"tir.
+
+(sarının eylemini) yaz.
+→  Hazırlan</code></pre>
+      <p>Her dal, yapıcının koşullu hali ile eşleşir: <code>kırmızıysa</code>, <code>sarıysa</code>, <code>yeşilse</code>.</p>
+    `
+  });
+
+  steps.push({
+    title: 'Listeler ve Aralık',
+    html: `
+      <p>Ardışık sayılardan liste oluşturmak için <strong>aralık</strong> kullanılır:</p>
+      <pre><code>(1'den 10'a aralığı)  →  [1, 2, 3, ..., 10]</code></pre>
+      <p>Liste işlemleri:</p>
+      <pre><code>(* Toplam *)
+((1'den 10'a aralığın) toplamını) yaz.  →  55
+
+(* Uzunluk *)
+((1'den 5'e aralığın) uzunluğunu) yaz.  →  5</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Özyineleme (Recursion)',
+    html: `
+      <p>Fonksiyonlar kendilerini çağırabilir. Fibonacci örneği:</p>
+      <pre><code>(bu tam-sayının) (fib-değer tam-sayısı),
+  (bunla 0'ın eşitliği) doğruysa, 0;
+  (bunla 1'in eşitliği) doğruysa, 1;
+  değilse,
+    ((bunla 1'in farkının) fib-değeriyle
+     (bunla 2'nin farkının) fib-değerinin)
+    toplamıdır.
+
+(7'nin fib-değerini) yaz.
+→  13</code></pre>
+      <p>Hesaplama adımları: fib(0)=0, fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13</p>
+      <div class="info-box">Fonksiyon kendini çağırarak problemi küçük parçalara böler ve temel duruma ulaşınca sonuç döndürür.</div>
+    `
+  });
+
+  return steps;
+}
+
+function pythonTutorial(level) {
+  const steps = [];
+
+  steps.push({
+    title: 'Python Nedir?',
+    html: `
+      <p><strong>Python</strong>, okunabilirliği ön planda tutan, yaygın kullanılan bir programlama dilidir.</p>
+      <p>Girinti (boşluk) ile kod blokları belirlenir. Süslü parantez veya noktalı virgül kullanılmaz.</p>
+    `
+  });
+
+  steps.push({
+    title: 'Çıktı ve Sayılar',
+    html: `
+      <p>Ekrana yazdırmak için <code>print()</code> kullanılır:</p>
+      <pre><code>print(5)        →  5
+print(3.14)     →  3.14
+print("Selam")  →  Selam</code></pre>
+      ${level === 'none' ? '<div class="info-box"><code>print()</code> parantez içindeki değeri ekrana yazar.</div>' : ''}
+    `
+  });
+
+  steps.push({
+    title: 'Aritmetik İşlemler',
+    html: `
+      <pre><code>print(2 + 3)       →  5     # toplama
+print(4 * 7)       →  28    # çarpma
+print(10 - 3)      →  7     # çıkarma
+print(10 % 3)      →  1     # kalan (mod)
+print(2 ** 8)      →  256   # üs alma
+print((2 + 3) * 4) →  20    # parantezle gruplama</code></pre>
+      <div class="info-box"><code>#</code> ile başlayan satırlar yorumdur, program tarafından yoksayılır.</div>
+    `
+  });
+
+  steps.push({
+    title: 'Dizgeler (Metinler)',
+    html: `
+      <pre><code># Birleştirme
+print("Merhaba " + "Dünya")  →  Merhaba Dünya
+
+# Uzunluk
+print(len("Merhaba"))        →  7</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Doğruluk Değerleri ve Koşullar',
+    html: `
+      <p>Doğruluk değerleri: <code>True</code> ve <code>False</code></p>
+      <ul>
+        <li><code>not True</code> → False</li>
+        <li><code>7 > 3</code> → True</li>
+        <li><code>3 == 5</code> → False</li>
+        <li><code>True and False</code> → False</li>
+        <li><code>False or True</code> → True</li>
+      </ul>
+      <pre><code>if 7 > 3:
+    print(10)
+else:
+    print(20)
+→  10</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Değişkenler',
+    html: `
+      <pre><code>x = 5
+print(x * x)        →  25
+
+a = 3
+b = a * a
+print(b + a)         →  12</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Fonksiyonlar',
+    html: `
+      <p><code>def</code> ile fonksiyon tanımlanır, <code>return</code> ile değer döndürülür:</p>
+      <pre><code>def çiftlik(n):
+    if n % 2 == 0:
+        return "çift"
+    else:
+        return "tek"
+
+print(çiftlik(7))    →  tek</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Listeler ve Aralık',
+    html: `
+      <p><code>range(a, b)</code> a'dan b'ye kadar (b hariç) sayı üretir:</p>
+      <pre><code>print(sum(range(1, 11)))  →  55
+# range(1, 11) = [1, 2, ..., 10], toplam = 55</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Özyineleme (Recursion)',
+    html: `
+      <p>Fonksiyonlar kendilerini çağırabilir:</p>
+      <pre><code>def fib(n):
+    if n == 0:
+        return 0
+    elif n == 1:
+        return 1
+    else:
+        return fib(n - 1) + fib(n - 2)
+
+print(fib(7))  →  13</code></pre>
+      <p>fib(0)=0, fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13</p>
+    `
+  });
+
+  return steps;
+}
+
+function javascriptTutorial(level) {
+  const steps = [];
+
+  steps.push({
+    title: 'JavaScript Nedir?',
+    html: `
+      <p><strong>JavaScript</strong>, web tarayıcılarında çalışan, yaygın kullanılan bir programlama dilidir.</p>
+      <p>Süslü parantez <code>{}</code> ile kod blokları, noktalı virgül <code>;</code> ile satır sonları belirlenir.</p>
+    `
+  });
+
+  steps.push({
+    title: 'Çıktı ve Sayılar',
+    html: `
+      <pre><code>console.log(5);        →  5
+console.log(3.14);     →  3.14
+console.log("Selam");  →  Selam</code></pre>
+      ${level === 'none' ? '<div class="info-box"><code>console.log()</code> parantez içindeki değeri ekrana yazar.</div>' : ''}
+    `
+  });
+
+  steps.push({
+    title: 'Aritmetik İşlemler',
+    html: `
+      <pre><code>console.log(2 + 3);       →  5     // toplama
+console.log(4 * 7);       →  28    // çarpma
+console.log(10 - 3);      →  7     // çıkarma
+console.log(10 % 3);      →  1     // kalan (mod)
+console.log(2 ** 8);      →  256   // üs alma
+console.log((2 + 3) * 4); →  20    // parantezle gruplama</code></pre>
+      <div class="info-box"><code>//</code> ile başlayan satırlar yorumdur.</div>
+    `
+  });
+
+  steps.push({
+    title: 'Dizgeler (Metinler)',
+    html: `
+      <pre><code>// Birleştirme
+console.log("Merhaba " + "Dünya");  →  Merhaba Dünya
+
+// Uzunluk
+console.log("Merhaba".length);      →  7</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Doğruluk Değerleri ve Koşullar',
+    html: `
+      <p>Doğruluk değerleri: <code>true</code> ve <code>false</code></p>
+      <ul>
+        <li><code>!true</code> → false</li>
+        <li><code>7 > 3</code> → true</li>
+        <li><code>3 === 5</code> → false</li>
+        <li><code>true && false</code> → false</li>
+        <li><code>false || true</code> → true</li>
+      </ul>
+      <pre><code>if (7 > 3) {
+    console.log(10);
+} else {
+    console.log(20);
+}
+→  10</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Değişkenler',
+    html: `
+      <pre><code>const x = 5;
+console.log(x * x);      →  25
+
+const a = 3;
+const b = a * a;
+console.log(b + a);       →  12</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Fonksiyonlar',
+    html: `
+      <pre><code>function çiftlik(n) {
+    if (n % 2 === 0) {
+        return "çift";
+    } else {
+        return "tek";
+    }
+}
+
+console.log(çiftlik(7));  →  tek</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Döngüler ve Toplam',
+    html: `
+      <pre><code>let toplam = 0;
+for (let i = 1; i <= 10; i++) {
+    toplam += i;
+}
+console.log(toplam);  →  55</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Özyineleme (Recursion)',
+    html: `
+      <p>Fonksiyonlar kendilerini çağırabilir:</p>
+      <pre><code>function fib(n) {
+    if (n === 0) return 0;
+    if (n === 1) return 1;
+    return fib(n - 1) + fib(n - 2);
+}
+
+console.log(fib(7));  →  13</code></pre>
+      <p>fib(0)=0, fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13</p>
+    `
+  });
+
+  return steps;
+}
+
+function haskellTutorial(level) {
+  const steps = [];
+
+  steps.push({
+    title: 'Haskell Nedir?',
+    html: `
+      <p><strong>Haskell</strong>, fonksiyonel programlama paradigmasını kullanan, güçlü tip sistemine sahip bir dildir.</p>
+      <p>Programlar <code>main</code> fonksiyonundan başlar. Değişkenler bir kez tanımlanır ve değiştirilemez.</p>
+    `
+  });
+
+  steps.push({
+    title: 'Çıktı ve Sayılar',
+    html: `
+      <pre><code>main = print 5        →  5
+main = print 3.14     →  3.14
+main = putStrLn "Selam"  →  Selam</code></pre>
+      <p><code>print</code> herhangi bir değeri, <code>putStrLn</code> dizgeleri yazdırır.</p>
+    `
+  });
+
+  steps.push({
+    title: 'Aritmetik İşlemler',
+    html: `
+      <pre><code>main = print (2 + 3)       -- →  5     (toplama)
+main = print (4 * 7)       -- →  28    (çarpma)
+main = print (10 - 3)      -- →  7     (çıkarma)
+main = print (10 \`mod\` 3)  -- →  1     (kalan)
+main = print (2 ^ 8)       -- →  256   (üs alma)
+main = print ((2 + 3) * 4) -- →  20    (gruplama)</code></pre>
+      <div class="info-box"><code>--</code> ile başlayan satırlar yorumdur.</div>
+    `
+  });
+
+  steps.push({
+    title: 'Dizgeler (Metinler)',
+    html: `
+      <pre><code>-- Birleştirme
+main = putStrLn ("Merhaba " ++ "Dünya")  →  Merhaba Dünya
+
+-- Uzunluk
+main = print (length "Merhaba")          →  7</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Doğruluk Değerleri ve Koşullar',
+    html: `
+      <p>Doğruluk değerleri: <code>True</code> ve <code>False</code></p>
+      <ul>
+        <li><code>not True</code> → False</li>
+        <li><code>7 > 3</code> → True</li>
+        <li><code>3 == 5</code> → False</li>
+        <li><code>True && False</code> → False</li>
+        <li><code>False || True</code> → True</li>
+      </ul>
+      <pre><code>main = if 7 > 3
+       then print 10
+       else print 20
+→  10</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Değişkenler',
+    html: `
+      <p><code>let ... in</code> ile değişken tanımlanır:</p>
+      <pre><code>main = let x = 5
+       in print (x * x)       →  25
+
+main = let a = 3
+           b = a * a
+       in print (b + a)        →  12</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Fonksiyonlar ve Örüntü Eşleme',
+    html: `
+      <p>Fonksiyonlar korumalı (guard) ifadelerle veya örüntü eşleme ile tanımlanır:</p>
+      <pre><code>çiftlik :: Int -> String
+çiftlik n
+    | n \`mod\` 2 == 0 = "çift"
+    | otherwise        = "tek"
+
+main = putStrLn (çiftlik 7)  →  tek</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Özel Tipler',
+    html: `
+      <p><code>data</code> ile yeni tip tanımlanır:</p>
+      <pre><code>data TrafikIşığı = Kırmızı | Sarı | Yeşil
+
+eylem :: TrafikIşığı -> String
+eylem Kırmızı = "Dur"
+eylem Sarı    = "Hazırlan"
+eylem Yeşil   = "Geç"
+
+main = putStrLn (eylem Sarı)  →  Hazırlan</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Listeler',
+    html: `
+      <p><code>[a..b]</code> ile aralık oluşturulur:</p>
+      <pre><code>main = print (sum [1..10])  →  55
+-- [1..10] = [1, 2, 3, ..., 10], toplamı 55</code></pre>
+    `
+  });
+
+  steps.push({
+    title: 'Özyineleme (Recursion)',
+    html: `
+      <pre><code>fib :: Int -> Int
+fib 0 = 0
+fib 1 = 1
+fib n = fib (n - 1) + fib (n - 2)
+
+main = print (fib 7)  →  13</code></pre>
+      <p>fib(0)=0, fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13</p>
+    `
+  });
+
+  return steps;
+}
+
+const LANG_NAMES = {
+  kip: 'Kip',
+  python: 'Python',
+  javascript: 'JavaScript',
+  haskell: 'Haskell'
+};
+
+// ===================================================================
+// STATE
+// ===================================================================
+let state = {
+  phase: 'welcome',
+  participantId: generateId(),
+  experience: null,
+  assignedLang: null,
+  tutorialOrder: null,      // ['kip', 'python'] etc.
+  tutorialIndex: 0,         // which tutorial (0 or 1)
+  tutorialStep: 0,
+  tutorialSteps: [],
+  currentQuestion: 0,
+  questionAssignments: [],   // for each q: 'kip' or the mainstream lang
+  answers: [],
+  experimentStart: null,
+  questionStart: null,
+  showingMultipleChoice: false,
+  freeTextValue: ''
+};
+
+// ===================================================================
+// UTILITIES
+// ===================================================================
+function generateId() {
+  return 'p_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now().toString(36);
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function normalizeAnswer(s) {
+  return s.trim().toLowerCase().replace(/['"]/g, '');
+}
+
+// ===================================================================
+// RENDERING
+// ===================================================================
+function render() {
+  const app = document.getElementById('app');
+  switch (state.phase) {
+    case 'welcome': app.innerHTML = renderWelcome(); break;
+    case 'demographics': app.innerHTML = renderDemographics(); break;
+    case 'assignment': app.innerHTML = renderAssignment(); break;
+    case 'tutorial': app.innerHTML = renderTutorial(); break;
+    case 'tutorial-transition': app.innerHTML = renderTutorialTransition(); break;
+    case 'quiz-intro': app.innerHTML = renderQuizIntro(); break;
+    case 'quiz': app.innerHTML = renderQuiz(); break;
+    case 'results': app.innerHTML = renderResults(); break;
+  }
+}
+
+function renderWelcome() {
+  return `
+    <div class="card fade-in">
+      <h1>Programlama Dili Deneyi</h1>
+      <p>Bu deney, farklı programlama dillerinin okunabilirliğini karşılaştırmayı amaçlamaktadır.</p>
+      <h3>Ne yapacaksınız?</h3>
+      <ol style="margin: 12px 0 12px 24px;">
+        <li>İki programlama dili hakkında kısa bir eğitim alacaksınız (~5-7 dk).</li>
+        <li>20 kısa program görecek ve her birinin çıktısını tahmin edeceksiniz.</li>
+      </ol>
+      <p>Toplam süre yaklaşık <strong>15-20 dakika</strong> olacaktır.</p>
+      <h3>Bilgilendirme</h3>
+      <ul style="margin: 12px 0 12px 24px;">
+        <li>Yanıtlarınız anonim olarak kaydedilecektir.</li>
+        <li>Her soruyu yanıtlama süreniz ölçülecektir.</li>
+        <li>Deneyi istediğiniz zaman bırakabilirsiniz.</li>
+      </ul>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="startExperiment()">Başla</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderDemographics() {
+  return `
+    <div class="card fade-in">
+      <h2>Programlama Deneyiminiz</h2>
+      <p>Eğitim içeriğini size göre uyarlamamız için lütfen deneyim düzeyinizi belirtin:</p>
+      <div class="radio-group">
+        <label class="radio-label">
+          <input type="radio" name="experience" value="none">
+          Hiç programlama deneyimim yok
+        </label>
+        <label class="radio-label">
+          <input type="radio" name="experience" value="some">
+          Biraz programlama biliyorum (temel kavramları anlıyorum)
+        </label>
+        <label class="radio-label">
+          <input type="radio" name="experience" value="experienced">
+          Deneyimli bir programcıyım
+        </label>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="submitDemographics()">Devam</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderAssignment() {
+  const lang = LANG_NAMES[state.assignedLang];
+  return `
+    <div class="card fade-in">
+      <h2>Dil Atamanız</h2>
+      <p>Bu deneyde size <strong>Kip</strong> ve <strong>${lang}</strong> dilleri atandı.</p>
+      <p>Şimdi her iki dil için kısa bir eğitim göreceksiniz. Ardından 20 sorudan oluşan teste geçeceksiniz.</p>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="startTutorials()">Eğitime Başla</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderTutorial() {
+  const langKey = state.tutorialOrder[state.tutorialIndex];
+  const langName = LANG_NAMES[langKey];
+  const steps = state.tutorialSteps;
+  const step = steps[state.tutorialStep];
+  const totalSteps = steps.length;
+  const currentStep = state.tutorialStep + 1;
+  const tutorialNum = state.tutorialIndex + 1;
+  const badgeClass = langKey === 'kip' ? 'kip' : langKey;
+
+  return `
+    <div class="card fade-in">
+      <div class="progress-bar">
+        <div class="fill" style="width: ${(currentStep / totalSteps) * 100}%"></div>
+      </div>
+      <span class="lang-badge ${badgeClass}">${langName}</span>
+      <span class="tutorial-step-indicator">Eğitim ${tutorialNum}/2 &mdash; Adım ${currentStep}/${totalSteps}</span>
+      <h2>${step.title}</h2>
+      <div class="tutorial-content">${step.html}</div>
+      <div class="tutorial-nav">
+        <button class="btn btn-secondary btn-sm" onclick="prevTutorialStep()" ${state.tutorialStep === 0 ? 'disabled' : ''}>Geri</button>
+        <button class="btn btn-primary btn-sm" onclick="nextTutorialStep()">
+          ${currentStep === totalSteps ? (state.tutorialIndex === 0 ? 'Sonraki Dile Geç' : 'Teste Geç') : 'İleri'}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function renderTutorialTransition() {
+  const nextLang = LANG_NAMES[state.tutorialOrder[1]];
+  return `
+    <div class="card fade-in">
+      <h2>İlk Eğitim Tamamlandı!</h2>
+      <p>Şimdi <strong>${nextLang}</strong> diline geçeceğiz.</p>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="startSecondTutorial()">Devam</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderQuizIntro() {
+  return `
+    <div class="card fade-in">
+      <h2>Test Başlıyor</h2>
+      <p>Şimdi 20 kısa program göreceksiniz. Her program için:</p>
+      <ol style="margin: 12px 0 12px 24px;">
+        <li>Programın kodunu okuyun.</li>
+        <li>Programın <strong>çıktısını</strong> (ekrana yazdırdığı değeri) tahmin edin.</li>
+        <li>Tahmininizi metin kutusuna yazın ve "Gönder" tuşuna basın.</li>
+        <li>Emin olamazsanız "Seçenekleri Göster" ile çoktan seçmeliye geçebilirsiniz.</li>
+      </ol>
+      <div class="info-box">
+        Bazı programlarda fonksiyon/tip tanımları olacaktır. Bu tanımlar "<code>... tanımlandı.</code>" gibi bilgi mesajları üretir. Soru, programın <strong>son yazdırdığı değeri</strong> sorar.
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="startQuiz()">Teste Başla</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderQuiz() {
+  const qIdx = state.currentQuestion;
+  const program = PROGRAMS[qIdx];
+  const langKey = state.questionAssignments[qIdx];
+  const langName = LANG_NAMES[langKey];
+  const langData = program[langKey];
+  const badgeClass = langKey === 'kip' ? 'kip' : langKey;
+  const progress = ((qIdx + 1) / CONFIG.totalQuestions) * 100;
+  const diffLabel = { easy: 'Kolay', medium: 'Orta', hard: 'Zor' }[program.difficulty];
+
+  let answerSection;
+  if (state.showingMultipleChoice) {
+    const shuffledChoices = state.currentChoices || langData.choices;
+    answerSection = `
+      <p><strong>Bir seçenek seçin:</strong></p>
+      <div class="mc-options">
+        ${shuffledChoices.map((c, i) => `
+          <button class="mc-option ${state.freeTextValue === c ? 'selected' : ''}"
+                  onclick="selectChoice('${escapeHtml(c)}')">${escapeHtml(c)}</button>
+        `).join('')}
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="submitAnswer()" ${!state.freeTextValue ? 'disabled' : ''}>Gönder</button>
+      </div>
+    `;
+  } else {
+    answerSection = `
+      <p><strong>Bu programın çıktısı nedir?</strong></p>
+      <input type="text" class="answer-input" id="answerInput"
+             placeholder="Yanıtınızı yazın..."
+             value="${escapeHtml(state.freeTextValue)}"
+             oninput="state.freeTextValue = this.value"
+             onkeydown="if(event.key==='Enter') submitAnswer()">
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="submitAnswer()" ${!state.freeTextValue ? '' : ''}>Gönder</button>
+        <button class="btn btn-warning btn-sm" onclick="showMultipleChoice()">Seçenekleri Göster</button>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="card fade-in">
+      <div class="progress-bar">
+        <div class="fill" style="width: ${progress}%"></div>
+      </div>
+      <div class="question-num">Soru ${qIdx + 1} / ${CONFIG.totalQuestions} &mdash; ${diffLabel}</div>
+      <span class="lang-badge ${badgeClass}">${langName}</span>
+      <pre><code>${escapeHtml(langData.code)}</code></pre>
+      ${answerSection}
+    </div>
+  `;
+}
+
+function renderResults() {
+  const correct = state.answers.filter(a => a.isCorrect).length;
+  const total = state.answers.length;
+  const avgTime = Math.round(state.answers.reduce((s, a) => s + a.timeMs, 0) / total / 1000 * 10) / 10;
+
+  const kipAnswers = state.answers.filter(a => a.language === 'kip');
+  const mainAnswers = state.answers.filter(a => a.language !== 'kip');
+  const kipCorrect = kipAnswers.filter(a => a.isCorrect).length;
+  const mainCorrect = mainAnswers.filter(a => a.isCorrect).length;
+  const kipAvgTime = kipAnswers.length ? Math.round(kipAnswers.reduce((s, a) => s + a.timeMs, 0) / kipAnswers.length / 1000 * 10) / 10 : 0;
+  const mainAvgTime = mainAnswers.length ? Math.round(mainAnswers.reduce((s, a) => s + a.timeMs, 0) / mainAnswers.length / 1000 * 10) / 10 : 0;
+
+  let tableRows = state.answers.map((a, i) => {
+    const langName = LANG_NAMES[a.language];
+    const cls = a.isCorrect ? 'correct' : 'incorrect';
+    const icon = a.isCorrect ? '&#10003;' : '&#10007;';
+    return `<tr>
+      <td>${i + 1}</td>
+      <td>${langName}</td>
+      <td class="${cls}">${icon} ${escapeHtml(a.givenAnswer)}</td>
+      <td>${escapeHtml(a.correctAnswer)}</td>
+      <td>${(a.timeMs / 1000).toFixed(1)}s</td>
+      <td>${a.usedMultipleChoice ? 'Evet' : 'Hayır'}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="card fade-in">
+      <h1>Deney Tamamlandı!</h1>
+      <p>Katılımınız için teşekkür ederiz.</p>
+
+      <h3>Genel Sonuçlar</h3>
+      <p>Doğru: <strong>${correct}/${total}</strong> &mdash; Ortalama süre: <strong>${avgTime}s</strong></p>
+
+      <h3>Dil Bazında Karşılaştırma</h3>
+      <table class="result-table">
+        <tr><th>Dil</th><th>Doğru</th><th>Ort. Süre</th></tr>
+        <tr><td>Kip</td><td>${kipCorrect}/${kipAnswers.length}</td><td>${kipAvgTime}s</td></tr>
+        <tr><td>${LANG_NAMES[state.assignedLang]}</td><td>${mainCorrect}/${mainAnswers.length}</td><td>${mainAvgTime}s</td></tr>
+      </table>
+
+      <h3>Detaylı Sonuçlar</h3>
+      <table class="result-table">
+        <tr><th>#</th><th>Dil</th><th>Yanıt</th><th>Doğru Yanıt</th><th>Süre</th><th>Çoktan Seçmeli</th></tr>
+        ${tableRows}
+      </table>
+
+      <div id="submitStatus" style="margin-top: 16px;"></div>
+    </div>
+  `;
+}
+
+// ===================================================================
+// EVENT HANDLERS
+// ===================================================================
+function startExperiment() {
+  state.phase = 'demographics';
+  state.experimentStart = Date.now();
+  render();
+}
+
+function submitDemographics() {
+  const selected = document.querySelector('input[name="experience"]:checked');
+  if (!selected) {
+    alert('Lütfen deneyim düzeyinizi seçin.');
+    return;
+  }
+  state.experience = selected.value;
+
+  // Random assignment
+  state.assignedLang = CONFIG.languages[Math.floor(Math.random() * CONFIG.languages.length)];
+
+  // Random tutorial order
+  if (Math.random() < 0.5) {
+    state.tutorialOrder = ['kip', state.assignedLang];
+  } else {
+    state.tutorialOrder = [state.assignedLang, 'kip'];
+  }
+
+  // Random question assignments: 10 Kip, 10 mainstream, randomly distributed
+  const indices = Array.from({ length: CONFIG.totalQuestions }, (_, i) => i);
+  const kipIndices = new Set(shuffle(indices).slice(0, 10));
+  state.questionAssignments = indices.map(i => kipIndices.has(i) ? 'kip' : state.assignedLang);
+
+  state.phase = 'assignment';
+  render();
+}
+
+function startTutorials() {
+  state.tutorialIndex = 0;
+  state.tutorialStep = 0;
+  loadTutorialSteps();
+  state.phase = 'tutorial';
+  render();
+}
+
+function loadTutorialSteps() {
+  const langKey = state.tutorialOrder[state.tutorialIndex];
+  const level = state.experience;
+  switch (langKey) {
+    case 'kip': state.tutorialSteps = kipTutorial(level); break;
+    case 'python': state.tutorialSteps = pythonTutorial(level); break;
+    case 'javascript': state.tutorialSteps = javascriptTutorial(level); break;
+    case 'haskell': state.tutorialSteps = haskellTutorial(level); break;
+  }
+}
+
+function nextTutorialStep() {
+  if (state.tutorialStep < state.tutorialSteps.length - 1) {
+    state.tutorialStep++;
+    render();
+  } else if (state.tutorialIndex === 0) {
+    state.phase = 'tutorial-transition';
+    render();
+  } else {
+    state.phase = 'quiz-intro';
+    render();
+  }
+}
+
+function prevTutorialStep() {
+  if (state.tutorialStep > 0) {
+    state.tutorialStep--;
+    render();
+  }
+}
+
+function startSecondTutorial() {
+  state.tutorialIndex = 1;
+  state.tutorialStep = 0;
+  loadTutorialSteps();
+  state.phase = 'tutorial';
+  render();
+}
+
+function startQuiz() {
+  state.currentQuestion = 0;
+  state.questionStart = Date.now();
+  state.showingMultipleChoice = false;
+  state.freeTextValue = '';
+  state.phase = 'quiz';
+  render();
+  const input = document.getElementById('answerInput');
+  if (input) input.focus();
+}
+
+function showMultipleChoice() {
+  const qIdx = state.currentQuestion;
+  const langKey = state.questionAssignments[qIdx];
+  const langData = PROGRAMS[qIdx][langKey];
+  state.currentChoices = shuffle([...langData.choices]);
+  state.showingMultipleChoice = true;
+  state.freeTextValue = '';
+  render();
+}
+
+function selectChoice(choice) {
+  state.freeTextValue = choice;
+  render();
+}
+
+function submitAnswer() {
+  const answer = state.freeTextValue.trim();
+  if (!answer) {
+    alert('Lütfen bir yanıt girin.');
+    return;
+  }
+
+  const qIdx = state.currentQuestion;
+  const langKey = state.questionAssignments[qIdx];
+  const program = PROGRAMS[qIdx];
+  const langData = program[langKey];
+  const timeMs = Date.now() - state.questionStart;
+
+  const isCorrect = normalizeAnswer(answer) === normalizeAnswer(langData.answer);
+
+  state.answers.push({
+    questionId: program.id,
+    language: langKey,
+    difficulty: program.difficulty,
+    feature: program.feature,
+    givenAnswer: answer,
+    correctAnswer: langData.answer,
+    isCorrect,
+    timeMs,
+    usedMultipleChoice: state.showingMultipleChoice
+  });
+
+  // Next question or finish
+  if (state.currentQuestion < CONFIG.totalQuestions - 1) {
+    state.currentQuestion++;
+    state.questionStart = Date.now();
+    state.showingMultipleChoice = false;
+    state.freeTextValue = '';
+    state.currentChoices = null;
+    state.phase = 'quiz';
+    render();
+    const input = document.getElementById('answerInput');
+    if (input) input.focus();
+  } else {
+    state.phase = 'results';
+    render();
+    sendResults();
+  }
+}
+
+// ===================================================================
+// DATA COLLECTION
+// ===================================================================
+function sendResults() {
+  const payload = {
+    participantId: state.participantId,
+    experience: state.experience,
+    assignedLanguage: state.assignedLang,
+    tutorialOrder: state.tutorialOrder,
+    totalTimeMs: Date.now() - state.experimentStart,
+    answers: state.answers,
+    timestamp: new Date().toISOString()
+  };
+
+  const statusEl = document.getElementById('submitStatus');
+
+  fetch(CONFIG.serverEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(res => {
+      if (res.ok) {
+        if (statusEl) statusEl.innerHTML = '<div class="info-box">Sonuçlarınız kaydedildi. Teşekkürler!</div>';
+      } else {
+        throw new Error('Server error');
+      }
+    })
+    .catch(() => {
+      if (statusEl) {
+        statusEl.innerHTML = `
+          <div class="info-box" style="border-left-color: #f0ad4e;">
+            Sonuçlar sunucuya gönderilemedi. Aşağıdaki butona tıklayarak verilerinizi indirebilirsiniz.
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="downloadResults()">JSON İndir</button>
+        `;
+      }
+    });
+}
+
+function downloadResults() {
+  const payload = {
+    participantId: state.participantId,
+    experience: state.experience,
+    assignedLanguage: state.assignedLang,
+    tutorialOrder: state.tutorialOrder,
+    totalTimeMs: Date.now() - state.experimentStart,
+    answers: state.answers,
+    timestamp: new Date().toISOString()
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `quiz-${state.participantId}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ===================================================================
+// INITIALIZATION
+// ===================================================================
+render();
+</script>
+</body>
+</html>
