@@ -204,6 +204,10 @@ allPrimitives =
       [ anyTypes 2 ]
       ["etki.kip"]
 
+  , PrimitiveDef ([], "karekök")
+      [ withTypes 1 (\case [t] -> isFloatTy t; _ -> False) ]
+      ["ondalık-sayı.kip"]
+
   , PrimitiveDef ([], "dur")
       [ anyTypes 0 ]
       []
