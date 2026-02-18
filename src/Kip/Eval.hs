@@ -1838,7 +1838,7 @@ primFloatSqrt args =
   case args of
     [FloatLit ann n] ->
       return (FloatLit ann (sqrt n))
-    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "karekök-sayısı") []) args)
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "karekök") []) args)
 
 -- | Convert a boolean into a Kip boolean value expression.
 boolToExp :: Bool -- ^ Boolean value.
