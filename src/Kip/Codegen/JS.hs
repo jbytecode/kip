@@ -295,6 +295,7 @@ jsPrimitives = T.unlines
   , "  if (bv === 0) return __kip_is_float(a) || __kip_is_float(b) ? __kip_float(0) : 0;"
   , "  return __kip_is_float(a) || __kip_is_float(b) ? __kip_float(av % bv) : (av % bv);"
   , "};"
+  , "var karekök = (a) => __kip_float(Math.sqrt(__kip_num(a)) * 1.0);"
   , "var sayı_çek = (a, b) => {"
   , "  var lo = Math.min(a, b);"
   , "  var hi = Math.max(a, b);"

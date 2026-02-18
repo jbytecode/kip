@@ -1509,6 +1509,11 @@ primImpl mPath ident args = do
           Just (primIntCmp "büyük-eşitlik" (>=))
       | otherwise ->
           Nothing
+    ([], "karekök")
+      | [(_, TyFloat _)] <- args ->
+          Just primFloatSqrt
+      | otherwise ->
+          Nothing
     (["sayı"], "çek") -> Just primIntRandom
     ([], "sayı-çek") -> Just primIntRandom
     _ -> Nothing
@@ -1826,6 +1831,15 @@ primFloatToString args =
       return (StrLit ann (T.pack (show n)))
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) (["dizge"], "hal") []) args)
 
+-- | Primitive floating-point square root.
+primFloatSqrt :: [Exp Ann] -- ^ Arguments.
+              -> EvalM (Exp Ann) -- ^ Result expression.
+primFloatSqrt args =
+  case args of
+    [FloatLit ann n] ->
+      return (FloatLit ann (sqrt n))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "karekök") []) args)
+
 -- | Convert a boolean into a Kip boolean value expression.
 boolToExp :: Bool -- ^ Boolean value.
           -> Exp Ann -- ^ Kip boolean expression.
@@ -1839,3 +1853,5 @@ runEvalM :: EvalM a -- ^ Evaluator computation.
          -> EvalState -- ^ Initial evaluator state.
          -> IO (Either EvalError (a, EvalState)) -- ^ Result or error.
 runEvalM m s = runExceptT (runStateT m s)
+
+
