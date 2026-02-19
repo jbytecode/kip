@@ -47,7 +47,7 @@ import qualified Data.Set as Set
 
 import Kip.AST
 
-data CodegenCtx = MkCodegenCtx
+newtype CodegenCtx = MkCodegenCtx
   { sectionableFns :: Set.Set Identifier
   }
 
@@ -569,8 +569,7 @@ codegenExpWith ctx exp' =
 -- Single wildcard clauses are emitted as direct returns; multi-clause bodies
 -- are lowered through the pattern-matching chain renderer.
 renderFunction :: CodegenCtx -> Identifier -> [Arg Ann] -> [Clause Ann] -> Text
-renderFunction ctx name args clauses =
-  renderFunctionNamed ctx (toJsIdent name) args clauses
+renderFunction ctx name = renderFunctionNamed ctx (toJsIdent name)
 
 -- | Render a Kip function using an explicit JS function name.
 renderFunctionNamed :: CodegenCtx -> Text -> [Arg Ann] -> [Clause Ann] -> Text
