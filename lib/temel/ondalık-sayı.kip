@@ -126,9 +126,6 @@ Sayı negatifse negatifini alır, değilse sayıyı olduğu gibi döndürür.
   değilse,
     şudur.
 
-(bu ondalık-sayının) (karekök ondalık-sayısı),
-  yerleşiktir.
-
 (*
 Bir ondalık sayının taban değerini (floor) hesaplar.
 Sayıdan küçük veya eşit olan en büyük tam sayı değerini döndürür.
@@ -144,3 +141,23 @@ Sayıdan büyük veya eşit olan en küçük tam sayı değerini döndürür.
 *)
 (bu ondalık-sayının) (tavan tam-sayısı),
   yerleşiktir.
+
+(bu ondalık-sayının) (karekök ondalık-sayısı),
+  yerleşiktir.
+
+(*
+Tam öyle değildir ama bir yerde durmak gerekir.
+*)
+pi-sayısı, 3.1415926535897'dir.
+
+(*
+Argüman olarak aldığı derecenin radyanını verir.
+*)
+(bu ondalık-sayının) (radyan ondalık-sayısı),
+  (bu'nun pi-sayısıyla çarpımının) 180.0'e bölümüdür.
+
+(*
+Argüman olarak aldığı radyanın derecesini verir.
+*)
+(bu ondalık-sayının) (derece ondalık-sayısı),
+  (bu'nun 180.0'le çarpımının) pi-sayısına bölümüdür.
