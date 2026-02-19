@@ -39,7 +39,7 @@ module Kip.Codegen.JS
   ) where
 
 import Data.Char (isLetter)
-import Data.List (intercalate, partition)
+import Data.List (partition)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
@@ -47,7 +47,7 @@ import qualified Data.Set as Set
 
 import Kip.AST
 
-newtype CodegenCtx = MkCodegenCtx
+data CodegenCtx = MkCodegenCtx
   { sectionableFns :: Set.Set Identifier
   }
 
@@ -85,8 +85,9 @@ codegenProgram stmts =
       (funcDefs, otherStmts) = partition isFunctionDef stmts
       -- Deduplicate function definitions by JS name, keeping first occurrence
       dedupedFuncDefs = deduplicateByJsName funcDefs
+      mergedFuncDefs = mergeCompatibleFunctions dedupedFuncDefs
       -- Function definitions first (they hoist anyway)
-      funcCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) dedupedFuncDefs)
+      funcCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) mergedFuncDefs)
       -- Expression statements last
       exprCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) otherStmts)
       -- All user code inside async IIFE with wrappers after functions
@@ -135,6 +136,46 @@ deduplicateByJsName = go Set.empty
     stmtJsName (Function name _ _ [Clause (PWildcard _) _] _) =
       Just (toJsIdent name)
     stmtJsName _ = Nothing
+
+data OverloadKey = OverloadKey
+  { odKeyName :: Text
+  , odKeyArgs :: [Identifier]
+  }
+  deriving (Eq, Ord, Show)
+
+-- | Merge function statements that have the same emitted JS name and exactly
+-- the same argument identifiers.
+--
+-- This keeps codegen predictable while allowing multi-definition functions like
+-- @filtre@ in dpll to become one JS declaration with all clauses.
+mergeCompatibleFunctions :: [Stmt Ann] -> [Stmt Ann]
+mergeCompatibleFunctions stmts = snd (foldl step (Map.empty, []) stmts)
+  where
+    step (seen, acc) stmt =
+      case stmt of
+        Function name args _ clauses isInf ->
+          let key =
+                OverloadKey
+                  { odKeyName = toJsIdent name
+                  , odKeyArgs = map argIdent args
+                  }
+          in case Map.lookup key seen of
+               Nothing ->
+                 let idx = length acc
+                 in (Map.insert key idx seen, acc ++ [stmt])
+               Just idx ->
+                 (seen, mergeAt idx clauses isInf acc)
+        _ ->
+          (seen, acc ++ [stmt])
+
+    mergeAt idx newClauses isInf acc =
+      let (prefix, target:suffix) = splitAt idx acc
+      in case target of
+           Function name oldArgs oldTy oldClauses oldInf ->
+             let mergedInf = oldInf || isInf
+                 mergedStmt = Function name oldArgs oldTy (oldClauses ++ newClauses) mergedInf
+             in prefix ++ (mergedStmt : suffix)
+           _ -> acc
 
 -- | JavaScript implementations of Kip primitives.
 -- Uses 'var' so user code can override with 'const'.
@@ -256,6 +297,7 @@ jsPrimitives = T.unlines
   , "var __kip_prim_birleşim = (a, b) => __kip_num(a) + __kip_num(b);"
   , "var __kip_prim_uzunluk = (s) => s.length;"
   , "var __kip_prim_toplam = (a, b) => __kip_is_float(a) || __kip_is_float(b) ? __kip_float(__kip_num(a) + __kip_num(b)) : (__kip_num(a) + __kip_num(b));"
+  , "var __kip_prim_fark = (a, b) => __kip_is_float(a) || __kip_is_float(b) ? __kip_float(__kip_num(a) - __kip_num(b)) : (__kip_num(a) - __kip_num(b));"
   , ""
   , "// I/O primitives - async to support browser interactivity"
   , "var __kip_prim_oku_stdin = async () => {"
@@ -307,7 +349,7 @@ jsPrimitives = T.unlines
   , "  return typeof bitimlik === 'function' ? bitimlik() : bitimlik;"
   , "};"
   , "var çarpım = (a, b) => __kip_is_float(a) || __kip_is_float(b) ? __kip_float(__kip_num(a) * __kip_num(b)) : (__kip_num(a) * __kip_num(b));"
-  , "var fark = (a, b) => __kip_is_float(a) || __kip_is_float(b) ? __kip_float(__kip_num(a) - __kip_num(b)) : (__kip_num(a) - __kip_num(b));"
+  , "var fark = __kip_prim_fark;"
   , "var bölüm = (a, b) => {"
   , "  var av = __kip_num(a);"
   , "  var bv = __kip_num(b);"
@@ -370,6 +412,7 @@ jsOverloadWrappers = T.unlines
   , "var __kip_lib_birleşim = typeof birleşim === 'function' ? birleşim : null;"
   , "var __kip_lib_uzunluk = typeof uzunluk === 'function' ? uzunluk : null;"
   , "var __kip_lib_toplam = typeof toplam === 'function' ? toplam : null;"
+  , "var __kip_lib_fark = typeof fark === 'function' ? fark : null;"
   , "var __kip_lib_yaz = typeof yaz === 'function' ? yaz : null;"
   , ""
   , "var ters = async (x) => {"
@@ -396,6 +439,13 @@ jsOverloadWrappers = T.unlines
   , "  if (args.length === 1 && __kip_lib_toplam) return await __kip_lib_toplam(args[0]);"
   , "  if (__kip_lib_toplam) return await __kip_lib_toplam(...args);"
   , "  return __kip_prim_toplam(...args);"
+  , "};"
+  , ""
+  , "var fark = async (...args) => {"
+  , "  if (args.length === 2 && typeof args[0] === 'number') return __kip_prim_fark(args[0], args[1]);"
+  , "  if (args.length === 2 && (__kip_is_float(args[0]) || __kip_is_float(args[1]))) return __kip_prim_fark(args[0], args[1]);"
+  , "  if (__kip_lib_fark) return await __kip_lib_fark(...args);"
+  , "  return __kip_prim_fark(...args);"
   , "};"
   , ""
   , "// I/O wrappers - async for interactive browser support"
@@ -431,7 +481,8 @@ jsOverloadWrappers = T.unlines
 codegenStmts :: [Stmt Ann] -> Text
 codegenStmts stmts =
   let ctx = buildCodegenCtx stmts
-  in T.intercalate "\n\n" (map (codegenStmtWith ctx) stmts)
+      merged = mergeCompatibleFunctions stmts
+  in T.intercalate "\n\n" (map (codegenStmtWith ctx) merged)
 
 -- | Generate JavaScript for a single top-level statement.
 --
@@ -519,6 +570,11 @@ codegenExpWith ctx exp' =
 -- are lowered through the pattern-matching chain renderer.
 renderFunction :: CodegenCtx -> Identifier -> [Arg Ann] -> [Clause Ann] -> Text
 renderFunction ctx name args clauses =
+  renderFunctionNamed ctx (toJsIdent name) args clauses
+
+-- | Render a Kip function using an explicit JS function name.
+renderFunctionNamed :: CodegenCtx -> Text -> [Arg Ann] -> [Clause Ann] -> Text
+renderFunctionNamed ctx jsName args clauses =
   let argsText = renderArgNames args
       bodyLines =
         case clauses of
@@ -532,7 +588,7 @@ renderFunction ctx name args clauses =
                : renderClauseChain ctx "__scrut" clauses
   in
     T.unlines
-      [ "async function " <> toJsIdent name <> "(" <> argsText <> ") {"
+      [ "async function " <> jsName <> "(" <> argsText <> ") {"
       , indent 2 (T.unlines bodyLines)
       , "}"
       ]
@@ -668,7 +724,7 @@ renderPatCond ctx scrutinee pat =
       -- 1) check the tag, 2) ensure args are long enough, and
       -- 3) evaluate subpattern guards using right-aligned indexing.
       let patLen = length pats
-          headCond = scrutinee <> ".tag === " <> renderString (normalizeCtorName ctx ctor)
+          headCond = renderCtorTagCond scrutinee ctor
           lenCond =
             if patLen > 0
               then scrutinee <> ".args.length >= " <> T.pack (show patLen)
@@ -724,40 +780,30 @@ patArgAccess scrutinee patLen idx =
 
 -- | Normalize constructor names for runtime tag comparison.
 --
--- This strips selected Turkish suffix forms that can appear in surface syntax
--- and joins namespaced identifiers using underscores to match JS tags.
-normalizeCtorName :: CodegenCtx -> Identifier -> Text
-normalizeCtorName _ ident =
-  case ident of
-    (ns, name) -> toJsIdent (ns, stripTurkishSuffixes name)
-
--- | Strip selected Turkish suffixes used in constructor surface forms.
---
--- This is intentionally conservative and currently handles:
---
--- * conditional suffixes after apostrophe
--- * possessive suffixes after soft-g alternation
-stripTurkishSuffixes :: Text -> Text
-stripTurkishSuffixes txt =
-  let -- Strip conditional suffix with apostrophe ('sa, 'se, etc.)
-      withoutCond = case T.breakOn "'" txt of
-                      (pref, suf) | T.length suf > 1 -> pref
-                      _ -> txt
-      -- Strip possessive suffix only after soft-g (ğ + vowel → k)
-      withoutPoss = stripSoftGPossessive withoutCond
-  in withoutPoss
+-- Some constructor surfaces differ only by Turkish soft-g possessive alternation
+-- (for example @varlığı@ vs @varlık@). We accept both spellings to keep
+-- pattern matching compatible with primitive option helpers.
+renderCtorTagCond :: Text -> Identifier -> Text
+renderCtorTagCond scrutinee (mods, name) =
+  let exact = toJsIdent (mods, name)
+      softened = toJsIdent (mods, stripSoftGPossessive name)
+      exactCond = scrutinee <> ".tag === " <> renderString exact
+      softCond = scrutinee <> ".tag === " <> renderString softened
+  in if exact == softened
+       then exactCond
+       else "(" <> exactCond <> " || " <> softCond <> ")"
 
 -- | Strip Turkish possessive suffix only when preceded by soft-g.
--- Converts ğı, ği, ğu, ğü back to k.
+--
+-- Converts final @ğı/ği/ğu/ğü@ back to @k@.
 stripSoftGPossessive :: Text -> Text
 stripSoftGPossessive txt =
   case T.unsnoc txt of
     Just (pref, c)
       | c `elem` ("ıiuü" :: String) ->
-          -- Only strip if preceded by soft-g
           case T.unsnoc pref of
-            Just (pref', 'ğ') -> pref' <> "k"  -- Convert ğ back to k
-            _ -> txt  -- Keep original if not after soft-g
+            Just (pref', 'ğ') -> pref' <> "k"
+            _ -> txt
     _ -> txt
 
 -- | Emit JavaScript for a Kip ADT declaration.
