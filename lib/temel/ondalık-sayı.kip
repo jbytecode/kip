@@ -128,3 +128,19 @@ Sayı negatifse negatifini alır, değilse sayıyı olduğu gibi döndürür.
 
 (bu ondalık-sayının) (karekök ondalık-sayısı),
   yerleşiktir.
+
+(*
+Bir ondalık sayının taban değerini (floor) hesaplar.
+Sayıdan küçük veya eşit olan en büyük tam sayı değerini döndürür.
+Örnek kullanım: (3.7'nin tabanı)
+*)
+(bu ondalık-sayının) (taban tam-sayısı),
+  yerleşiktir.
+
+(*
+Bir ondalık sayının tavan değerini (ceiling) hesaplar.
+Sayıdan büyük veya eşit olan en küçük tam sayı değerini döndürür.
+Örnek kullanım: (3.2'nin tavanı)
+*)
+(bu ondalık-sayının) (tavan tam-sayısı),
+  yerleşiktir.

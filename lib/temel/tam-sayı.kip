@@ -88,6 +88,13 @@ Tam sayıyı metinsel gösterimine (dizgeye) çevirir.
   yerleşiktir.
 
 (*
+Tam sayıyı ondalık sayıya çevirir.
+Örnek kullanım: (5'in ondalık-sayı-hali)
+*)
+(bu tam-sayının) (ondalık-sayı-hal ondalık-sayısı),
+  yerleşiktir.
+
+(*
 Bir tam sayının işaretini tersine çevirir.
 Pozitifse negatif, negatifse pozitif değeri üretir.
 Örnek kullanım: (5'in negatifi)

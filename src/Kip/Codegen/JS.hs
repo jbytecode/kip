@@ -83,8 +83,10 @@ codegenProgram stmts =
   let ctx = buildCodegenCtx stmts
       -- Separate function definitions from other statements
       (funcDefs, otherStmts) = partition isFunctionDef stmts
+      -- Deduplicate function definitions by JS name, keeping first occurrence
+      dedupedFuncDefs = deduplicateByJsName funcDefs
       -- Function definitions first (they hoist anyway)
-      funcCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) funcDefs)
+      funcCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) dedupedFuncDefs)
       -- Expression statements last
       exprCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) otherStmts)
       -- All user code inside async IIFE with wrappers after functions
@@ -112,6 +114,27 @@ isFunctionDef stmt =
     PrimType {} -> True
     Load {} -> True
     ExpStmt {} -> False
+
+-- | Deduplicate simple delegation functions by JS identifier.
+--
+-- When multiple library files define the same single-wildcard function
+-- (e.g. @negatif@ in both @tam-sayı.kip@ and @ondalık-sayı.kip@), only
+-- the first definition is kept.  Functions with pattern matching are never
+-- deduplicated because they may carry type-specific clauses needed by the
+-- overload-wrapper mechanism.
+deduplicateByJsName :: [Stmt Ann] -> [Stmt Ann]
+deduplicateByJsName = go Set.empty
+  where
+    go _ [] = []
+    go seen (stmt:rest) =
+      case stmtJsName stmt of
+        Just name
+          | name `Set.member` seen -> go seen rest
+          | otherwise -> stmt : go (Set.insert name seen) rest
+        Nothing -> stmt : go seen rest
+    stmtJsName (Function name _ _ [Clause (PWildcard _) _] _) =
+      Just (toJsIdent name)
+    stmtJsName _ = Nothing
 
 -- | JavaScript implementations of Kip primitives.
 -- Uses 'var' so user code can override with 'const'.
@@ -274,10 +297,12 @@ jsPrimitives = T.unlines
   , ""
   , "// Primitive functions (can be overridden)"
   , "var yaz = (x) => {"
+  , "  var val = __kip_is_float(x) ? x.value : x;"
+  , "  var output = __kip_is_float(x) && Number.isInteger(val) ? String(val) + '.0' : val;"
   , "  if (__kip_is_browser && typeof window.__kip_write === 'function') {"
-  , "    window.__kip_write(__kip_is_float(x) ? x.value : x);"
+  , "    window.__kip_write(output);"
   , "  } else {"
-  , "    console.log(__kip_is_float(x) ? x.value : x);"
+  , "    console.log(output);"
   , "  }"
   , "  return typeof bitimlik === 'function' ? bitimlik() : bitimlik;"
   , "};"
@@ -296,6 +321,9 @@ jsPrimitives = T.unlines
   , "  return __kip_is_float(a) || __kip_is_float(b) ? __kip_float(av % bv) : (av % bv);"
   , "};"
   , "var karekök = (a) => __kip_float(Math.sqrt(__kip_num(a)) * 1.0);"
+  , "var taban = (a) => Math.floor(__kip_num(a));"
+  , "var tavan = (a) => Math.ceil(__kip_num(a));"
+  , "var tam_sayı_ondalık_sayı_hali = (a) => __kip_float(a * 1.0);"
   , "var sayı_çek = (a, b) => {"
   , "  var lo = Math.min(a, b);"
   , "  var hi = Math.max(a, b);"
@@ -309,7 +337,7 @@ jsPrimitives = T.unlines
   , "var büyük_eşitlik = (a, b) => __kip_num(a) >= __kip_num(b) ? __kip_true() : __kip_false();"
   , "var dizge_hal = (n) => String(__kip_num(n));"
   , "var tam_sayı_hal = (s) => { const n = parseInt(s, 10); return isNaN(n) ? __kip_none() : __kip_some(n); };"
-  , "var ondalık_sayı_hal = (s) => { const n = parseFloat(s); return isNaN(n) ? __kip_none() : __kip_some(__kip_float(n)); };"
+  , "var ondalık_sayı_hal = (s) => { if (typeof s === 'number') return __kip_float(s * 1.0); const n = parseFloat(s); return isNaN(n) ? __kip_none() : __kip_some(__kip_float(n)); };"
   , "var __kip_call = async (fn, args) => {"
   , "  if (typeof fn !== 'function') {"
   , "    throw new TypeError('Attempted to call a non-function');"
@@ -377,10 +405,11 @@ jsOverloadWrappers = T.unlines
   , "var yaz = (...args) => {"
   , "  if (args.length === 1) {"
   , "    var val = __kip_is_float(args[0]) ? args[0].value : args[0];"
+  , "    var output = __kip_is_float(args[0]) && Number.isInteger(val) ? String(val) + '.0' : val;"
   , "    if (__kip_is_browser && typeof window.__kip_write === 'function') {"
-  , "      window.__kip_write(val);"
+  , "      window.__kip_write(output);"
   , "    } else {"
-  , "      console.log(val);"
+  , "      console.log(output);"
   , "    }"
   , "    return typeof bitimlik === 'function' ? bitimlik() : bitimlik;"
   , "  }"
