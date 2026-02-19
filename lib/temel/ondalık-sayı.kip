@@ -126,10 +126,24 @@ Sayı negatifse negatifini alır, değilse sayıyı olduğu gibi döndürür.
   değilse,
     şudur.
 
+(*
+Bir ondalık sayının taban değerini (floor) hesaplar.
+Sayıdan küçük veya eşit olan en büyük tam sayı değerini döndürür.
+Örnek kullanım: (3.7'nin tabanı)
+*)
+(bu ondalık-sayının) (taban tam-sayısı),
+  yerleşiktir.
 
-(bu ondalık-sayının) (karekök ondalık-sayısı), 
- yerleşiktir.
+(*
+Bir ondalık sayının tavan değerini (ceiling) hesaplar.
+Sayıdan büyük veya eşit olan en küçük tam sayı değerini döndürür.
+Örnek kullanım: (3.2'nin tavanı)
+*)
+(bu ondalık-sayının) (tavan tam-sayısı),
+  yerleşiktir.
 
+(bu ondalık-sayının) (karekök ondalık-sayısı),
+  yerleşiktir.
 
 (*
 Tam öyle değildir ama bir yerde durmak gerekir.
@@ -140,11 +154,10 @@ pi-sayısı, 3.1415926535897'dir.
 Argüman olarak aldığı derecenin radyanını verir.
 *)
 (bu ondalık-sayının) (radyan ondalık-sayısı),
-   (bu'nun pi-sayısıyla çarpımının) 180.0'e bölümüdür.
-
+  (bu'nun pi-sayısıyla çarpımının) 180.0'e bölümüdür.
 
 (*
 Argüman olarak aldığı radyanın derecesini verir.
 *)
 (bu ondalık-sayının) (derece ondalık-sayısı),
-   (bu'nun 180.0'le çarpımının) pi-sayısına bölümüdür.
+  (bu'nun 180.0'le çarpımının) pi-sayısına bölümüdür.

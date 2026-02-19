@@ -13,3 +13,17 @@ Run with `stack test`. The test runner invokes the `kip` executable with
 JS parity tests compare `kip --exec` output with `kip --codegen js` run under
 Node.js (as ES modules to support top-level await). Ensure `node` is on your
 `PATH` or set `NODE_BIN` to its path.
+
+## Running Specific Test Subsets
+
+You can run only specific tests using the `-p` pattern matcher:
+
+```bash
+# Run only JS tests
+stack test --ta '-p "js"'
+
+# Run only REPL tests
+stack test --ta '-p "repl"'
+```
+
+The `-p` flag filters tests by their description, which includes the test file path.

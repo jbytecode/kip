@@ -1428,7 +1428,10 @@ primImpl mPath ident args = do
     ([], "uzunluk") -> Just primStringLength
     ([], "birleşim") -> Just primStringConcat
     (["tam", "sayı"], "hal") -> Just primStringToInt
-    (["ondalık", "sayı"], "hal") -> Just primStringToFloat
+    (["ondalık", "sayı"], "hal")
+      | [(_, TyString _)] <- args -> Just primStringToFloat
+      | [(_, TyInt _)] <- args -> Just primIntToFloat
+      | otherwise -> Nothing
     ([], "ters")
       | [(_, TyString _)] <- args -> Just primStringReverse
       | otherwise -> Nothing
@@ -1512,6 +1515,16 @@ primImpl mPath ident args = do
     ([], "karekök")
       | [(_, TyFloat _)] <- args ->
           Just primFloatSqrt
+      | otherwise ->
+          Nothing
+    ([], "taban")
+      | [(_, TyFloat _)] <- args ->
+          Just primFloatFloor
+      | otherwise ->
+          Nothing
+    ([], "tavan")
+      | [(_, TyFloat _)] <- args ->
+          Just primFloatCeiling
       | otherwise ->
           Nothing
     (["sayı"], "çek") -> Just primIntRandom
@@ -1831,6 +1844,15 @@ primFloatToString args =
       return (StrLit ann (T.pack (show n)))
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) (["dizge"], "hal") []) args)
 
+-- | Primitive integer to float conversion.
+primIntToFloat :: [Exp Ann] -- ^ Arguments.
+               -> EvalM (Exp Ann) -- ^ Result expression.
+primIntToFloat args =
+  case args of
+    [IntLit ann n] ->
+      return (FloatLit ann (fromIntegral n))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) (["tam", "sayı"], "ondalık-sayı-hali") []) args)
+
 -- | Primitive floating-point square root.
 primFloatSqrt :: [Exp Ann] -- ^ Arguments.
               -> EvalM (Exp Ann) -- ^ Result expression.
@@ -1839,6 +1861,24 @@ primFloatSqrt args =
     [FloatLit ann n] ->
       return (FloatLit ann (sqrt n))
     _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "karekök") []) args)
+
+-- | Primitive floating-point floor.
+primFloatFloor :: [Exp Ann] -- ^ Arguments.
+               -> EvalM (Exp Ann) -- ^ Result expression.
+primFloatFloor args =
+  case args of
+    [FloatLit ann n] ->
+      return (IntLit ann (floor n))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "taban") []) args)
+
+-- | Primitive floating-point ceiling.
+primFloatCeiling :: [Exp Ann] -- ^ Arguments.
+                 -> EvalM (Exp Ann) -- ^ Result expression.
+primFloatCeiling args =
+  case args of
+    [FloatLit ann n] ->
+      return (IntLit ann (ceiling n))
+    _ -> return (App (mkAnn Nom NoSpan) (Var (mkAnn Nom NoSpan) ([], "tavan") []) args)
 
 -- | Convert a boolean into a Kip boolean value expression.
 boolToExp :: Bool -- ^ Boolean value.

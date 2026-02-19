@@ -139,8 +139,10 @@ allPrimitives =
       ["dizge.kip"]
 
   , PrimitiveDef (["ondalık", "sayı"], "hal")
-      [ anyTypes 1 ]
-      ["dizge.kip"]
+      [ withTypes 1 (\case [t] -> isStringTy t; _ -> False)
+      , withTypes 1 (\case [t] -> isIntTy t; _ -> False)
+      ]
+      ["dizge.kip", "tam-sayı.kip"]
 
   , PrimitiveDef ([], "ters")
       [ withTypes 1 (\case [t] -> isStringTy t; _ -> False) ]
@@ -205,6 +207,14 @@ allPrimitives =
       ["etki.kip"]
 
   , PrimitiveDef ([], "karekök")
+      [ withTypes 1 (\case [t] -> isFloatTy t; _ -> False) ]
+      ["ondalık-sayı.kip"]
+
+  , PrimitiveDef ([], "taban")
+      [ withTypes 1 (\case [t] -> isFloatTy t; _ -> False) ]
+      ["ondalık-sayı.kip"]
+
+  , PrimitiveDef ([], "tavan")
       [ withTypes 1 (\case [t] -> isFloatTy t; _ -> False) ]
       ["ondalık-sayı.kip"]
 
