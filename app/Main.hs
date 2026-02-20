@@ -920,9 +920,10 @@ main = do
           -- Parse and type-check files, collect all statements
           (codegenPst, codegenTC, codegenLoaded) <-
             runReaderT (loadPreludeCodegenState (optNoPrelude opts) moduleDirs fsm upsCache downsCache) renderCtx
-          allStmts <- runReaderT (codegenFiles codegenPst codegenTC moduleDirs codegenLoaded (optFiles opts)) renderCtx
+          (finalTC, allStmts) <- runReaderT (codegenFiles codegenPst codegenTC moduleDirs codegenLoaded (optFiles opts)) renderCtx
           -- Emit JS and print
-          TIO.putStrLn (codegenProgram allStmts)
+          let resolvMap = Map.fromList (tcResolvedSigs finalTC)
+          TIO.putStrLn (codegenProgram resolvMap allStmts)
           exitSuccess
         _ ->
           die . T.unpack =<< runReaderT (render (MsgUnknownCodegenTarget target)) basicCtx
@@ -1374,10 +1375,10 @@ main = do
                  -> [FilePath] -- ^ Module search paths.
                  -> Set FilePath -- ^ Already loaded files.
                  -> [FilePath] -- ^ Files to codegen.
-                 -> AppM [Stmt Ann] -- ^ Collected statements.
+                 -> AppM (TCState, [Stmt Ann]) -- ^ Final TC state and collected statements.
     codegenFiles basePst baseTC moduleDirs loaded files = do
-      (_, _, stmts, _) <- foldM' (collectFileStmts moduleDirs) (basePst, baseTC, [], loaded) files
-      return stmts
+      (_, finalTC, stmts, _) <- foldM' (collectFileStmts moduleDirs) (basePst, baseTC, [], loaded) files
+      return (finalTC, stmts)
 
     -- | Collect statements from a single file (recursively handles Load).
     collectFileStmts :: [FilePath] -- ^ Module search paths.

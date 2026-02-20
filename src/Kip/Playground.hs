@@ -31,6 +31,7 @@ import Data.Char (toLower)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (nub)
 import Data.Set (Set)
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -271,8 +272,9 @@ emitJsFilesWithDeps ::
 emitJsFilesWithDeps moduleDirs basePst baseTC _preludeLoaded files progressHooks = do
   preludePath <- resolveModulePath moduleDirs [] ([], T.pack "giriş")
   (preludeStmts, pst', tcSt', loaded') <- emitJsFileWithDeps moduleDirs progressHooks ([], basePst, baseTC, Set.empty) preludePath
-  (stmts, _, _, _) <- foldM' (emitJsFileWithDeps moduleDirs progressHooks) (preludeStmts, pst', tcSt', loaded') files
-  return (codegenProgram stmts)
+  (stmts, _, finalTC, _) <- foldM' (emitJsFileWithDeps moduleDirs progressHooks) (preludeStmts, pst', tcSt', loaded') files
+  let resolvMap = Map.fromList (tcResolvedSigs finalTC)
+  return (codegenProgram resolvMap stmts)
 
 {- |
 Parse/typecheck one file and recursively include dependencies for codegen.

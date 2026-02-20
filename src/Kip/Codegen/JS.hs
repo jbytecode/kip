@@ -16,8 +16,7 @@ operations (read/write/random) in a uniform async style.
 
 1. A primitive prelude ('jsPrimitives').
 2. An async runner function containing user code.
-3. Overload wrappers ('jsOverloadWrappers') installed after function
-   declarations so wrappers can capture library implementations.
+3. User statements in source order (with function declarations emitted first).
 
 = Semantics choices
 
@@ -39,7 +38,7 @@ module Kip.Codegen.JS
   ) where
 
 import Data.Char (isLetter)
-import Data.List (partition)
+import Data.List (foldl', partition)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
@@ -47,15 +46,19 @@ import qualified Data.Set as Set
 
 import Kip.AST
 
-newtype CodegenCtx = MkCodegenCtx
+data CodegenCtx = MkCodegenCtx
   { sectionableFns :: Set.Set Identifier
+  , resolvedSigs :: Map.Map Span (Identifier, [Ty Ann])
+  , overloadRegistry :: Map.Map (Identifier, [Ty Ann]) Text
+  , primFuncMap :: Map.Map (Identifier, [Ty Ann]) Text
+  , currentFunction :: Maybe (Identifier, [Ty Ann], Text)
   }
 
 emptyCodegenCtx :: CodegenCtx
-emptyCodegenCtx = MkCodegenCtx Set.empty
+emptyCodegenCtx = MkCodegenCtx Set.empty Map.empty Map.empty Map.empty Nothing
 
-buildCodegenCtx :: [Stmt Ann] -> CodegenCtx
-buildCodegenCtx stmts =
+buildCodegenCtx :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> CodegenCtx
+buildCodegenCtx resolvMap stmts =
   let arityMap = foldl collectArity Map.empty stmts
       sectionable =
         Set.fromList
@@ -64,7 +67,28 @@ buildCodegenCtx stmts =
           , any (> 1) arities
           , 1 `notElem` arities
           ]
-  in MkCodegenCtx sectionable
+      -- Build overload registry: group functions by Identifier, then generate
+      -- qualified names for identifiers that have more than one signature.
+      sigMap = foldl collectSigs Map.empty stmts
+      overloaded = Map.filter (\sigs -> length sigs > 1) sigMap
+      registry = Map.fromList
+        [ ((ident, sig), qualifiedJsName ident sig)
+        | (ident, sigs) <- Map.toList overloaded
+        , sig <- sigs
+        ]
+      -- Build map of primitive signatures to emitted JS function names.
+      prims = Map.fromList
+        [ ((ident, argTys), lookupPrimJsName ident argTys)
+        | PrimFunc ident args _ _ <- stmts
+        , let argTys = normalizeSig (map argType args)
+        ]
+  in MkCodegenCtx
+       { sectionableFns = sectionable
+       , resolvedSigs = resolvMap
+       , overloadRegistry = registry
+       , primFuncMap = prims
+       , currentFunction = Nothing
+       }
   where
     collectArity acc stmt =
       case stmt of
@@ -73,29 +97,221 @@ buildCodegenCtx stmts =
         _ -> acc
     mergeArities new old = Set.toList (Set.fromList (new ++ old))
 
+    collectSigs acc stmt =
+      case stmt of
+        Function ident args _ _ _ ->
+          Map.insertWith mergeSigs ident [normalizeSig (map argType args)] acc
+        PrimFunc ident args _ _ ->
+          Map.insertWith mergeSigs ident [normalizeSig (map argType args)] acc
+        _ -> acc
+    mergeSigs new old =
+      let all' = old ++ new
+      in [x | (x:_) <- groupByEq all']
+
+    groupByEq [] = []
+    groupByEq (x:xs) = let (same, rest) = partition (== x) xs
+                        in (x : same) : groupByEq rest
+
+    qualifiedJsName ident sig =
+      toJsIdent ident <> "$" <> T.intercalate "$" (map tyToSuffix sig)
+
+-- | Look up the JS name for a function, using qualified name if overloaded.
+lookupOverloadName :: CodegenCtx -> Identifier -> [Ty Ann] -> Text
+lookupOverloadName ctx name argTys =
+  case Map.lookup (name, normalizeSig argTys) (overloadRegistry ctx) of
+    Just qualName -> qualName
+    Nothing -> toJsIdent name
+
+-- | Look up the JS name for a call site using the resolved signature.
+lookupCallName :: CodegenCtx -> Span -> Exp Ann -> [Exp Ann] -> Text
+lookupCallName ctx span' fallback args =
+  case Map.lookup span' (resolvedSigs ctx) of
+    Just (resolvedName, resolvedArgTys) ->
+      let sig = normalizeSig resolvedArgTys
+      in case Map.lookup (resolvedName, sig) (primFuncMap ctx) of
+        Just primName -> primName
+        Nothing -> lookupOverloadName ctx resolvedName sig
+    Nothing -> fallbackCallName ctx fallback args
+
+-- | Best-effort call target recovery when no span-based resolution exists.
+fallbackCallName :: CodegenCtx -> Exp Ann -> [Exp Ann] -> Text
+fallbackCallName ctx fallback args =
+  case fallback of
+    Var {varName, varCandidates} ->
+      let candidates = uniqIdents (map fst varCandidates ++ [varName])
+      in case resolveCurrentFunction ctx candidates args of
+           Just jsName -> jsName
+           Nothing ->
+             case resolveByCandidates ctx candidates args of
+               Just jsName -> jsName
+               Nothing ->
+                 case varCandidates of
+                   ((ident, _) : _) -> toJsIdent ident
+                   [] -> toJsIdent varName
+    _ -> codegenExpWith ctx fallback
+
+resolveCurrentFunction :: CodegenCtx -> [Identifier] -> [Exp Ann] -> Maybe Text
+resolveCurrentFunction ctx candidates args =
+  case currentFunction ctx of
+    Just (ident, sig, jsName)
+      | any (identMatches ident) candidates
+      , length sig == length args ->
+          Just jsName
+    _ -> Nothing
+
+resolveByCandidates :: CodegenCtx -> [Identifier] -> [Exp Ann] -> Maybe Text
+resolveByCandidates ctx candidates args =
+  let raw = concatMap (callTargetsForIdent ctx) candidates
+      byArity = filter (\(sig, _) -> length sig == length args) raw
+      exact = filterByArgHints byArity args
+  in case exact of
+       [(_, jsName)] -> Just jsName
+       _ ->
+         if length args == 1
+           then case args of
+                  [fixedArg] ->
+                    let sectionCands = concatMap (sectionTargetsForIdent ctx fixedArg) candidates
+                    in case sectionCands of
+                         [(_, jsName)] -> Just jsName
+                         _ -> Nothing
+                  _ -> Nothing
+           else Nothing
+
+callTargetsForIdent :: CodegenCtx -> Identifier -> [([Ty Ann], Text)]
+callTargetsForIdent ctx ident =
+  let overloaded =
+        [ (sig, jsName)
+        | ((name, sig), jsName) <- Map.toList (overloadRegistry ctx)
+        , identMatches name ident
+        ]
+      prims =
+        [ (sig, jsName)
+        | ((name, sig), jsName) <- Map.toList (primFuncMap ctx)
+        , identMatches name ident
+        ]
+  in uniqTargets (overloaded ++ prims)
+
+sectionTargetsForIdent :: CodegenCtx -> Exp Ann -> Identifier -> [([Ty Ann], Text)]
+sectionTargetsForIdent ctx fixedArg ident =
+  let fixedIdx = if annCase (annExp fixedArg) == Ins then 0 else 1
+      hint = inferSimpleTy fixedArg
+      targets = filter (\(sig, _) -> length sig == 2) (callTargetsForIdent ctx ident)
+      hinted =
+        case hint of
+          Just simpleTy ->
+            filter (\(sig, _) -> sigMatchesHint sig fixedIdx simpleTy) targets
+          Nothing -> targets
+  in uniqTargets hinted
+
+filterByArgHints :: [([Ty Ann], Text)] -> [Exp Ann] -> [([Ty Ann], Text)]
+filterByArgHints targets args =
+  let hints = [(ix, ty) | (ix, arg) <- zip [0 ..] args, Just ty <- [inferSimpleTy arg]]
+  in case hints of
+       [] -> targets
+       _ -> filter (\(sig, _) -> all (uncurry (sigMatchesHint sig)) hints) targets
+
+data SimpleTy = SimpleInt | SimpleFloat | SimpleString
+
+inferSimpleTy :: Exp Ann -> Maybe SimpleTy
+inferSimpleTy exp' =
+  case exp' of
+    IntLit {} -> Just SimpleInt
+    FloatLit {} -> Just SimpleFloat
+    StrLit {} -> Just SimpleString
+    _ -> Nothing
+
+sigMatchesHint :: [Ty Ann] -> Int -> SimpleTy -> Bool
+sigMatchesHint sig idx hint
+  | idx < 0 || idx >= length sig = False
+  | otherwise =
+      case (sig !! idx, hint) of
+        (TyInt {}, SimpleInt) -> True
+        (TyFloat {}, SimpleFloat) -> True
+        (TyString {}, SimpleString) -> True
+        _ -> False
+
+uniqTargets :: [([Ty Ann], Text)] -> [([Ty Ann], Text)]
+uniqTargets = foldl' add []
+  where
+    add acc item
+      | item `elem` acc = acc
+      | otherwise = acc ++ [item]
+
+uniqIdents :: [Identifier] -> [Identifier]
+uniqIdents = foldl' add []
+  where
+    add acc ident
+      | ident `elem` acc = acc
+      | otherwise = acc ++ [ident]
+
+identMatches :: Identifier -> Identifier -> Bool
+identMatches (mods1, name1) (mods2, name2) =
+  name1 == name2 && (mods1 == mods2 || null mods1 || null mods2)
+
+-- | Get the JS primitive name for a given function name and arg types.
+-- Falls back to the bare JS identifier if no special mapping exists.
+lookupPrimJsName :: Identifier -> [Ty Ann] -> Text
+lookupPrimJsName name argTys =
+  case (name, argTys) of
+    (([], "ters"), [_]) -> "__kip_prim_ters"
+    (([], "birleşim"), [_, _]) -> "__kip_prim_birleşim"
+    (([], "uzunluk"), [_]) -> "__kip_prim_uzunluk"
+    (([], "toplam"), [_, _]) -> "__kip_prim_toplam"
+    (([], "fark"), [_, _]) -> "__kip_prim_fark"
+    (([], "oku"), []) -> "__kip_prim_oku_stdin"
+    (([], "oku"), [_]) -> "__kip_prim_oku_dosya"
+    (([], "yaz"), [_, _]) -> "__kip_prim_yaz_dosya"
+    _ -> toJsIdent name
+
+-- | Convert a type to a suffix string for qualified overload names.
+tyToSuffix :: Ty Ann -> Text
+tyToSuffix ty =
+  case ty of
+    TyInt {} -> "tam_sayı"
+    TyFloat {} -> "ondalık_sayı"
+    TyString {} -> "dizge"
+    TyInd {indName} -> toJsIdent indName
+    TyApp {tyCtor, tyArgs} ->
+      tyToSuffix tyCtor <> "$" <> T.intercalate "$" (map tyToSuffix tyArgs)
+    TyVar {} -> "any"
+    TySkolem {} -> "any"
+    Arr {} -> "fn"
+
+normalizeSig :: [Ty Ann] -> [Ty Ann]
+normalizeSig = map normalizeTyForLookup
+
+normalizeTyForLookup :: Ty Ann -> Ty Ann
+normalizeTyForLookup ty =
+  case ty of
+    TyInt {} -> TyInt (mkAnn Nom NoSpan)
+    TyFloat {} -> TyFloat (mkAnn Nom NoSpan)
+    TyString {} -> TyString (mkAnn Nom NoSpan)
+    TyInd {indName} -> TyInd (mkAnn Nom NoSpan) indName
+    TyVar {} -> TyVar (mkAnn Nom NoSpan) ([], "__any")
+    TySkolem {} -> TyVar (mkAnn Nom NoSpan) ([], "__any")
+    Arr {dom, img} ->
+      Arr (mkAnn Nom NoSpan) (normalizeTyForLookup dom) (normalizeTyForLookup img)
+    TyApp {tyCtor, tyArgs} ->
+      TyApp (mkAnn Nom NoSpan) (normalizeTyForLookup tyCtor) (map normalizeTyForLookup tyArgs)
+
 -- | Codegen a list of statements into a JS-like program.
 -- Order: primitives, then async IIFE containing:
 --   - function definitions (hoisted)
---   - overload wrappers (capture hoisted functions)
 --   - expression statements (executed)
-codegenProgram :: [Stmt Ann] -> Text
-codegenProgram stmts =
-  let ctx = buildCodegenCtx stmts
+codegenProgram :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> Text
+codegenProgram resolvMap stmts =
+  let ctx = buildCodegenCtx resolvMap stmts
       -- Separate function definitions from other statements
       (funcDefs, otherStmts) = partition isFunctionDef stmts
-      -- Deduplicate function definitions by JS name, keeping first occurrence
-      dedupedFuncDefs = deduplicateByJsName funcDefs
-      mergedFuncDefs = mergeCompatibleFunctions dedupedFuncDefs
+      mergedFuncDefs = mergeCompatibleFunctions ctx funcDefs
       -- Function definitions first (they hoist anyway)
       funcCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) mergedFuncDefs)
       -- Expression statements last
       exprCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) otherStmts)
-      -- All user code inside async IIFE with wrappers after functions
+      -- All user code inside async IIFE.
       wrapped = T.unlines
         [ "const __kip_run = async () => {"
         , funcCode
-        , ""
-        , jsOverloadWrappers
         , ""
         , exprCode
         , "};"
@@ -116,27 +332,6 @@ isFunctionDef stmt =
     Load {} -> True
     ExpStmt {} -> False
 
--- | Deduplicate simple delegation functions by JS identifier.
---
--- When multiple library files define the same single-wildcard function
--- (e.g. @negatif@ in both @tam-sayı.kip@ and @ondalık-sayı.kip@), only
--- the first definition is kept.  Functions with pattern matching are never
--- deduplicated because they may carry type-specific clauses needed by the
--- overload-wrapper mechanism.
-deduplicateByJsName :: [Stmt Ann] -> [Stmt Ann]
-deduplicateByJsName = go Set.empty
-  where
-    go _ [] = []
-    go seen (stmt:rest) =
-      case stmtJsName stmt of
-        Just name
-          | name `Set.member` seen -> go seen rest
-          | otherwise -> stmt : go (Set.insert name seen) rest
-        Nothing -> stmt : go seen rest
-    stmtJsName (Function name _ _ [Clause (PWildcard _) _] _) =
-      Just (toJsIdent name)
-    stmtJsName _ = Nothing
-
 data OverloadKey = OverloadKey
   { odKeyName :: Text
   , odKeyArgs :: [Identifier]
@@ -148,15 +343,15 @@ data OverloadKey = OverloadKey
 --
 -- This keeps codegen predictable while allowing multi-definition functions like
 -- @filtre@ in dpll to become one JS declaration with all clauses.
-mergeCompatibleFunctions :: [Stmt Ann] -> [Stmt Ann]
-mergeCompatibleFunctions stmts = snd (foldl step (Map.empty, []) stmts)
+mergeCompatibleFunctions :: CodegenCtx -> [Stmt Ann] -> [Stmt Ann]
+mergeCompatibleFunctions ctx stmts = snd (foldl step (Map.empty, []) stmts)
   where
     step (seen, acc) stmt =
       case stmt of
         Function name args _ clauses isInf ->
           let key =
                 OverloadKey
-                  { odKeyName = toJsIdent name
+                  { odKeyName = lookupOverloadName ctx name (map argType args)
                   , odKeyArgs = map argIdent args
                   }
           in case Map.lookup key seen of
@@ -181,8 +376,9 @@ mergeCompatibleFunctions stmts = snd (foldl step (Map.empty, []) stmts)
 -- Uses 'var' so user code can override with 'const'.
 -- Note: Boolean constructors are defined by the library's doğruluk type,
 -- so we use a helper to get the correct constructor format at runtime.
--- Primitives that have library overloads (ters, birleşim, uzunluk, toplam)
--- are stored with __kip_ prefix and wrapped at the end.
+-- Primitives that may be overloaded in user/library code (ters, birleşim,
+-- uzunluk, toplam, fark, oku, yaz) are available as explicit __kip_prim_*
+-- helpers and selected at call sites via typechecker-resolved signatures.
 -- The code is async-capable to support interactive browser I/O.
 -- When KIP_RANDOM_SEED is set, the RNG mirrors the runtime LCG.
 jsPrimitives :: Text
@@ -401,87 +597,14 @@ jsPrimitives = T.unlines
   , "};"
   ]
 
--- | Wrappers for overloaded functions that dispatch based on argument type.
--- These are emitted at the END of the output, after all library code.
--- They capture the library implementations (if any) and create unified functions.
--- I/O functions are async to support interactive browser input.
-jsOverloadWrappers :: Text
-jsOverloadWrappers = T.unlines
-  [ "// Overload wrappers - dispatch to library or primitive based on type"
-  , "var __kip_lib_ters = typeof ters === 'function' ? ters : null;"
-  , "var __kip_lib_birleşim = typeof birleşim === 'function' ? birleşim : null;"
-  , "var __kip_lib_uzunluk = typeof uzunluk === 'function' ? uzunluk : null;"
-  , "var __kip_lib_toplam = typeof toplam === 'function' ? toplam : null;"
-  , "var __kip_lib_fark = typeof fark === 'function' ? fark : null;"
-  , "var __kip_lib_yaz = typeof yaz === 'function' ? yaz : null;"
-  , ""
-  , "var ters = async (x) => {"
-  , "  if (typeof x === 'string') return __kip_prim_ters(x);"
-  , "  if (__kip_lib_ters) return await __kip_lib_ters(x);"
-  , "  throw new Error('ters: unsupported type');"
-  , "};"
-  , ""
-  , "var birleşim = async (a, b) => {"
-  , "  if (typeof a === 'string' || typeof a === 'number') return __kip_prim_birleşim(a, b);"
-  , "  if (__kip_lib_birleşim) return await __kip_lib_birleşim(a, b);"
-  , "  throw new Error('birleşim: unsupported type');"
-  , "};"
-  , ""
-  , "var uzunluk = async (x) => {"
-  , "  if (typeof x === 'string') return __kip_prim_uzunluk(x);"
-  , "  if (__kip_lib_uzunluk) return await __kip_lib_uzunluk(x);"
-  , "  throw new Error('uzunluk: unsupported type');"
-  , "};"
-  , ""
-  , "var toplam = async (...args) => {"
-  , "  if (args.length === 2 && typeof args[0] === 'number') return __kip_prim_toplam(args[0], args[1]);"
-  , "  if (args.length === 2 && (__kip_is_float(args[0]) || __kip_is_float(args[1]))) return __kip_prim_toplam(args[0], args[1]);"
-  , "  if (args.length === 1 && __kip_lib_toplam) return await __kip_lib_toplam(args[0]);"
-  , "  if (__kip_lib_toplam) return await __kip_lib_toplam(...args);"
-  , "  return __kip_prim_toplam(...args);"
-  , "};"
-  , ""
-  , "var fark = async (...args) => {"
-  , "  if (args.length === 2 && typeof args[0] === 'number') return __kip_prim_fark(args[0], args[1]);"
-  , "  if (args.length === 2 && (__kip_is_float(args[0]) || __kip_is_float(args[1]))) return __kip_prim_fark(args[0], args[1]);"
-  , "  if (__kip_lib_fark) return await __kip_lib_fark(...args);"
-  , "  return __kip_prim_fark(...args);"
-  , "};"
-  , ""
-  , "// I/O wrappers - async for interactive browser support"
-  , "var oku = async (...args) => {"
-  , "  if (args.length === 0) return await __kip_prim_oku_stdin();"
-  , "  if (args.length === 1 && typeof args[0] === 'string') return __kip_prim_oku_dosya(args[0]);"
-  , "  throw new Error('oku: unsupported arguments');"
-  , "};"
-  , ""
-  , "var yaz = (...args) => {"
-  , "  if (args.length === 1) {"
-  , "    var val = __kip_is_float(args[0]) ? args[0].value : args[0];"
-  , "    var output = __kip_is_float(args[0]) && Number.isInteger(val) ? String(val) + '.0' : val;"
-  , "    if (__kip_is_browser && typeof window.__kip_write === 'function') {"
-  , "      window.__kip_write(output);"
-  , "    } else {"
-  , "      console.log(output);"
-  , "    }"
-  , "    return typeof bitimlik === 'function' ? bitimlik() : bitimlik;"
-  , "  }"
-  , "  if (args.length === 2 && typeof args[0] === 'string') {"
-  , "    return __kip_prim_yaz_dosya(args[0], args[1]);"
-  , "  }"
-  , "  if (__kip_lib_yaz) return __kip_lib_yaz(...args);"
-  , "  throw new Error('yaz: unsupported arguments');"
-  , "};"
-  ]
-
 -- | Generate JavaScript for a list of statements without the runtime prelude.
 --
 -- This is mainly useful for tests or embedding scenarios where the caller
--- manages prelude/wrapper injection manually.
+-- manages prelude injection manually.
 codegenStmts :: [Stmt Ann] -> Text
 codegenStmts stmts =
-  let ctx = buildCodegenCtx stmts
-      merged = mergeCompatibleFunctions stmts
+  let ctx = buildCodegenCtx Map.empty stmts
+      merged = mergeCompatibleFunctions ctx stmts
   in T.intercalate "\n\n" (map (codegenStmtWith ctx) merged)
 
 -- | Generate JavaScript for a single top-level statement.
@@ -497,7 +620,10 @@ codegenStmtWith ctx stmt =
     Defn name _ exp' ->
       "const " <> toJsIdent name <> " = " <> codegenExpWith ctx exp' <> ";"
     Function name args _ clauses _ ->
-      renderFunction ctx name args clauses
+      let argTys = map argType args
+          jsName = lookupOverloadName ctx name argTys
+          fnCtx = ctx { currentFunction = Just (name, normalizeSig argTys, jsName) }
+      in renderFunctionNamed fnCtx jsName args clauses
     PrimFunc name args _ _ ->
       "// primitive function " <> identText name <> "(" <> renderArgNames args <> ")"
     Load dirPath name ->
@@ -853,7 +979,9 @@ renderCall :: CodegenCtx -> Exp Ann -> [Exp Ann] -> Text
 renderCall ctx fn args =
   let fnText =
         case fn of
-          Var {} -> codegenExpWith ctx fn
+          Var {annExp} ->
+            let span' = annSpan annExp
+            in lookupCallName ctx span' fn args
           _ -> "(" <> codegenExpWith ctx fn <> ")"
       argsCsv = T.intercalate ", " (map (codegenExpWith ctx) args)
   in case partialSectionCall ctx fn fnText args of
