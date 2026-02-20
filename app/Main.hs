@@ -6,11 +6,11 @@
 module Main where
 
 import System.Exit
-import System.Directory (doesFileExist, canonicalizePath, doesDirectoryExist, listDirectory, getHomeDirectory, createDirectoryIfMissing)
+import System.Directory (doesFileExist, canonicalizePath, doesDirectoryExist, listDirectory, getHomeDirectory, createDirectoryIfMissing, getCurrentDirectory)
 import Paths_kip (version, getDataFileName)
 import Data.List
 import Options.Applicative hiding (ParseError)
-import System.FilePath ((</>), joinPath, takeDirectory, takeExtension)
+import System.FilePath ((</>), joinPath, takeDirectory, takeExtension, replaceExtension, makeRelative, splitDirectories)
 
 import Control.Monad (forM, forM_, foldM, when, unless, filterM)
 import Control.Monad.IO.Class
@@ -46,7 +46,7 @@ import Kip.Render
 import Kip.Cache
 import Repl.Steps (formatStepsStreaming, setTopCaseNom, shouldSkipInfinitiveSteps, stripStepsCopulaTRmorph)
 import Kip.Runner (Lang(..), renderEvalError)
-import Kip.Codegen.JS (codegenProgram)
+import Kip.Codegen.JS (codegenProgram, codegenRuntime, codegenStmtsInProgram, definedJsNames, definedJsNamesInProgram)
 import Data.Word
 import Crypto.Hash.SHA256 (hash)
 import qualified Data.ByteString as BS
@@ -83,6 +83,7 @@ data CliOptions =
     { optMode :: CliMode
     , optFiles :: [FilePath]
     , optIncludeDirs :: [FilePath]
+    , optOutDir :: Maybe FilePath
     , optLang :: Lang
     , optNoPrelude :: Bool
     }
@@ -153,6 +154,7 @@ type AppM = ReaderT RenderCtx IO
 type ReplM = ReaderT RenderCtx (InputT IO)
 -- | Rendering helper context.
 type RenderM = ReaderT RenderCtx IO
+type TaggedStmt = (FilePath, Stmt Ann)
 
 -- | Turkish parse error wrapper for Megaparsec rendering.
 newtype ParserErrorTr = ParserErrorTr ParserError
@@ -920,10 +922,57 @@ main = do
           -- Parse and type-check files, collect all statements
           (codegenPst, codegenTC, codegenLoaded) <-
             runReaderT (loadPreludeCodegenState (optNoPrelude opts) moduleDirs fsm upsCache downsCache) renderCtx
-          (finalTC, allStmts) <- runReaderT (codegenFiles codegenPst codegenTC moduleDirs codegenLoaded (optFiles opts)) renderCtx
+          (finalTC, taggedStmts) <- runReaderT (codegenFilesTagged codegenPst codegenTC moduleDirs codegenLoaded (optFiles opts)) renderCtx
           -- Emit JS and print
           let resolvMap = Map.fromList (tcResolvedSigs finalTC)
+              allStmts = map snd taggedStmts
           TIO.putStrLn (codegenProgram resolvMap allStmts)
+          exitSuccess
+        "js-modules" -> do
+          (renderCtx, moduleDirs, _, fsm, upsCache, downsCache) <- initRuntime
+          outDir <- case optOutDir opts of
+            Just dir -> return dir
+            Nothing -> die "--codegen js-modules requires --outdir <dir>"
+          (codegenPst, codegenTC, codegenLoaded) <-
+            runReaderT (loadPreludeCodegenState (optNoPrelude opts) moduleDirs fsm upsCache downsCache) renderCtx
+          (finalTC, taggedStmts) <- runReaderT (codegenFilesTagged codegenPst codegenTC moduleDirs codegenLoaded (optFiles opts)) renderCtx
+          let resolvMap = Map.fromList (tcResolvedSigs finalTC)
+          cwd <- getCurrentDirectory
+          entryAbs <- mapM canonicalizePath (optFiles opts)
+          let modulePaths = nub (map fst taggedStmts)
+              allStmts = map snd taggedStmts
+              allDefs = definedJsNames resolvMap allStmts
+              runtimeDefs = runtimeGlobalNames
+          createDirectoryIfMissing True outDir
+          TIO.writeFile (outDir </> "__kip_runtime.mjs") codegenRuntime
+          forM_ modulePaths $ \modulePath -> do
+            let rel = makeRelative cwd modulePath
+                moduleOut = outDir </> replaceExtension rel "mjs"
+                stmts0 = [stmt | (p, stmt) <- taggedStmts, p == modulePath]
+                isEntry = modulePath `elem` entryAbs
+                stmts = if isEntry then stmts0 else filter (not . isExpStmt) stmts0
+                localDefs = definedJsNamesInProgram resolvMap allStmts stmts0
+                importedDefs = [n | n <- nub (runtimeDefs ++ allDefs), n `notElem` localDefs]
+                runtimeRel = runtimeImportRel rel
+                prelude =
+                  T.unlines $
+                    [ "import './" <> runtimeRel <> "';"
+                    , "const __kip_global = globalThis;"
+                    ]
+                    ++ [ "const " <> n <> " = __kip_global[" <> jsStringLiteral n <> "];" | n <- importedDefs ]
+                body = codegenStmtsInProgram resolvMap allStmts stmts
+                publish =
+                  if null localDefs
+                    then ""
+                    else "Object.assign(__kip_global, { " <> T.intercalate ", " localDefs <> " });\n"
+                content = prelude <> "\n" <> body <> "\n\n" <> publish
+            createDirectoryIfMissing True (takeDirectory moduleOut)
+            TIO.writeFile moduleOut content
+          let importLines =
+                "import './__kip_runtime.mjs';"
+                : [ "import './" <> toPosixRel outDir cwd p <> "';" | p <- modulePaths ]
+              entryContent = T.unlines (importLines ++ ["if (typeof __kip_close_stdin === 'function') __kip_close_stdin();"])
+          TIO.writeFile (outDir </> "entry.mjs") entryContent
           exitSuccess
         _ ->
           die . T.unpack =<< runReaderT (render (MsgUnknownCodegenTarget target)) basicCtx
@@ -974,6 +1023,7 @@ main = do
           <$> modeParser
           <*> many (strArgument (metavar "FILE..."))
           <*> many (strOption (short 'I' <> metavar "DIR" <> help "Additional module directory (used by `temeli yükle` etc.)"))
+          <*> optional (strOption (long "outdir" <> metavar "DIR" <> help "Output directory for codegen targets that emit files"))
           <*> langParser
           <*> switch (long "no-prelude" <> help "Disable automatic loading of lib/giriş.kip")
 
@@ -1377,14 +1427,24 @@ main = do
                  -> [FilePath] -- ^ Files to codegen.
                  -> AppM (TCState, [Stmt Ann]) -- ^ Final TC state and collected statements.
     codegenFiles basePst baseTC moduleDirs loaded files = do
+      (finalTC, tagged) <- codegenFilesTagged basePst baseTC moduleDirs loaded files
+      return (finalTC, map snd tagged)
+
+    codegenFilesTagged :: ParserState
+                       -> TCState
+                       -> [FilePath]
+                       -> Set FilePath
+                       -> [FilePath]
+                       -> AppM (TCState, [TaggedStmt])
+    codegenFilesTagged basePst baseTC moduleDirs loaded files = do
       (_, finalTC, stmts, _) <- foldM' (collectFileStmts moduleDirs) (basePst, baseTC, [], loaded) files
       return (finalTC, stmts)
 
     -- | Collect statements from a single file (recursively handles Load).
     collectFileStmts :: [FilePath] -- ^ Module search paths.
-                     -> (ParserState, TCState, [Stmt Ann], Set FilePath) -- ^ Current state.
+                     -> (ParserState, TCState, [TaggedStmt], Set FilePath) -- ^ Current state.
                      -> FilePath -- ^ File to process.
-                     -> AppM (ParserState, TCState, [Stmt Ann], Set FilePath) -- ^ Updated state.
+                     -> AppM (ParserState, TCState, [TaggedStmt], Set FilePath) -- ^ Updated state.
     collectFileStmts moduleDirs (pst, tcSt, accStmts, loaded) path = do
       exists <- liftIO (doesFileExist path)
       unless exists $ do
@@ -1405,7 +1465,7 @@ main = do
                   tcCached = mergeTCState tcSt (fromCachedTCState (cachedTC cached))
                   stmts = cachedTypedStmts cached
               (_, _, newStmts, loaded'') <-
-                foldM' (collectCachedStmt moduleDirs) (pstCached, tcCached, [], loaded') stmts
+                foldM' (collectCachedStmt moduleDirs absPath) (pstCached, tcCached, [], loaded') stmts
               return (pstCached, tcCached, accStmts ++ newStmts, loaded'')
             Nothing -> do
               input <- liftIO (TIO.readFile path)
@@ -1423,7 +1483,7 @@ main = do
                       liftIO (die (T.unpack msg))
                     Right (_, tcStWithDecls) -> do
                       -- Type-check each statement
-                      (pst'', tcSt'', newStmts, loaded') <- foldM' (collectStmt moduleDirs path paramTyCons (parserTyMods pst') input)
+                      (pst'', tcSt'', newStmts, loaded') <- foldM' (collectStmt moduleDirs absPath paramTyCons (parserTyMods pst') input)
                         (pst', tcStWithDecls, [], Set.insert absPath loaded) stmts
                       return (pst'', tcSt'', accStmts ++ newStmts, loaded')
 
@@ -1433,9 +1493,9 @@ main = do
                 -> [Identifier] -- ^ Type parameter names for error messages.
                 -> [(Identifier, [Identifier])] -- ^ Type modifier expansions.
                 -> Text -- ^ Source input.
-                -> (ParserState, TCState, [Stmt Ann], Set FilePath) -- ^ Current state.
+                -> (ParserState, TCState, [TaggedStmt], Set FilePath) -- ^ Current state.
                 -> Stmt Ann -- ^ Statement to process.
-                -> AppM (ParserState, TCState, [Stmt Ann], Set FilePath) -- ^ Updated state.
+                -> AppM (ParserState, TCState, [TaggedStmt], Set FilePath) -- ^ Updated state.
     collectStmt moduleDirs currentPath paramTyCons tyMods source (pst, tcSt, accStmts, loaded) stmt =
       case stmt of
         Load dirPath name -> do
@@ -1451,20 +1511,21 @@ main = do
               msg <- renderMsg (MsgTCError tcErr (Just source) paramTyCons tyMods)
               liftIO (die (T.unpack msg))
             Right (stmt', tcSt') ->
-              return (pst, tcSt', accStmts ++ [stmt'], loaded)
+              return (pst, tcSt', accStmts ++ [(currentPath, stmt')], loaded)
 
     -- | Collect a cached statement, expanding Load statements without re-typechecking.
     collectCachedStmt :: [FilePath] -- ^ Module search paths.
-                      -> (ParserState, TCState, [Stmt Ann], Set FilePath) -- ^ Current state.
+                      -> FilePath -- ^ Current module file path.
+                      -> (ParserState, TCState, [TaggedStmt], Set FilePath) -- ^ Current state.
                       -> Stmt Ann -- ^ Statement to process.
-                      -> AppM (ParserState, TCState, [Stmt Ann], Set FilePath) -- ^ Updated state.
-    collectCachedStmt moduleDirs (pst, tcSt, accStmts, loaded) stmt =
+                      -> AppM (ParserState, TCState, [TaggedStmt], Set FilePath) -- ^ Updated state.
+    collectCachedStmt moduleDirs currentPath (pst, tcSt, accStmts, loaded) stmt =
       case stmt of
         Load dirPath name -> do
           path <- resolveModulePath moduleDirs dirPath name
           collectFileStmts moduleDirs (pst, tcSt, accStmts, loaded) path
         _ ->
-          return (pst, tcSt, accStmts ++ [stmt], loaded)
+          return (pst, tcSt, accStmts ++ [(currentPath, stmt)], loaded)
 
     -- | Run multiple files through parsing, type checking, and evaluation.
     runFiles :: Bool -- ^ Whether to show definitions.
@@ -1897,6 +1958,82 @@ main = do
     takeDirectories :: FilePath -- ^ Path to split.
                     -> [FilePath] -- ^ Parent directories.
     takeDirectories path = [takeDirectory path]
+
+    isExpStmt :: Stmt Ann -> Bool
+    isExpStmt ExpStmt {} = True
+    isExpStmt _ = False
+
+    toPosixRel :: FilePath -> FilePath -> FilePath -> Text
+    toPosixRel outDir cwd modulePath =
+      let rel = makeRelative cwd modulePath
+          moduleOut = outDir </> replaceExtension rel "mjs"
+      in T.pack (map (\c -> if c == '\\' then '/' else c) (makeRelative outDir moduleOut))
+
+    jsStringLiteral :: Text -> Text
+    jsStringLiteral txt =
+      "\"" <> T.concatMap esc txt <> "\""
+      where
+        esc '"' = "\\\""
+        esc '\\' = "\\\\"
+        esc '\n' = "\\n"
+        esc '\r' = "\\r"
+        esc '\t' = "\\t"
+        esc c = T.singleton c
+
+    runtimeGlobalNames :: [Text]
+    runtimeGlobalNames =
+      [ "__kip_close_stdin"
+      , "__kip_call"
+      , "__kip_float"
+      , "__kip_is_float"
+      , "__kip_num"
+      , "__kip_prim_ters"
+      , "__kip_prim_birleşim"
+      , "__kip_prim_uzunluk"
+      , "__kip_prim_toplam"
+      , "__kip_prim_fark"
+      , "__kip_prim_oku_stdin"
+      , "__kip_prim_oku_dosya"
+      , "__kip_prim_yaz_dosya"
+      , "doğru"
+      , "yanlış"
+      , "varlık"
+      , "yokluk"
+      , "bitimlik"
+      , "yaz"
+      , "çarpım"
+      , "fark"
+      , "bölüm"
+      , "kalan"
+      , "karekök"
+      , "radyan"
+      , "derece"
+      , "pi_sayısı"
+      , "taban"
+      , "tavan"
+      , "tam_sayı_ondalık_sayı_hali"
+      , "sayı_çek"
+      , "eşitlik"
+      , "küçüklük"
+      , "küçük_eşitlik"
+      , "büyüklük"
+      , "büyük_eşitlik"
+      , "dizge_hal"
+      , "tam_sayı_hal"
+      , "ondalık_sayı_hal"
+      ]
+
+    runtimeImportRel :: FilePath -> Text
+    runtimeImportRel relPath =
+      let moduleRel = replaceExtension relPath "mjs"
+          relDir = takeDirectory moduleRel
+          depth =
+            case relDir of
+              "." -> 0
+              "" -> 0
+              _ -> length (splitDirectories relDir)
+          parts = replicate depth ".." ++ ["__kip_runtime.mjs"]
+      in T.pack (intercalate "/" parts)
 
     -- | Load the prelude module into a parser state.
     loadPreludeParserState :: [FilePath] -- ^ Module search paths.

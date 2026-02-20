@@ -32,6 +32,11 @@ debuggability high and to keep generated code close to the source language model
 -}
 module Kip.Codegen.JS
   ( codegenProgram
+  , codegenRuntime
+  , codegenStmtsInProgram
+  , codegenStmtsWithResolved
+  , definedJsNamesInProgram
+  , definedJsNames
   , codegenStmts
   , codegenStmt
   , codegenExp
@@ -320,6 +325,78 @@ codegenProgram resolvMap stmts =
         ]
   in jsPrimitives <> "\n\n" <> wrapped
 
+codegenRuntime :: Text
+codegenRuntime =
+  jsPrimitives
+    <> "\n"
+    <> T.unlines
+      [ "Object.assign(globalThis, {"
+      , "  __kip_close_stdin,"
+      , "  __kip_call,"
+      , "  __kip_float,"
+      , "  __kip_is_float,"
+      , "  __kip_num,"
+      , "  __kip_prim_ters,"
+      , "  __kip_prim_birleşim,"
+      , "  __kip_prim_uzunluk,"
+      , "  __kip_prim_toplam,"
+      , "  __kip_prim_fark,"
+      , "  __kip_prim_oku_stdin,"
+      , "  __kip_prim_oku_dosya,"
+      , "  __kip_prim_yaz_dosya,"
+      , "  doğru,"
+      , "  yanlış,"
+      , "  varlık,"
+      , "  yokluk,"
+      , "  bitimlik,"
+      , "  yaz,"
+      , "  çarpım,"
+      , "  fark,"
+      , "  bölüm,"
+      , "  kalan,"
+      , "  karekök,"
+      , "  radyan,"
+      , "  derece,"
+      , "  pi_sayısı,"
+      , "  taban,"
+      , "  tavan,"
+      , "  tam_sayı_ondalık_sayı_hali,"
+      , "  sayı_çek,"
+      , "  eşitlik,"
+      , "  küçüklük,"
+      , "  küçük_eşitlik,"
+      , "  büyüklük,"
+      , "  büyük_eşitlik,"
+      , "  dizge_hal,"
+      , "  tam_sayı_hal,"
+      , "  ondalık_sayı_hal"
+      , "});"
+      ]
+
+codegenStmtsInProgram :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> [Stmt Ann] -> Text
+codegenStmtsInProgram resolvMap programStmts stmts =
+  let ctx = buildCodegenCtx resolvMap programStmts
+      merged = mergeCompatibleFunctions ctx stmts
+  in T.intercalate "\n\n" (map (codegenStmtWith ctx) merged)
+
+codegenStmtsWithResolved :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> Text
+codegenStmtsWithResolved resolvMap stmts =
+  codegenStmtsInProgram resolvMap stmts stmts
+
+definedJsNames :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> [Text]
+definedJsNames resolvMap stmts =
+  definedJsNamesInProgram resolvMap stmts stmts
+
+definedJsNamesInProgram :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> [Stmt Ann] -> [Text]
+definedJsNamesInProgram resolvMap programStmts stmts =
+  let ctx = buildCodegenCtx resolvMap programStmts
+      merged = mergeCompatibleFunctions ctx stmts
+  in foldl' add [] (concatMap (stmtDefinedNames ctx) merged)
+  where
+    add acc name
+      | name `elem` acc = acc
+      | otherwise = acc ++ [name]
+
 -- | Check if a statement is a function definition (including types).
 isFunctionDef :: Stmt Ann -> Bool
 isFunctionDef stmt =
@@ -602,10 +679,23 @@ jsPrimitives = T.unlines
 -- This is mainly useful for tests or embedding scenarios where the caller
 -- manages prelude injection manually.
 codegenStmts :: [Stmt Ann] -> Text
-codegenStmts stmts =
-  let ctx = buildCodegenCtx Map.empty stmts
-      merged = mergeCompatibleFunctions ctx stmts
-  in T.intercalate "\n\n" (map (codegenStmtWith ctx) merged)
+codegenStmts = codegenStmtsWithResolved Map.empty
+
+stmtDefinedNames :: CodegenCtx -> Stmt Ann -> [Text]
+stmtDefinedNames ctx stmt =
+  case stmt of
+    Defn name _ _ ->
+      [toJsIdent name]
+    Function name args _ _ _ ->
+      [lookupOverloadName ctx name (map argType args)]
+    NewType name _ ctors ->
+      let ctorNames = [toJsIdent ctorName | ((ctorName, _), _) <- ctors]
+      in case ctors of
+           [((ctorName, _), [])] | identText name /= identText ctorName ->
+             ctorNames ++ [toJsIdent name]
+           _ -> ctorNames
+    _ ->
+      []
 
 -- | Generate JavaScript for a single top-level statement.
 --

@@ -5,7 +5,7 @@ import Control.Exception (bracket)
 import Data.List (isInfixOf, sort, stripPrefix)
 import Data.Maybe (fromMaybe)
 import GHC.Conc (getNumProcessors)
-import System.Directory (doesFileExist, doesDirectoryExist, findExecutable, getTemporaryDirectory, listDirectory, removeFile)
+import System.Directory (doesFileExist, doesDirectoryExist, findExecutable, getTemporaryDirectory, listDirectory, removeFile, createDirectoryIfMissing)
 import System.Environment (lookupEnv, setEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), replaceExtension, takeExtension)
@@ -32,6 +32,9 @@ main = do
       jsTests = case nodePath of
         Nothing -> []
         Just node -> map (mkJsTest kipPath node) succeedFiles
+      jsModulesTests = case nodePath of
+        Nothing -> []
+        Just node -> [mkJsModulesTest kipPath node ("tests" </> "succeed" </> "tam-sayı-toplamı.kip")]
       jsGroupName = case nodePath of
         Nothing -> "js (skipped: node missing)"
         Just _ -> "js"
@@ -50,6 +53,7 @@ main = do
         , testGroup "fail" failTests
         , testGroup "repl" replTests
         , testGroup jsGroupName jsTests
+        , testGroup "js-modules" jsModulesTests
         , testGroup lspGroupName lspTests
         ]
 
@@ -184,6 +188,40 @@ mkJsTest kipPath nodePath path =
             case nodeExit of
               ExitFailure _ ->
                 assertFailure (path ++ " failed under node:\n" ++ nodeOut ++ nodeErr)
+              ExitSuccess -> do
+                let expected = normalizeLines kipOut
+                    actual = normalizeLines nodeOut
+                assertEqual (renderOutputMismatch expected actual) expected actual
+
+mkJsModulesTest :: FilePath -> FilePath -> FilePath -> TestTree
+mkJsModulesTest kipPath nodePath path =
+  testCase ("js-modules:" ++ path) $ do
+    inputText <- readIfExists (replaceExtension path "in")
+    let stdinText = fromMaybe "" inputText
+    (exitCode, kipOut, kipErr) <- readProcessWithExitCode kipPath ["--exec", path] stdinText
+    case exitCode of
+      ExitFailure _ ->
+        assertFailure (path ++ " failed in kip --exec:\n" ++ kipOut ++ kipErr)
+      ExitSuccess -> do
+        tempDir <- getTemporaryDirectory
+        (tmpPath, tmpHandle) <- openTempFile tempDir "kip-js-modules-"
+        hClose tmpHandle
+        removeFile tmpPath
+        let outDir = tmpPath
+        createDirectoryIfMissing True outDir
+        (jsExit, _, jsErr) <-
+          readProcessWithExitCode
+            kipPath
+            ["--codegen", "js-modules", "--outdir", outDir, "--no-prelude", "lib/giriş.kip", path]
+            ""
+        case jsExit of
+          ExitFailure _ ->
+            assertFailure (path ++ " failed in kip --codegen js-modules:\n" ++ jsErr)
+          ExitSuccess -> do
+            (nodeExit, nodeOut, nodeErr) <- readProcessWithExitCode nodePath [outDir </> "entry.mjs"] stdinText
+            case nodeExit of
+              ExitFailure _ ->
+                assertFailure (path ++ " failed under node (js-modules):\n" ++ nodeOut ++ nodeErr)
               ExitSuccess -> do
                 let expected = normalizeLines kipOut
                     actual = normalizeLines nodeOut
