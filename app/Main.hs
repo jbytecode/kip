@@ -10,7 +10,7 @@ import System.Directory (doesFileExist, canonicalizePath, doesDirectoryExist, li
 import Paths_kip (version, getDataFileName)
 import Data.List
 import Options.Applicative hiding (ParseError)
-import System.FilePath ((</>), joinPath, takeDirectory, takeExtension, replaceExtension, makeRelative, splitDirectories)
+import System.FilePath ((</>), joinPath, takeDirectory, takeExtension, replaceExtension, makeRelative, splitDirectories, normalise)
 
 import Control.Monad (forM, forM_, foldM, when, unless, filterM)
 import Control.Monad.IO.Class
@@ -933,6 +933,8 @@ main = do
           outDir <- case optOutDir opts of
             Just dir -> return dir
             Nothing -> die "--codegen js-modules requires --outdir <dir>"
+          createDirectoryIfMissing True outDir
+          outDirAbs <- canonicalizePath outDir
           (codegenPst, codegenTC, codegenLoaded) <-
             runReaderT (loadPreludeCodegenState (optNoPrelude opts) moduleDirs fsm upsCache downsCache) renderCtx
           (finalTC, taggedStmts) <- runReaderT (codegenFilesTagged codegenPst codegenTC moduleDirs codegenLoaded (optFiles opts)) renderCtx
@@ -941,38 +943,57 @@ main = do
           entryAbs <- mapM canonicalizePath (optFiles opts)
           let modulePaths = nub (map fst taggedStmts)
               allStmts = map snd taggedStmts
-              allDefs = definedJsNames resolvMap allStmts
+              moduleDefs =
+                [ (p, definedJsNamesInProgram resolvMap allStmts [s | (p', s) <- taggedStmts, p' == p, not (isLoadStmt s)])
+                | p <- modulePaths
+                ]
+              allDefs = concatMap snd moduleDefs
               runtimeDefs = runtimeGlobalNames
-          createDirectoryIfMissing True outDir
-          TIO.writeFile (outDir </> "__kip_runtime.mjs") codegenRuntime
+              providers = foldl' addProvider [] [(name, p) | (p, names) <- moduleDefs, name <- names]
+              addProvider acc (name, p)
+                | any (\(n, _) -> n == name) acc = acc
+                | otherwise = acc ++ [(name, p)]
+          TIO.writeFile (outDirAbs </> "__kip_runtime.mjs") codegenRuntime
           forM_ modulePaths $ \modulePath -> do
             let rel = makeRelative cwd modulePath
-                moduleOut = outDir </> replaceExtension rel "mjs"
+                moduleOut = outDirAbs </> replaceExtension rel "mjs"
                 stmts0 = [stmt | (p, stmt) <- taggedStmts, p == modulePath]
                 isEntry = modulePath `elem` entryAbs
-                stmts = if isEntry then stmts0 else filter (not . isExpStmt) stmts0
-                localDefs = definedJsNamesInProgram resolvMap allStmts stmts0
-                importedDefs = [n | n <- nub (runtimeDefs ++ allDefs), n `notElem` localDefs]
-                runtimeRel = runtimeImportRel rel
-                prelude =
-                  T.unlines $
-                    [ "import './" <> runtimeRel <> "';"
-                    , "const __kip_global = globalThis;"
-                    ]
-                    ++ [ "const " <> n <> " = __kip_global[" <> jsStringLiteral n <> "];" | n <- importedDefs ]
+                codeStmts0 = filter (not . isLoadStmt) stmts0
+                stmts = if isEntry then codeStmts0 else filter (not . isExpStmt) codeStmts0
+                localDefs = definedJsNamesInProgram resolvMap allStmts codeStmts0
+                importedDefs =
+                  [ (n, p)
+                  | (n, p) <- providers
+                  , p /= modulePath
+                  , n `notElem` localDefs
+                  , n `notElem` runtimeDefs
+                  ]
+                runtimeImports = [n | n <- runtimeDefs, n `notElem` localDefs]
+                importByModule = foldl' addImport Map.empty importedDefs
+                addImport acc (name, p) = Map.insertWith (++) p [name] acc
+                runtimeImport =
+                  "import { " <> T.intercalate ", " runtimeImports <> " } from './"
+                    <> importRelPath moduleOut (outDirAbs </> "__kip_runtime.mjs") <> "';"
+                depImports =
+                  [ "import { " <> T.intercalate ", " (nub names) <> " } from './"
+                      <> importRelPath moduleOut (outDirAbs </> replaceExtension (makeRelative cwd p) "mjs")
+                      <> "';"
+                  | (p, names) <- Map.toList importByModule
+                  ]
                 body = codegenStmtsInProgram resolvMap allStmts stmts
-                publish =
+                exportLine =
                   if null localDefs
                     then ""
-                    else "Object.assign(__kip_global, { " <> T.intercalate ", " localDefs <> " });\n"
-                content = prelude <> "\n" <> body <> "\n\n" <> publish
+                    else "export { " <> T.intercalate ", " localDefs <> " };"
+                content = T.unlines (runtimeImport : depImports) <> "\n" <> body <> "\n\n" <> exportLine <> "\n"
             createDirectoryIfMissing True (takeDirectory moduleOut)
             TIO.writeFile moduleOut content
           let importLines =
-                "import './__kip_runtime.mjs';"
-                : [ "import './" <> toPosixRel outDir cwd p <> "';" | p <- modulePaths ]
-              entryContent = T.unlines (importLines ++ ["if (typeof __kip_close_stdin === 'function') __kip_close_stdin();"])
-          TIO.writeFile (outDir </> "entry.mjs") entryContent
+                "import { __kip_close_stdin } from './__kip_runtime.mjs';"
+                : [ "import './" <> toPosixRel outDirAbs cwd p <> "';" | p <- entryAbs ]
+              entryContent = T.unlines (importLines ++ ["__kip_close_stdin();"])
+          TIO.writeFile (outDirAbs </> "entry.mjs") entryContent
           exitSuccess
         _ ->
           die . T.unpack =<< runReaderT (render (MsgUnknownCodegenTarget target)) basicCtx
@@ -1023,7 +1044,7 @@ main = do
           <$> modeParser
           <*> many (strArgument (metavar "FILE..."))
           <*> many (strOption (short 'I' <> metavar "DIR" <> help "Additional module directory (used by `temeli yükle` etc.)"))
-          <*> optional (strOption (long "outdir" <> metavar "DIR" <> help "Output directory for codegen targets that emit files"))
+          <*> optional (strOption (long "outdir" <> metavar "DIR" <> help "Output directory (required for --codegen js-modules)"))
           <*> langParser
           <*> switch (long "no-prelude" <> help "Disable automatic loading of lib/giriş.kip")
 
@@ -1055,7 +1076,7 @@ main = do
         <|> (ModeCodegen . T.pack <$> strOption
               ( long "codegen"
               <> metavar "TARGET"
-              <> help "Codegen target for the given files (e.g. js)"
+              <> help "Codegen target: js (single stdout bundle) or js-modules (ES modules in --outdir)"
               ))
         <|> pure ModeRepl
     -- | Locate the morphology FST data file or exit.
@@ -1502,8 +1523,8 @@ main = do
           path <- resolveModulePath moduleDirs dirPath name
           absPath <- liftIO (canonicalizePath path)
           if Set.member absPath loaded
-            then return (pst, tcSt, accStmts, loaded)
-            else collectFileStmts moduleDirs (pst, tcSt, accStmts, loaded) path
+            then return (pst, tcSt, accStmts ++ [(currentPath, stmt)], loaded)
+            else collectFileStmts moduleDirs (pst, tcSt, accStmts ++ [(currentPath, stmt)], loaded) path
         _ -> do
           -- Type-check the statement
           liftIO (runTCM (tcStmt stmt) tcSt) >>= \case
@@ -1523,7 +1544,7 @@ main = do
       case stmt of
         Load dirPath name -> do
           path <- resolveModulePath moduleDirs dirPath name
-          collectFileStmts moduleDirs (pst, tcSt, accStmts, loaded) path
+          collectFileStmts moduleDirs (pst, tcSt, accStmts ++ [(currentPath, stmt)], loaded) path
         _ ->
           return (pst, tcSt, accStmts ++ [(currentPath, stmt)], loaded)
 
@@ -1963,22 +1984,15 @@ main = do
     isExpStmt ExpStmt {} = True
     isExpStmt _ = False
 
+    isLoadStmt :: Stmt Ann -> Bool
+    isLoadStmt Load {} = True
+    isLoadStmt _ = False
+
     toPosixRel :: FilePath -> FilePath -> FilePath -> Text
     toPosixRel outDir cwd modulePath =
       let rel = makeRelative cwd modulePath
           moduleOut = outDir </> replaceExtension rel "mjs"
       in T.pack (map (\c -> if c == '\\' then '/' else c) (makeRelative outDir moduleOut))
-
-    jsStringLiteral :: Text -> Text
-    jsStringLiteral txt =
-      "\"" <> T.concatMap esc txt <> "\""
-      where
-        esc '"' = "\\\""
-        esc '\\' = "\\\\"
-        esc '\n' = "\\n"
-        esc '\r' = "\\r"
-        esc '\t' = "\\t"
-        esc c = T.singleton c
 
     runtimeGlobalNames :: [Text]
     runtimeGlobalNames =
@@ -2023,17 +2037,18 @@ main = do
       , "ondalık_sayı_hal"
       ]
 
-    runtimeImportRel :: FilePath -> Text
-    runtimeImportRel relPath =
-      let moduleRel = replaceExtension relPath "mjs"
-          relDir = takeDirectory moduleRel
-          depth =
-            case relDir of
-              "." -> 0
-              "" -> 0
-              _ -> length (splitDirectories relDir)
-          parts = replicate depth ".." ++ ["__kip_runtime.mjs"]
-      in T.pack (intercalate "/" parts)
+    importRelPath :: FilePath -> FilePath -> Text
+    importRelPath fromAbs toAbs =
+      let fromDirs = splitDirectories (normalise (takeDirectory fromAbs))
+          toDirs = splitDirectories (normalise toAbs)
+          commonLen = length (takeWhile id (zipWith (==) fromDirs toDirs))
+          up = replicate (length fromDirs - commonLen) ".."
+          down = drop commonLen toDirs
+          rel =
+            if null up && null down
+              then "."
+              else joinPath (up ++ down)
+      in T.pack (map (\c -> if c == '\\' then '/' else c) rel)
 
     -- | Load the prelude module into a parser state.
     loadPreludeParserState :: [FilePath] -- ^ Module search paths.

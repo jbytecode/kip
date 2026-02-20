@@ -205,6 +205,11 @@ kip --build path/to/file-or-dir
 # Generate JavaScript
 kip --codegen js path/to/file.kip
 
+# Generate strict ES modules into a directory
+kip --codegen js-modules --outdir ./out path/to/file.kip
+# then run:
+node ./out/entry.mjs
+
 # Choose diagnostic language
 kip --lang tr --exec path/to/file.kip
 kip --lang en --exec path/to/file.kip
@@ -219,6 +224,11 @@ For the non-interactive playground runner binary:
 stack exec kip-playground -- --exec path/to/file.kip
 stack exec kip-playground -- --codegen js path/to/file.kip
 ```
+
+`js-modules` output layout:
+- `__kip_runtime.mjs` - runtime and primitive exports
+- one `.mjs` per input/dependency `.kip` module
+- `entry.mjs` - entrypoint that imports requested input modules
 
 ### Language Server (kip-lsp)
 

@@ -59,9 +59,11 @@ data CodegenCtx = MkCodegenCtx
   , currentFunction :: Maybe (Identifier, [Ty Ann], Text)
   }
 
+-- | Empty codegen context used by standalone helpers/tests.
 emptyCodegenCtx :: CodegenCtx
 emptyCodegenCtx = MkCodegenCtx Set.empty Map.empty Map.empty Map.empty Nothing
 
+-- | Build codegen context from resolved call signatures and program statements.
 buildCodegenCtx :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> CodegenCtx
 buildCodegenCtx resolvMap stmts =
   let arityMap = foldl collectArity Map.empty stmts
@@ -155,6 +157,7 @@ fallbackCallName ctx fallback args =
                    [] -> toJsIdent varName
     _ -> codegenExpWith ctx fallback
 
+-- | Try resolving a call to the currently-emitted function for recursion.
 resolveCurrentFunction :: CodegenCtx -> [Identifier] -> [Exp Ann] -> Maybe Text
 resolveCurrentFunction ctx candidates args =
   case currentFunction ctx of
@@ -164,6 +167,7 @@ resolveCurrentFunction ctx candidates args =
           Just jsName
     _ -> Nothing
 
+-- | Fallback call resolution using candidate identifiers and lightweight hints.
 resolveByCandidates :: CodegenCtx -> [Identifier] -> [Exp Ann] -> Maybe Text
 resolveByCandidates ctx candidates args =
   let raw = concatMap (callTargetsForIdent ctx) candidates
@@ -182,6 +186,7 @@ resolveByCandidates ctx candidates args =
                   _ -> Nothing
            else Nothing
 
+-- | Collect all possible JS targets for an identifier in the current program.
 callTargetsForIdent :: CodegenCtx -> Identifier -> [([Ty Ann], Text)]
 callTargetsForIdent ctx ident =
   let overloaded =
@@ -196,6 +201,7 @@ callTargetsForIdent ctx ident =
         ]
   in uniqTargets (overloaded ++ prims)
 
+-- | Resolve section-call targets using fixed-argument case/type hints.
 sectionTargetsForIdent :: CodegenCtx -> Exp Ann -> Identifier -> [([Ty Ann], Text)]
 sectionTargetsForIdent ctx fixedArg ident =
   let fixedIdx = if annCase (annExp fixedArg) == Ins then 0 else 1
@@ -208,6 +214,7 @@ sectionTargetsForIdent ctx fixedArg ident =
           Nothing -> targets
   in uniqTargets hinted
 
+-- | Filter candidate signatures by obvious literal argument hints.
 filterByArgHints :: [([Ty Ann], Text)] -> [Exp Ann] -> [([Ty Ann], Text)]
 filterByArgHints targets args =
   let hints = [(ix, ty) | (ix, arg) <- zip [0 ..] args, Just ty <- [inferSimpleTy arg]]
@@ -217,6 +224,7 @@ filterByArgHints targets args =
 
 data SimpleTy = SimpleInt | SimpleFloat | SimpleString
 
+-- | Infer a coarse type from syntax-only expression forms.
 inferSimpleTy :: Exp Ann -> Maybe SimpleTy
 inferSimpleTy exp' =
   case exp' of
@@ -225,6 +233,7 @@ inferSimpleTy exp' =
     StrLit {} -> Just SimpleString
     _ -> Nothing
 
+-- | Check whether a signature position matches an inferred coarse type.
 sigMatchesHint :: [Ty Ann] -> Int -> SimpleTy -> Bool
 sigMatchesHint sig idx hint
   | idx < 0 || idx >= length sig = False
@@ -235,6 +244,7 @@ sigMatchesHint sig idx hint
         (TyString {}, SimpleString) -> True
         _ -> False
 
+-- | Deduplicate target pairs while preserving order.
 uniqTargets :: [([Ty Ann], Text)] -> [([Ty Ann], Text)]
 uniqTargets = foldl' add []
   where
@@ -242,6 +252,7 @@ uniqTargets = foldl' add []
       | item `elem` acc = acc
       | otherwise = acc ++ [item]
 
+-- | Deduplicate identifier candidates while preserving order.
 uniqIdents :: [Identifier] -> [Identifier]
 uniqIdents = foldl' add []
   where
@@ -249,6 +260,7 @@ uniqIdents = foldl' add []
       | ident `elem` acc = acc
       | otherwise = acc ++ [ident]
 
+-- | Identifier equality that tolerates missing namespace qualification.
 identMatches :: Identifier -> Identifier -> Bool
 identMatches (mods1, name1) (mods2, name2) =
   name1 == name2 && (mods1 == mods2 || null mods1 || null mods2)
@@ -282,9 +294,11 @@ tyToSuffix ty =
     TySkolem {} -> "any"
     Arr {} -> "fn"
 
+-- | Normalize a signature for stable map-key lookup.
 normalizeSig :: [Ty Ann] -> [Ty Ann]
 normalizeSig = map normalizeTyForLookup
 
+-- | Normalize type annotations so equivalent types share lookup keys.
 normalizeTyForLookup :: Ty Ann -> Ty Ann
 normalizeTyForLookup ty =
   case ty of
@@ -325,68 +339,43 @@ codegenProgram resolvMap stmts =
         ]
   in jsPrimitives <> "\n\n" <> wrapped
 
+-- | Runtime symbol names to export from the runtime ESM module.
+runtimeExportNames :: [Text]
+runtimeExportNames =
+  [ "__kip_close_stdin", "__kip_call", "__kip_float", "__kip_is_float", "__kip_num"
+  , "__kip_prim_ters", "__kip_prim_birleşim", "__kip_prim_uzunluk", "__kip_prim_toplam"
+  , "__kip_prim_fark", "__kip_prim_oku_stdin", "__kip_prim_oku_dosya", "__kip_prim_yaz_dosya"
+  , "doğru", "yanlış", "varlık", "yokluk", "bitimlik", "yaz", "çarpım", "fark"
+  , "bölüm", "kalan", "karekök", "radyan", "derece", "pi_sayısı", "taban", "tavan"
+  , "tam_sayı_ondalık_sayı_hali", "sayı_çek", "eşitlik", "küçüklük", "küçük_eşitlik"
+  , "büyüklük", "büyük_eşitlik", "dizge_hal", "tam_sayı_hal", "ondalık_sayı_hal"
+  ]
+
+-- | Emit the standalone runtime ESM module.
 codegenRuntime :: Text
 codegenRuntime =
   jsPrimitives
     <> "\n"
-    <> T.unlines
-      [ "Object.assign(globalThis, {"
-      , "  __kip_close_stdin,"
-      , "  __kip_call,"
-      , "  __kip_float,"
-      , "  __kip_is_float,"
-      , "  __kip_num,"
-      , "  __kip_prim_ters,"
-      , "  __kip_prim_birleşim,"
-      , "  __kip_prim_uzunluk,"
-      , "  __kip_prim_toplam,"
-      , "  __kip_prim_fark,"
-      , "  __kip_prim_oku_stdin,"
-      , "  __kip_prim_oku_dosya,"
-      , "  __kip_prim_yaz_dosya,"
-      , "  doğru,"
-      , "  yanlış,"
-      , "  varlık,"
-      , "  yokluk,"
-      , "  bitimlik,"
-      , "  yaz,"
-      , "  çarpım,"
-      , "  fark,"
-      , "  bölüm,"
-      , "  kalan,"
-      , "  karekök,"
-      , "  radyan,"
-      , "  derece,"
-      , "  pi_sayısı,"
-      , "  taban,"
-      , "  tavan,"
-      , "  tam_sayı_ondalık_sayı_hali,"
-      , "  sayı_çek,"
-      , "  eşitlik,"
-      , "  küçüklük,"
-      , "  küçük_eşitlik,"
-      , "  büyüklük,"
-      , "  büyük_eşitlik,"
-      , "  dizge_hal,"
-      , "  tam_sayı_hal,"
-      , "  ondalık_sayı_hal"
-      , "});"
-      ]
+    <> "export { " <> T.intercalate ", " runtimeExportNames <> " };\n"
 
+-- | Codegen statements using a global program context and a local subset.
 codegenStmtsInProgram :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> [Stmt Ann] -> Text
 codegenStmtsInProgram resolvMap programStmts stmts =
   let ctx = buildCodegenCtx resolvMap programStmts
       merged = mergeCompatibleFunctions ctx stmts
   in T.intercalate "\n\n" (map (codegenStmtWith ctx) merged)
 
+-- | Codegen statements using the same list for context and output subset.
 codegenStmtsWithResolved :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> Text
 codegenStmtsWithResolved resolvMap stmts =
   codegenStmtsInProgram resolvMap stmts stmts
 
+-- | List JS definition names emitted for a statement list.
 definedJsNames :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> [Text]
 definedJsNames resolvMap stmts =
   definedJsNamesInProgram resolvMap stmts stmts
 
+-- | List JS definition names for a subset under full-program context.
 definedJsNamesInProgram :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> [Stmt Ann] -> [Text]
 definedJsNamesInProgram resolvMap programStmts stmts =
   let ctx = buildCodegenCtx resolvMap programStmts
@@ -681,6 +670,7 @@ jsPrimitives = T.unlines
 codegenStmts :: [Stmt Ann] -> Text
 codegenStmts = codegenStmtsWithResolved Map.empty
 
+-- | Extract JS names defined by one top-level statement.
 stmtDefinedNames :: CodegenCtx -> Stmt Ann -> [Text]
 stmtDefinedNames ctx stmt =
   case stmt of
