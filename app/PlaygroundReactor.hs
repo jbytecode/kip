@@ -24,7 +24,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Foreign.C.Types (CInt(..))
 import System.Exit (ExitCode(..))
-import System.IO (hPutStrLn, stderr)
+import System.IO (BufferMode(..), hFlush, hPutStrLn, hSetBuffering, stderr, stdout)
 
 import Kip.Playground
 import Kip.Runner (Lang(..))
@@ -94,25 +94,32 @@ kipRun modeRaw langRaw =
       emitReactorError :: ReactorError -> IO ()
       emitReactorError e = hPutStrLn stderr (T.unpack (renderReactorError lang e))
   in
-  case decodeMode modeRaw of
-    Left err -> do
-      emitReactorError err
-      return 2
-    Right mode -> do
-      result <- try (runPlaygroundRequest (mkRequest mode lang)) :: IO (Either SomeException PlaygroundOutput)
-      case result of
-        Left err -> do
-          case fromException err of
-            Just ExitSuccess -> return 0
-            Just (ExitFailure n) -> return (fromIntegral n)
-            Nothing -> do
-              emitReactorError (ReactorRuntimeFailure (T.pack (displayException err)))
-              return 1
-        Right PlaygroundNoOutput ->
-          return 0
-        Right (PlaygroundTextOutput txt) -> do
-          TIO.putStrLn txt
-          return 0
+  do
+    -- Reactor mode reuses one long-lived WASM instance, so process-exit flushes
+    -- do not happen between requests. Keep stdio unbuffered to avoid truncated
+    -- stdout/stderr payloads (e.g. large codegen output).
+    hSetBuffering stdout NoBuffering
+    hSetBuffering stderr NoBuffering
+    case decodeMode modeRaw of
+      Left err -> do
+        emitReactorError err
+        return 2
+      Right mode -> do
+        result <- try (runPlaygroundRequest (mkRequest mode lang)) :: IO (Either SomeException PlaygroundOutput)
+        case result of
+          Left err -> do
+            case fromException err of
+              Just ExitSuccess -> return 0
+              Just (ExitFailure n) -> return (fromIntegral n)
+              Nothing -> do
+                emitReactorError (ReactorRuntimeFailure (T.pack (displayException err)))
+                return 1
+          Right PlaygroundNoOutput ->
+            return 0
+          Right (PlaygroundTextOutput txt) -> do
+            TIO.putStrLn txt
+            hFlush stdout
+            return 0
 
 foreign export ccall kip_run :: CInt -> CInt -> IO CInt
 kip_run :: CInt -> CInt -> IO CInt
