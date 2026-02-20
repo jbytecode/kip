@@ -810,8 +810,8 @@ tcStmt stmt =
           , tcInfinitives = if isInfinitive then Set.insert name (tcInfinitives s) else tcInfinitives s
           })
       return (PrimFunc name args ty isInfinitive)
-    Load name ->
-      return (Load name)
+    Load dirPath name ->
+      return (Load dirPath name)
     NewType name params ctors -> do
       MkTCState{tcTyCons = existingTyCons} <- get
       let ctorNames = map (fst . fst) ctors

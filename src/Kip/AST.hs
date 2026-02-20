@@ -297,7 +297,7 @@ Statements are the top-level declarations in a Kip program.
 
 * __Load__: Module import
   @
-  module-name'i yükle.
+  dir/module-name'i yükle.
   @
 
 * __NewType__: Algebraic data type declaration
@@ -338,7 +338,7 @@ data Stmt ann =
     Defn Identifier (Ty ann) (Exp ann)
   | Function Identifier [Arg ann] (Ty ann) [Clause ann] Bool
   | PrimFunc Identifier [Arg ann] (Ty ann) Bool
-  | Load Identifier
+  | Load [Text] Identifier
   | NewType Identifier [Ty ann] [Ctor ann]
   | PrimType Identifier
   | ExpStmt (Exp ann)
@@ -484,7 +484,7 @@ ppStmt stmt = case stmt of
     "PrimFunc " ++ ppIdent name ++
     " (" ++ intercalate ", " (map ppArg args) ++ ") : " ++ ppTy retTy ++
     (if isInfix then " [infix]" else "")
-  Load name -> "Load " ++ ppIdent name
+  Load dirPath name -> "Load " ++ T.unpack (T.intercalate "/" (dirPath ++ [T.pack (ppIdent name)]))
   NewType name params ctors ->
     "NewType " ++ ppIdent name ++
     " [" ++ intercalate ", " (map ppTy params) ++ "]\n" ++

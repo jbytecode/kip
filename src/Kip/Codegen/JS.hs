@@ -500,8 +500,9 @@ codegenStmtWith ctx stmt =
       renderFunction ctx name args clauses
     PrimFunc name args _ _ ->
       "// primitive function " <> identText name <> "(" <> renderArgNames args <> ")"
-    Load name ->
-      "// load " <> identText name
+    Load dirPath name ->
+      let prefix = if null dirPath then "" else T.intercalate "/" dirPath <> "/"
+      in "// load " <> prefix <> identText name
     NewType name _ ctors ->
       renderNewType name ctors
     PrimType name ->

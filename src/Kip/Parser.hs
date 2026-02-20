@@ -19,7 +19,7 @@ The Kip grammar consists of:
 * __Statements__: Top-level declarations
     * Type declarations: @Bir (type-name) ... olabilir.@
     * Function declarations: @(args) function-name, body.@
-    * Load statements: @module-name'i yükle.@
+    * Load statements: @dir\/module-name'i yükle.@
 
 * __Expressions__: Values and computations
     * Literals: numbers, strings, booleans
@@ -1916,9 +1916,10 @@ Kip has five types of statements:
 
 1. __Load statement__: Import a module
    @
-   module-name'i yükle.
+   dir\/module-name'i yükle.
    @
    The module name must be in accusative case (-i).
+   An optional directory path can precede the module name, separated by @\/@.
 
 2. __Primitive type__: Declare a built-in type
    @
@@ -1972,13 +1973,16 @@ parseStmt :: KipParser (Stmt Ann) -- ^ Parsed statement.
 parseStmt = try loadStmt <|> try primTy <|> ty <|> try func <|> expFirst
   where
     -- | Parse a module load statement.
+    -- Supports optional directory path: @dir\/module-name'i yükle.@
     loadStmt :: KipParser (Stmt Ann) -- ^ Parsed load statement.
     loadStmt = do
-      rawName <- identifierNotKeyword
+      segments <- sepBy1 identifierNotKeyword (char '/')
       _ <- lexeme (string "yükle")
       period
+      let (dirSegments, rawName) = (init segments, last segments)
+          dirPath = map identText dirSegments
       name <- resolveLoadCandidate rawName
-      return (Load name)
+      return (Load dirPath name)
     {- | Parse constructor identifiers with case annotation.
 
     Constructors can be in either Nom (nominative) or P3s (3rd person possessive) case.

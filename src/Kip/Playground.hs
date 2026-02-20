@@ -269,7 +269,7 @@ emitJsFilesWithDeps ::
   Maybe (FilePath -> IO (), FilePath -> IO ()) ->
   RenderM Text
 emitJsFilesWithDeps moduleDirs basePst baseTC _preludeLoaded files progressHooks = do
-  preludePath <- resolveModulePath moduleDirs ([], T.pack "giriş")
+  preludePath <- resolveModulePath moduleDirs [] ([], T.pack "giriş")
   (preludeStmts, pst', tcSt', loaded') <- emitJsFileWithDeps moduleDirs progressHooks ([], basePst, baseTC, Set.empty) preludePath
   (stmts, _, _, _) <- foldM' (emitJsFileWithDeps moduleDirs progressHooks) (preludeStmts, pst', tcSt', loaded') files
   return (codegenProgram stmts)
@@ -307,7 +307,7 @@ emitJsFileWithDeps moduleDirs progressHooks (acc, pst, tcSt, loaded) path = do
           let paramTyCons = [name | (name, arity) <- parserTyCons pst', arity > 0]
               tyMods = parserTyMods pst'
               loaded' = Set.insert absPath loaded
-          let loadStmts = [name | Load name <- fileStmts]
+          let loadStmts = [(dirPath, name) | Load dirPath name <- fileStmts]
           (depStmts, pst'', tcSt', loaded'') <- foldM' (emitJsLoad moduleDirs progressHooks paramTyCons tyMods) ([], pst', tcSt, loaded') loadStmts
           liftIO (runTCM (registerForwardDecls fileStmts) tcSt') >>= \case
             Left tcErr -> do
@@ -328,7 +328,7 @@ emitJsFileWithDeps moduleDirs progressHooks (acc, pst, tcSt, loaded) path = do
 
 -- | Check whether a statement is @Load@.
 isLoadStmt :: Stmt Ann -> Bool
-isLoadStmt (Load _) = True
+isLoadStmt (Load _ _) = True
 isLoadStmt _ = False
 
 -- | Load one dependency module for JS code generation.
@@ -338,8 +338,8 @@ emitJsLoad ::
   [Identifier] ->
   [(Identifier, [Identifier])] ->
   ([Stmt Ann], ParserState, TCState, Set FilePath) ->
-  Identifier ->
+  ([Text], Identifier) ->
   RenderM ([Stmt Ann], ParserState, TCState, Set FilePath)
-emitJsLoad moduleDirs progressHooks _paramTyCons _tyMods (acc, pst, tcSt, loaded) name = do
-  path <- resolveModulePath moduleDirs name
+emitJsLoad moduleDirs progressHooks _paramTyCons _tyMods (acc, pst, tcSt, loaded) (dirPath, name) = do
+  path <- resolveModulePath moduleDirs dirPath name
   emitJsFileWithDeps moduleDirs progressHooks (acc, pst, tcSt, loaded) path

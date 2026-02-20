@@ -97,7 +97,7 @@ data CompilerMsg
   | MsgTrmorphMissing
   | MsgLibMissing
   | MsgFileNotFound FilePath
-  | MsgModuleNotFound Identifier
+  | MsgModuleNotFound [Text] Identifier
   | MsgUnknownCodegenTarget Text
   | MsgParseError (ParseErrorBundle Text ParserError)
   | MsgRunFailed
@@ -627,11 +627,12 @@ renderCompilerMsgBasic msg = do
           case rcLang ctx of
             LangTr -> renderError (rcUseColor ctx) ("Dosya bulunamadı: " <> T.pack path)
             LangEn -> renderError (rcUseColor ctx) ("File not found: " <> T.pack path)
-      MsgModuleNotFound name ->
-        Just $
+      MsgModuleNotFound dirPath name ->
+        let prefix = if null dirPath then "" else T.intercalate "/" dirPath <> "/"
+        in Just $
           case rcLang ctx of
-            LangTr -> renderError (rcUseColor ctx) (T.pack (prettyIdent name) <> " modülü bulunamadı.")
-            LangEn -> renderError (rcUseColor ctx) ("Module not found: " <> T.pack (prettyIdent name))
+            LangTr -> renderError (rcUseColor ctx) (prefix <> T.pack (prettyIdent name) <> " modülü bulunamadı.")
+            LangEn -> renderError (rcUseColor ctx) ("Module not found: " <> prefix <> T.pack (prettyIdent name))
       MsgUnknownCodegenTarget target ->
         Just $
           case rcLang ctx of
@@ -1198,8 +1199,8 @@ main = do
                   loop rs
                 Right (stmt, MkParserState _ pctx pctors pty ptycons ptymods pprim _ _ _ _) -> do
                   case stmt of
-                    Load name -> do
-                      path <- runApp (resolveModulePath (replModuleDirs rs) name)
+                    Load dirPath name -> do
+                      path <- runApp (resolveModulePath (replModuleDirs rs) dirPath name)
                       absPath <- liftIO (canonicalizePath path)
                       let loadPst = newParserStateWithCtxAndCaches fsm (replCtx rs) (replCtors rs) (replTyParams rs) (replTyCons rs) (replTyMods rs) (replPrimTypes rs) Map.empty (Just path) uCache dCache
                       if Set.member absPath (replLoaded rs)
@@ -1436,8 +1437,8 @@ main = do
                 -> AppM (ParserState, TCState, [Stmt Ann], Set FilePath) -- ^ Updated state.
     collectStmt moduleDirs currentPath paramTyCons tyMods source (pst, tcSt, accStmts, loaded) stmt =
       case stmt of
-        Load name -> do
-          path <- resolveModulePath moduleDirs name
+        Load dirPath name -> do
+          path <- resolveModulePath moduleDirs dirPath name
           absPath <- liftIO (canonicalizePath path)
           if Set.member absPath loaded
             then return (pst, tcSt, accStmts, loaded)
@@ -1458,8 +1459,8 @@ main = do
                       -> AppM (ParserState, TCState, [Stmt Ann], Set FilePath) -- ^ Updated state.
     collectCachedStmt moduleDirs (pst, tcSt, accStmts, loaded) stmt =
       case stmt of
-        Load name -> do
-          path <- resolveModulePath moduleDirs name
+        Load dirPath name -> do
+          path <- resolveModulePath moduleDirs dirPath name
           collectFileStmts moduleDirs (pst, tcSt, accStmts, loaded) path
         _ ->
           return (pst, tcSt, accStmts ++ [stmt], loaded)
@@ -1535,8 +1536,8 @@ main = do
                         foldM' (runStmtCollect showDefn showLoad buildOnly moduleDirs absPath paramTyCons (parserTyMods pst') primRefs source) startState stmts
 
                       -- Save to cache
-                      let depStmts = [name | Load name <- stmts]
-                      depPaths <- mapM (resolveModulePath moduleDirs) depStmts
+                      let depStmts = [(dp, n) | Load dp n <- stmts]
+                      depPaths <- mapM (uncurry (resolveModulePath moduleDirs)) depStmts
                       depHashes <- liftIO $ mapM (\p -> do
                         -- Reuse cached hashes when possible to avoid re-reading deps.
                         mDigest <- hashFile p
@@ -1617,8 +1618,8 @@ main = do
             -> AppM (ParserState, TCState, EvalState, Set FilePath) -- ^ Updated states.
     runStmt showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods primRefs source (pst, tcSt, evalSt, loaded) stmt =
       case stmt of
-        Load name -> do
-          path <- resolveModulePath moduleDirs name
+        Load dirPath name -> do
+          path <- resolveModulePath moduleDirs dirPath name
           absPath <- liftIO (canonicalizePath path)
           if Set.member absPath loaded
             then do
@@ -1685,8 +1686,8 @@ main = do
                  -> AppM (ParserState, TCState, EvalState, Set FilePath) -- ^ Updated states.
     runTypedStmt showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods primRefs _source (pst, tcSt, evalSt, loaded) stmt =
       case stmt of
-        Load name -> do
-          path <- resolveModulePath moduleDirs name
+        Load dirPath name -> do
+          path <- resolveModulePath moduleDirs dirPath name
           absPath <- liftIO (canonicalizePath path)
           if Set.member absPath loaded
             then do
@@ -1744,8 +1745,8 @@ main = do
                    -> AppM (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann]) -- ^ Updated states.
     runStmtCollect showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods primRefs source (pst, tcSt, evalSt, loaded, typedAcc) stmt =
       case stmt of
-        Load name -> do
-          path <- resolveModulePath moduleDirs name
+        Load dirPath name -> do
+          path <- resolveModulePath moduleDirs dirPath name
           absPath <- liftIO (canonicalizePath path)
           if Set.member absPath loaded
             then do
@@ -1849,19 +1850,21 @@ main = do
 
     -- | Resolve a module name to a file path.
     resolveModulePath :: [FilePath] -- ^ Module search paths.
+                      -> [Text] -- ^ Directory path components.
                       -> Identifier -- ^ Module identifier.
                       -> AppM FilePath -- ^ Resolved file path.
-    resolveModulePath dirs name@(xs, x) = do
-      let parts = map T.unpack xs
+    resolveModulePath dirs dirPath name@(xs, x) = do
+      let dirComponents = map T.unpack dirPath
+          parts = map T.unpack xs
           nm = T.unpack x
-          splits = [ joinPath (take k parts ++ [intercalate "-" (drop k parts ++ [nm]) ++ ".kip"])
-                   | k <- [length parts, length parts - 1 .. 0] ]
-          candidates = concatMap (\d -> map (d </>) splits) dirs
+          fileName = intercalate "-" (parts ++ [nm]) ++ ".kip"
+          relPath = joinPath (dirComponents ++ [fileName])
+          candidates = map (</> relPath) dirs
       found <- liftIO (filterM doesFileExist candidates)
       case found of
         path:_ -> return path
         [] -> do
-          msg <- renderMsg (MsgModuleNotFound name)
+          msg <- renderMsg (MsgModuleNotFound dirPath name)
           liftIO (die (T.unpack msg))
 
 
@@ -1901,7 +1904,7 @@ main = do
                            -> FSM -- ^ Morphology FSM.
                            -> AppM ParserState -- ^ Loaded parser state.
     loadPreludeParserState moduleDirs uCache dCache fsm = do
-      path <- resolveModulePath moduleDirs ([], T.pack "temel")
+      path <- resolveModulePath moduleDirs [] ([], T.pack "temel")
       absPath <- liftIO (canonicalizePath path)
       let pst = newParserStateWithCaches fsm (Just path) uCache dCache
       let cachePath = cacheFilePath absPath
@@ -1926,7 +1929,7 @@ main = do
       if noPrelude
         then return (pst, tcSt, Set.empty)
         else do
-          path <- resolveModulePath moduleDirs ([], T.pack "giriş")
+          path <- resolveModulePath moduleDirs [] ([], T.pack "giriş")
           absPath <- liftIO (canonicalizePath path)
           let cachePath = cacheFilePath absPath
           liftIO (loadCachedModule cachePath) >>= \case
@@ -1957,7 +1960,7 @@ main = do
       if noPrelude
         then return (pst, tcSt, evalSt, Set.empty)
         else do
-          path <- resolveModulePath moduleDirs ([], T.pack "giriş")
+          path <- resolveModulePath moduleDirs [] ([], T.pack "giriş")
           let pst' = pst { parserFilePath = Just path }
           runFile False False False moduleDirs (pst', tcSt, evalSt, Set.empty) path
 

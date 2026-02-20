@@ -115,7 +115,7 @@ data CompilerMsg
   | MsgTrmorphMissing
   | MsgLibMissing
   | MsgFileNotFound FilePath
-  | MsgModuleNotFound Identifier
+  | MsgModuleNotFound [Text] Identifier
   | MsgUnknownCodegenTarget Text
   | MsgParseError (ParseErrorBundle Text ParserError)
   | MsgRunFailed
@@ -199,11 +199,12 @@ renderMsg msg = do
         case rcLang ctx of
           LangTr -> "Dosya bulunamadı: " <> T.pack path
           LangEn -> "File not found: " <> T.pack path
-    MsgModuleNotFound name ->
-      return $
+    MsgModuleNotFound dirPath name ->
+      let prefix = if null dirPath then "" else T.intercalate "/" dirPath <> "/"
+      in return $
         case rcLang ctx of
-          LangTr -> T.pack (prettyIdent name) <> " modülü bulunamadı."
-          LangEn -> "Module not found: " <> T.pack (prettyIdent name)
+          LangTr -> prefix <> T.pack (prettyIdent name) <> " modülü bulunamadı."
+          LangEn -> "Module not found: " <> prefix <> T.pack (prettyIdent name)
     MsgUnknownCodegenTarget target ->
       return $
         case rcLang ctx of
@@ -724,8 +725,8 @@ mergeTCState cur cached =
 runStmt :: Bool -> Bool -> Bool -> [FilePath] -> FilePath -> [Identifier] -> [(Identifier, [Identifier])] -> [Identifier] -> Text -> (ParserState, TCState, EvalState, Set FilePath) -> Stmt Ann -> RenderM (ParserState, TCState, EvalState, Set FilePath)
 runStmt showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods primRefs source (pst, tcSt, evalSt, loaded) stmt =
   case stmt of
-    Load name -> do
-      path <- resolveModulePath moduleDirs name
+    Load dirPath name -> do
+      path <- resolveModulePath moduleDirs dirPath name
       absPath <- liftIO (canonicalizePath path)
       if Set.member absPath loaded
         then return (pst, tcSt, evalSt, loaded)
@@ -765,8 +766,8 @@ runStmt showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods pr
 runTypedStmt :: Bool -> Bool -> Bool -> [FilePath] -> FilePath -> [Identifier] -> [(Identifier, [Identifier])] -> [Identifier] -> Text -> (ParserState, TCState, EvalState, Set FilePath) -> Stmt Ann -> RenderM (ParserState, TCState, EvalState, Set FilePath)
 runTypedStmt showDefn showLoad buildOnly moduleDirs currentPath _paramTyCons _tyMods _primRefs _source (pst, tcSt, evalSt, loaded) stmt =
   case stmt of
-    Load name -> do
-      path <- resolveModulePath moduleDirs name
+    Load dirPath name -> do
+      path <- resolveModulePath moduleDirs dirPath name
       absPath <- liftIO (canonicalizePath path)
       if Set.member absPath loaded
         then return (pst, tcSt, evalSt, loaded)
@@ -797,8 +798,8 @@ runTypedStmt showDefn showLoad buildOnly moduleDirs currentPath _paramTyCons _ty
 runStmtCollect :: Bool -> Bool -> Bool -> [FilePath] -> FilePath -> [Identifier] -> [(Identifier, [Identifier])] -> [Identifier] -> Text -> (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann], [FilePath]) -> Stmt Ann -> RenderM (ParserState, TCState, EvalState, Set FilePath, [Stmt Ann], [FilePath])
 runStmtCollect showDefn showLoad buildOnly moduleDirs currentPath paramTyCons tyMods primRefs source (pst, tcSt, evalSt, loaded, typedAcc, depPathsAcc) stmt =
   case stmt of
-    Load name -> do
-      path <- resolveModulePath moduleDirs name
+    Load dirPath name -> do
+      path <- resolveModulePath moduleDirs dirPath name
       absPath <- liftIO (canonicalizePath path)
       if Set.member absPath loaded
         then return (pst, tcSt, evalSt, loaded, typedAcc ++ [stmt], depPathsAcc ++ [path])
@@ -910,20 +911,19 @@ funcSigSpansFromStmts stmts defSpans =
         _ -> (Nothing, spans)
 
 -- | Resolve a module name to a file path.
-resolveModulePath :: [FilePath] -> Identifier -> RenderM FilePath
-resolveModulePath dirs name@(xs, x) = do
-  let parts = map T.unpack xs
+resolveModulePath :: [FilePath] -> [Text] -> Identifier -> RenderM FilePath
+resolveModulePath dirs dirPath name@(xs, x) = do
+  let dirComponents = map T.unpack dirPath
+      parts = map T.unpack xs
       nm = T.unpack x
-      -- For each split point k (from all-nested to all-flat), generate a candidate.
-      -- k dirs as path components, remaining parts hyphenated with the name.
-      splits = [ joinPath (take k parts ++ [intercalate "-" (drop k parts ++ [nm]) ++ ".kip"])
-               | k <- [length parts, length parts - 1 .. 0] ]
-      candidates = concatMap (\d -> map (d </>) splits) dirs
+      fileName = intercalate "-" (parts ++ [nm]) ++ ".kip"
+      relPath = joinPath (dirComponents ++ [fileName])
+      candidates = map (</> relPath) dirs
   found <- liftIO (filterM doesFileExist candidates)
   case found of
     path:_ -> return path
     [] -> do
-      msg <- renderMsg (MsgModuleNotFound name)
+      msg <- renderMsg (MsgModuleNotFound dirPath name)
       liftIO (die (T.unpack msg))
 
 -- | Resolve build targets from file or directory inputs.
@@ -957,7 +957,7 @@ loadPreludeState noPrelude moduleDirs cache fsm uCache dCache = do
   if noPrelude
     then return (pst, tcSt, evalSt, Set.empty)
     else do
-      path <- resolveModulePath moduleDirs ([], T.pack "giriş")
+      path <- resolveModulePath moduleDirs [] ([], T.pack "giriş")
       -- Update pst with the path
       let pst' = pst { parserFilePath = Just path }
       runFile False False False moduleDirs (pst, tcSt, evalSt, Set.empty) path

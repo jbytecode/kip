@@ -1367,7 +1367,7 @@ evalStmtInFile mPath stmt =
           Nothing -> return ()
           Just impl ->
             modify (\s -> s { evalPrimFuncs = Map.insertWith (++) name [(args, impl)] (evalPrimFuncs s) })
-      Load _ ->
+      Load _ _ ->
         return ()
       NewType name params ctors -> do
         let selectors = []
