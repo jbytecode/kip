@@ -46,7 +46,7 @@ import Kip.Render
 import Kip.Cache
 import Repl.Steps (formatStepsStreaming, setTopCaseNom, shouldSkipInfinitiveSteps, stripStepsCopulaTRmorph)
 import Kip.Runner (Lang(..), renderEvalError)
-import Kip.Codegen.JS (codegenProgram, codegenRuntime, codegenStmtsInProgram, definedJsNames, definedJsNamesInProgram)
+import Kip.Codegen.JS (codegenProgram, codegenRuntime, codegenStmtsInProgram, definedJsNames, definedJsNamesInProgram, pruneProgramTaggedStmts)
 import Data.Word
 import Crypto.Hash.SHA256 (hash)
 import qualified Data.ByteString as BS
@@ -923,9 +923,12 @@ main = do
           (codegenPst, codegenTC, codegenLoaded) <-
             runReaderT (loadPreludeCodegenState (optNoPrelude opts) moduleDirs fsm upsCache downsCache) renderCtx
           (finalTC, taggedStmts) <- runReaderT (codegenFilesTagged codegenPst codegenTC moduleDirs codegenLoaded (optFiles opts)) renderCtx
+          entryAbs <- mapM canonicalizePath (optFiles opts)
+          let entrySet = Set.fromList entryAbs
+              prunedTaggedStmts = pruneProgramTaggedStmts (Map.fromList (tcResolvedSigs finalTC)) (`Set.member` entrySet) taggedStmts
           -- Emit JS and print
           let resolvMap = Map.fromList (tcResolvedSigs finalTC)
-              allStmts = map snd taggedStmts
+              allStmts = map snd prunedTaggedStmts
           TIO.putStrLn (codegenProgram resolvMap allStmts)
           exitSuccess
         "js-modules" -> do

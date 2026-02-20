@@ -32,6 +32,8 @@ debuggability high and to keep generated code close to the source language model
 -}
 module Kip.Codegen.JS
   ( codegenProgram
+  , pruneProgramStmts
+  , pruneProgramTaggedStmts
   , codegenRuntime
   , codegenStmtsInProgram
   , codegenStmtsWithResolved
@@ -42,8 +44,9 @@ module Kip.Codegen.JS
   , codegenExp
   ) where
 
-import Data.Char (isLetter)
+import Data.Char (isAlphaNum, isLetter)
 import Data.List (foldl', partition)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
@@ -58,6 +61,11 @@ data CodegenCtx = MkCodegenCtx
   , primFuncMap :: Map.Map (Identifier, [Ty Ann]) Text
   , currentFunction :: Maybe (Identifier, [Ty Ann], Text)
   }
+
+data DefRef
+  = RefExact Identifier [Ty Ann]
+  | RefName Identifier
+  deriving (Eq, Ord, Show)
 
 -- | Empty codegen context used by standalone helpers/tests.
 emptyCodegenCtx :: CodegenCtx
@@ -324,9 +332,9 @@ codegenProgram resolvMap stmts =
       (funcDefs, otherStmts) = partition isFunctionDef stmts
       mergedFuncDefs = mergeCompatibleFunctions ctx funcDefs
       -- Function definitions first (they hoist anyway)
-      funcCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) mergedFuncDefs)
+      funcCode = renderStmtBlock ctx mergedFuncDefs
       -- Expression statements last
-      exprCode = T.intercalate "\n\n" (map (codegenStmtWith ctx) otherStmts)
+      exprCode = renderStmtBlock ctx otherStmts
       -- All user code inside async IIFE.
       wrapped = T.unlines
         [ "const __kip_run = async () => {"
@@ -337,7 +345,239 @@ codegenProgram resolvMap stmts =
         , "await __kip_run();"
         , "__kip_close_stdin();"
         ]
-  in jsPrimitives <> "\n\n" <> wrapped
+      runtimePrelude = pruneJsPrimitives wrapped
+  in runtimePrelude <> "\n\n" <> wrapped
+
+-- | Prune runtime primitive bindings that are not referenced by generated code.
+pruneJsPrimitives :: Text -> Text
+pruneJsPrimitives programText =
+  let initialUsed =
+        Set.fromList
+          [ name
+          | (name, _, _) <- runtimePrunableSpecs
+          , textMentionsIdent programText name
+          ]
+      used = closeRuntimeDeps initialUsed
+  in foldl'
+       (\acc (name, _, snippet) ->
+          if name `Set.member` used
+            then acc
+            else T.replace snippet "" acc)
+       jsPrimitives
+       runtimePrunableSpecs
+
+-- | Close runtime symbol usage through inter-primitive dependencies.
+closeRuntimeDeps :: Set.Set Text -> Set.Set Text
+closeRuntimeDeps roots = go roots (Set.toList roots)
+  where
+    depMap = Map.fromList [(name, deps) | (name, deps, _) <- runtimePrunableSpecs]
+
+    go seen [] = seen
+    go seen (name:rest) =
+      let deps = Map.findWithDefault [] name depMap
+          newDeps = filter (`Set.notMember` seen) deps
+          seen' = foldl' (flip Set.insert) seen newDeps
+      in go seen' (rest ++ newDeps)
+
+-- | Check whether an identifier occurs as a standalone token in text.
+textMentionsIdent :: Text -> Text -> Bool
+textMentionsIdent hay ident
+  | T.null ident = False
+  | otherwise = go hay
+  where
+    n = T.length ident
+
+    go t =
+      case T.breakOn ident t of
+        (_, rest) | T.null rest -> False
+        (before, rest) ->
+          let prevChar = if T.null before then Nothing else Just (T.last before)
+              after = T.drop n rest
+              nextChar = if T.null after then Nothing else Just (T.head after)
+              matched = isBoundary prevChar && isBoundary nextChar
+          in matched || go (T.drop 1 rest)
+
+    isBoundary Nothing = True
+    isBoundary (Just c) = not (isJsIdentChar c)
+
+-- | JS identifier-character predicate used by token-boundary checks.
+isJsIdentChar :: Char -> Bool
+isJsIdentChar c = isAlphaNum c || c == '_' || c == '$'
+
+-- | Render a statement block, skipping statements that intentionally emit no JS.
+renderStmtBlock :: CodegenCtx -> [Stmt Ann] -> Text
+renderStmtBlock ctx stmts =
+  T.intercalate "\n\n" (mapMaybe (renderStmtMaybe ctx) stmts)
+
+-- | Render one statement when it has concrete JS output.
+renderStmtMaybe :: CodegenCtx -> Stmt Ann -> Maybe Text
+renderStmtMaybe ctx stmt =
+  let out = codegenStmtWith ctx stmt
+  in if T.null out then Nothing else Just out
+
+-- | Prune dependency statements by reachability from root statements.
+--
+-- All root statements are kept. Additional statements are kept only when their
+-- definitions are referenced transitively from kept statements.
+pruneProgramStmts :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> [Stmt Ann] -> [Stmt Ann]
+pruneProgramStmts resolvMap roots allStmts =
+  let indexed = zip [0 ..] allStmts
+      idxMap = Map.fromList indexed
+      rootIdx = Set.fromList [i | (i, s) <- indexed, s `elem` roots]
+      exactDefs =
+        foldl'
+          (\m (i, s) -> foldl' (\m' (n, tys) -> Map.insertWith (++) (n, normalizeSig tys) [i] m') m (stmtExactDefs s))
+          Map.empty
+          indexed
+      nameDefs =
+        foldl'
+          (\m (i, s) -> foldl' (\m' n -> Map.insertWith (++) n [i] m') m (stmtNameDefs s))
+          Map.empty
+          indexed
+      initialRefs =
+        concatMap
+          (\i -> maybe [] (stmtRefs resolvMap) (Map.lookup i idxMap))
+          (Set.toList rootIdx)
+      keptIdx = closeRefs resolvMap idxMap exactDefs nameDefs rootIdx Set.empty initialRefs
+  in [s | (i, s) <- indexed, i `Set.member` keptIdx]
+
+-- | Prune tagged statements by reachability from root-tagged statements.
+--
+-- Any statement whose tag satisfies the supplied predicate is treated as a
+-- root and always kept. Additional statements are kept only if reached
+-- transitively through references.
+pruneProgramTaggedStmts ::
+     Map.Map Span (Identifier, [Ty Ann])
+  -> (tag -> Bool)
+  -> [(tag, Stmt Ann)]
+  -> [(tag, Stmt Ann)]
+pruneProgramTaggedStmts resolvMap isRoot taggedStmts =
+  let indexed = zip [0 ..] taggedStmts
+      idxMap = Map.fromList indexed
+      rootIdx = Set.fromList [i | (i, (tag, _)) <- indexed, isRoot tag]
+      exactDefs =
+        foldl'
+          (\m (i, (_, s)) -> foldl' (\m' (n, tys) -> Map.insertWith (++) (n, normalizeSig tys) [i] m') m (stmtExactDefs s))
+          Map.empty
+          indexed
+      nameDefs =
+        foldl'
+          (\m (i, (_, s)) -> foldl' (\m' n -> Map.insertWith (++) n [i] m') m (stmtNameDefs s))
+          Map.empty
+          indexed
+      initialRefs =
+        concatMap
+          (\i -> maybe [] (stmtRefs resolvMap . snd) (Map.lookup i idxMap))
+          (Set.toList rootIdx)
+      keptIdx = closeTaggedRefs resolvMap idxMap exactDefs nameDefs rootIdx Set.empty initialRefs
+  in [item | (i, item) <- indexed, i `Set.member` keptIdx]
+
+-- | Close the dependency set for tagged statements.
+closeTaggedRefs ::
+     Map.Map Span (Identifier, [Ty Ann])
+  -> Map.Map Int (tag, Stmt Ann)
+  -> Map.Map (Identifier, [Ty Ann]) [Int]
+  -> Map.Map Identifier [Int]
+  -> Set.Set Int
+  -> Set.Set DefRef
+  -> [DefRef]
+  -> Set.Set Int
+closeTaggedRefs _ _ _ _ kept _ [] = kept
+closeTaggedRefs resolvMap idxMap exactDefs nameDefs kept seen (r:rs)
+  | r `Set.member` seen = closeTaggedRefs resolvMap idxMap exactDefs nameDefs kept seen rs
+  | otherwise =
+      let nextSeen = Set.insert r seen
+          candidateIdx =
+            case r of
+              RefExact name tys -> Map.findWithDefault [] (name, normalizeSig tys) exactDefs
+              RefName name -> take 1 (Map.findWithDefault [] name nameDefs)
+          (kept', newRefs) = foldl' collect (kept, []) candidateIdx
+      in closeTaggedRefs resolvMap idxMap exactDefs nameDefs kept' nextSeen (rs ++ newRefs)
+  where
+    collect (k, accRefs) idx
+      | idx `Set.member` k = (k, accRefs)
+      | otherwise =
+          case Map.lookup idx idxMap of
+            Nothing -> (k, accRefs)
+            Just (_, stmt) ->
+              let refs = stmtRefs resolvMap stmt
+              in (Set.insert idx k, accRefs ++ refs)
+
+closeRefs ::
+     Map.Map Span (Identifier, [Ty Ann])
+  -> Map.Map Int (Stmt Ann)
+  -> Map.Map (Identifier, [Ty Ann]) [Int]
+  -> Map.Map Identifier [Int]
+  -> Set.Set Int
+  -> Set.Set DefRef
+  -> [DefRef]
+  -> Set.Set Int
+closeRefs _ _ _ _ kept _ [] = kept
+closeRefs resolvMap idxMap exactDefs nameDefs kept seen (r:rs)
+  | r `Set.member` seen = closeRefs resolvMap idxMap exactDefs nameDefs kept seen rs
+  | otherwise =
+      let nextSeen = Set.insert r seen
+          candidateIdx =
+            case r of
+              RefExact name tys -> Map.findWithDefault [] (name, normalizeSig tys) exactDefs
+              RefName name -> take 1 (Map.findWithDefault [] name nameDefs)
+          (kept', newRefs) = foldl' collect (kept, []) candidateIdx
+      in closeRefs resolvMap idxMap exactDefs nameDefs kept' nextSeen (rs ++ newRefs)
+  where
+    collect (k, accRefs) idx
+      | idx `Set.member` k = (k, accRefs)
+      | otherwise =
+          case Map.lookup idx idxMap of
+            Nothing -> (k, accRefs)
+            Just stmt ->
+              let refs = stmtRefs resolvMap stmt
+              in (Set.insert idx k, accRefs ++ refs)
+
+stmtExactDefs :: Stmt Ann -> [(Identifier, [Ty Ann])]
+stmtExactDefs stmt =
+  case stmt of
+    Function name args _ _ _ -> [(name, map argType args)]
+    PrimFunc name args _ _ -> [(name, map argType args)]
+    _ -> []
+
+stmtNameDefs :: Stmt Ann -> [Identifier]
+stmtNameDefs stmt =
+  case stmt of
+    Defn name _ _ -> [name]
+    Function name _ _ _ _ -> [name]
+    PrimFunc name _ _ _ -> [name]
+    NewType name _ ctors -> name : [ctorName | ((ctorName, _), _) <- ctors]
+    PrimType name -> [name]
+    _ -> []
+
+stmtRefs :: Map.Map Span (Identifier, [Ty Ann]) -> Stmt Ann -> [DefRef]
+stmtRefs resolvMap stmt =
+  case stmt of
+    Defn _ _ exp' -> expRefs resolvMap exp'
+    Function _ _ _ clauses _ -> concatMap (\(Clause _ body) -> expRefs resolvMap body) clauses
+    ExpStmt exp' -> expRefs resolvMap exp'
+    _ -> []
+
+expRefs :: Map.Map Span (Identifier, [Ty Ann]) -> Exp Ann -> [DefRef]
+expRefs resolvMap exp' =
+  case exp' of
+    Var {annExp, varName, varCandidates} ->
+      case Map.lookup (annSpan annExp) resolvMap of
+        Just (name, tys) -> [RefExact name tys]
+        Nothing ->
+          case varCandidates of
+            ((name, _) : _) -> [RefName name]
+            [] -> [RefName varName]
+    StrLit {} -> []
+    IntLit {} -> []
+    FloatLit {} -> []
+    App {fn, args} -> expRefs resolvMap fn ++ concatMap (expRefs resolvMap) args
+    Bind {bindExp} -> expRefs resolvMap bindExp
+    Seq {first, second} -> expRefs resolvMap first ++ expRefs resolvMap second
+    Match {scrutinee, clauses} ->
+      expRefs resolvMap scrutinee ++ concatMap (\(Clause _ body) -> expRefs resolvMap body) clauses
+    Let {body} -> expRefs resolvMap body
+    Ascribe {ascExp} -> expRefs resolvMap ascExp
 
 -- | Runtime symbol names to export from the runtime ESM module.
 runtimeExportNames :: [Text]
@@ -363,7 +603,7 @@ codegenStmtsInProgram :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> [S
 codegenStmtsInProgram resolvMap programStmts stmts =
   let ctx = buildCodegenCtx resolvMap programStmts
       merged = mergeCompatibleFunctions ctx stmts
-  in T.intercalate "\n\n" (map (codegenStmtWith ctx) merged)
+  in renderStmtBlock ctx merged
 
 -- | Codegen statements using the same list for context and output subset.
 codegenStmtsWithResolved :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> Text
@@ -663,6 +903,137 @@ jsPrimitives = T.unlines
   , "};"
   ]
 
+-- | Runtime bindings that can be removed when not referenced by generated code.
+--
+-- Each triple is: binding name, dependency names, exact snippet text in
+-- 'jsPrimitives'. Dependencies are traversed transitively.
+runtimePrunableSpecs :: [(Text, [Text], Text)]
+runtimePrunableSpecs =
+  [ ("doğru", [], "var doğru = { tag: \"doğru\", args: [] };\n")
+  , ("yanlış", [], "var yanlış = { tag: \"yanlış\", args: [] };\n")
+  , ("varlık", [], "var varlık = (...args) => ({ tag: \"varlık\", args });\n")
+  , ("yokluk", [], "var yokluk = (...args) => ({ tag: \"yokluk\", args });\n")
+  , ("bitimlik", [], "var bitimlik = (...args) => ({ tag: \"bitimlik\", args });\n")
+  , ("__kip_prim_ters", [], "var __kip_prim_ters = (s) => s.split('').reverse().join('');\n")
+  , ("__kip_prim_birleşim", [], "var __kip_prim_birleşim = (a, b) => __kip_num(a) + __kip_num(b);\n")
+  , ("__kip_prim_uzunluk", [], "var __kip_prim_uzunluk = (s) => s.length;\n")
+  , ("__kip_prim_toplam", [], "var __kip_prim_toplam = (a, b) => __kip_is_float(a) || __kip_is_float(b) ? __kip_float(__kip_num(a) + __kip_num(b)) : (__kip_num(a) + __kip_num(b));\n")
+  , ("__kip_prim_fark", [], "var __kip_prim_fark = (a, b) => __kip_is_float(a) || __kip_is_float(b) ? __kip_float(__kip_num(a) - __kip_num(b)) : (__kip_num(a) - __kip_num(b));\n")
+  , ("__kip_prim_oku_stdin", [], T.unlines
+      [ "var __kip_prim_oku_stdin = async () => {"
+      , "  // Check for browser runtime at call time"
+      , "  if (__kip_is_browser && typeof window.__kip_read_line === 'function') {"
+      , "    return await window.__kip_read_line();"
+      , "  }"
+      , "  // Node.js fallback"
+      , "  __kip_init_stdin();"
+      , "  if (__kip_stdin_queue.length > 0) {"
+      , "    return __kip_stdin_queue.shift();"
+      , "  }"
+      , "  if (__kip_stdin_closed) {"
+      , "    return '';"
+      , "  }"
+      , "  return await new Promise((resolve) => {"
+      , "    __kip_stdin_waiters.push(resolve);"
+      , "  });"
+      , "};"
+      ])
+  , ("__kip_prim_oku_dosya", ["varlık", "yokluk"], T.unlines
+      [ "var __kip_prim_oku_dosya = (path) => {"
+      , "  if (!__kip_require) return __kip_none();"
+      , "  __kip_fs = __kip_fs || __kip_require('fs');"
+      , "  try {"
+      , "    return __kip_some(__kip_fs.readFileSync(path, 'utf8'));"
+      , "  } catch (e) {"
+      , "    return __kip_none();"
+      , "  }"
+      , "};"
+      ])
+  , ("__kip_prim_yaz_dosya", ["doğru", "yanlış"], T.unlines
+      [ "var __kip_prim_yaz_dosya = (path, content) => {"
+      , "  if (!__kip_require) return __kip_false();"
+      , "  __kip_fs = __kip_fs || __kip_require('fs');"
+      , "  try {"
+      , "    __kip_fs.writeFileSync(path, content);"
+      , "    return __kip_true();"
+      , "  } catch (e) {"
+      , "    return __kip_false();"
+      , "  }"
+      , "};"
+      ])
+  , ("yaz", ["bitimlik"], T.unlines
+      [ "var yaz = (x) => {"
+      , "  var val = __kip_is_float(x) ? x.value : x;"
+      , "  var output = __kip_is_float(x) && Number.isInteger(val) ? String(val) + '.0' : val;"
+      , "  if (__kip_is_browser && typeof window.__kip_write === 'function') {"
+      , "    window.__kip_write(output);"
+      , "  } else {"
+      , "    console.log(output);"
+      , "  }"
+      , "  return typeof bitimlik === 'function' ? bitimlik() : bitimlik;"
+      , "};"
+      ])
+  , ("çarpım", [], "var çarpım = (a, b) => __kip_is_float(a) || __kip_is_float(b) ? __kip_float(__kip_num(a) * __kip_num(b)) : (__kip_num(a) * __kip_num(b));\n")
+  , ("fark", ["__kip_prim_fark"], "var fark = __kip_prim_fark;\n")
+  , ("bölüm", [], T.unlines
+      [ "var bölüm = (a, b) => {"
+      , "  var av = __kip_num(a);"
+      , "  var bv = __kip_num(b);"
+      , "  if (bv === 0) return __kip_is_float(a) || __kip_is_float(b) ? __kip_float(0) : 0;"
+      , "  return __kip_is_float(a) || __kip_is_float(b) ? __kip_float(av / bv) : Math.trunc(av / bv);"
+      , "};"
+      ])
+  , ("kalan", [], T.unlines
+      [ "var kalan = (a, b) => {"
+      , "  var av = __kip_num(a);"
+      , "  var bv = __kip_num(b);"
+      , "  if (bv === 0) return __kip_is_float(a) || __kip_is_float(b) ? __kip_float(0) : 0;"
+      , "  return __kip_is_float(a) || __kip_is_float(b) ? __kip_float(av % bv) : (av % bv);"
+      , "};"
+      ])
+  , ("karekök", [], "var karekök = (a) => __kip_float(Math.sqrt(__kip_num(a)) * 1.0);\n")
+  , ("radyan", [], "var radyan = (a) => __kip_float(__kip_num(a) * Math.PI / 180);\n")
+  , ("derece", [], "var derece = (a) => __kip_float(__kip_num(a) * 180 / Math.PI);\n")
+  , ("pi_sayısı", [], "var pi_sayısı = () => __kip_float(Math.PI);\n")
+  , ("taban", [], "var taban = (a) => Math.floor(__kip_num(a));\n")
+  , ("tavan", [], "var tavan = (a) => Math.ceil(__kip_num(a));\n")
+  , ("tam_sayı_ondalık_sayı_hali", [], "var tam_sayı_ondalık_sayı_hali = (a) => __kip_float(a * 1.0);\n")
+  , ("sayı_çek", [], T.unlines
+      [ "var sayı_çek = (a, b) => {"
+      , "  var lo = Math.min(a, b);"
+      , "  var hi = Math.max(a, b);"
+      , "  var range = hi - lo + 1;"
+      , "  return lo + (__kip_rand() % range);"
+      , "};"
+      ])
+  , ("eşitlik", ["doğru", "yanlış"], "var eşitlik = (a, b) => __kip_num(a) === __kip_num(b) ? __kip_true() : __kip_false();\n")
+  , ("küçüklük", ["doğru", "yanlış"], "var küçüklük = (a, b) => __kip_num(a) < __kip_num(b) ? __kip_true() : __kip_false();\n")
+  , ("küçük_eşitlik", ["doğru", "yanlış"], "var küçük_eşitlik = (a, b) => __kip_num(a) <= __kip_num(b) ? __kip_true() : __kip_false();\n")
+  , ("büyüklük", ["doğru", "yanlış"], "var büyüklük = (a, b) => __kip_num(a) > __kip_num(b) ? __kip_true() : __kip_false();\n")
+  , ("büyük_eşitlik", ["doğru", "yanlış"], "var büyük_eşitlik = (a, b) => __kip_num(a) >= __kip_num(b) ? __kip_true() : __kip_false();\n")
+  , ("dizge_hal", [], "var dizge_hal = (n) => String(__kip_num(n));\n")
+  , ("tam_sayı_hal", ["varlık", "yokluk"], "var tam_sayı_hal = (s) => { const n = parseInt(s, 10); return isNaN(n) ? __kip_none() : __kip_some(n); };\n")
+  , ("ondalık_sayı_hal", ["varlık", "yokluk"], "var ondalık_sayı_hal = (s) => { if (typeof s === 'number') return __kip_float(s * 1.0); const n = parseFloat(s); return isNaN(n) ? __kip_none() : __kip_some(__kip_float(n)); };\n")
+  , ("__kip_call", [], T.unlines
+      [ "var __kip_call = async (fn, args) => {"
+      , "  if (typeof fn !== 'function') {"
+      , "    throw new TypeError('Attempted to call a non-function');"
+      , "  }"
+      , "  if (args.length === 0) return await fn();"
+      , "  if (fn.length > 0 && args.length < fn.length) {"
+      , "    return (...rest) => __kip_call(fn, args.concat(rest));"
+      , "  }"
+      , "  if (fn.length > 0 && args.length > fn.length) {"
+      , "    const head = args.slice(0, fn.length);"
+      , "    const tail = args.slice(fn.length);"
+      , "    const out = await fn(...head);"
+      , "    return await __kip_call(out, tail);"
+      , "  }"
+      , "  return await fn(...args);"
+      , "};"
+      ])
+  ]
+
 -- | Generate JavaScript for a list of statements without the runtime prelude.
 --
 -- This is mainly useful for tests or embedding scenarios where the caller
@@ -704,15 +1075,15 @@ codegenStmtWith ctx stmt =
           jsName = lookupOverloadName ctx name argTys
           fnCtx = ctx { currentFunction = Just (name, normalizeSig argTys, jsName) }
       in renderFunctionNamed fnCtx jsName args clauses
-    PrimFunc name args _ _ ->
-      "// primitive function " <> identText name <> "(" <> renderArgNames args <> ")"
+    PrimFunc {} ->
+      ""
     Load dirPath name ->
       let prefix = if null dirPath then "" else T.intercalate "/" dirPath <> "/"
       in "// load " <> prefix <> identText name
     NewType name _ ctors ->
       renderNewType name ctors
-    PrimType name ->
-      "// primitive type " <> identText name
+    PrimType _ ->
+      ""
     ExpStmt exp' ->
       codegenExpWith ctx exp' <> ";"
 

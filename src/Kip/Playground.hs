@@ -47,7 +47,7 @@ import System.IO (stderr)
 import Language.Foma
 import Kip.AST
 import Kip.Cache
-import Kip.Codegen.JS (codegenProgram)
+import Kip.Codegen.JS (codegenProgram, pruneProgramTaggedStmts)
 import Kip.Parser
 import Kip.Render
 import Kip.Runner
@@ -271,10 +271,14 @@ emitJsFilesWithDeps ::
   RenderM Text
 emitJsFilesWithDeps moduleDirs basePst baseTC _preludeLoaded files progressHooks = do
   preludePath <- resolveModulePath moduleDirs [] ([], T.pack "giriş")
-  (preludeStmts, pst', tcSt', loaded') <- emitJsFileWithDeps moduleDirs progressHooks ([], basePst, baseTC, Set.empty) preludePath
-  (stmts, _, finalTC, _) <- foldM' (emitJsFileWithDeps moduleDirs progressHooks) (preludeStmts, pst', tcSt', loaded') files
+  preludeAbs <- liftIO (canonicalizePath preludePath)
+  (preludeStmts, pst', tcSt', loaded') <- emitJsFileWithDeps moduleDirs progressHooks ([], basePst, baseTC, Set.empty) preludeAbs
+  (taggedStmts, _, finalTC, _) <- foldM' (emitJsFileWithDeps moduleDirs progressHooks) (preludeStmts, pst', tcSt', loaded') files
+  entryAbs <- liftIO (mapM canonicalizePath files)
   let resolvMap = Map.fromList (tcResolvedSigs finalTC)
-  return (codegenProgram resolvMap stmts)
+      rootFiles = Set.fromList entryAbs
+      prunedTagged = pruneProgramTaggedStmts resolvMap (`Set.member` rootFiles) taggedStmts
+  return (codegenProgram resolvMap (map snd prunedTagged))
 
 {- |
 Parse/typecheck one file and recursively include dependencies for codegen.
@@ -285,9 +289,9 @@ a single JS program.
 emitJsFileWithDeps ::
   [FilePath] ->
   Maybe (FilePath -> IO (), FilePath -> IO ()) ->
-  ([Stmt Ann], ParserState, TCState, Set FilePath) ->
+  ([(FilePath, Stmt Ann)], ParserState, TCState, Set FilePath) ->
   FilePath ->
-  RenderM ([Stmt Ann], ParserState, TCState, Set FilePath)
+  RenderM ([(FilePath, Stmt Ann)], ParserState, TCState, Set FilePath)
 emitJsFileWithDeps moduleDirs progressHooks (acc, pst, tcSt, loaded) path = do
   exists <- liftIO (doesFileExist path)
   unless exists $ do
@@ -322,11 +326,12 @@ emitJsFileWithDeps moduleDirs progressHooks (acc, pst, tcSt, loaded) path = do
                   liftIO (die (T.unpack msg))
                 Right (typedStmts, tcSt'') ->
                   let filteredStmts = filter (not . isLoadStmt) typedStmts
+                      taggedStmts = [(absPath, stmt) | stmt <- filteredStmts]
                   in do
                     liftIO $ case progressHooks of
                       Nothing -> return ()
                       Just (_, onDone) -> onDone absPath
-                    return (acc ++ depStmts ++ filteredStmts, pst'', tcSt'', loaded'')
+                    return (acc ++ depStmts ++ taggedStmts, pst'', tcSt'', loaded'')
 
 -- | Check whether a statement is @Load@.
 isLoadStmt :: Stmt Ann -> Bool
@@ -339,9 +344,10 @@ emitJsLoad ::
   Maybe (FilePath -> IO (), FilePath -> IO ()) ->
   [Identifier] ->
   [(Identifier, [Identifier])] ->
-  ([Stmt Ann], ParserState, TCState, Set FilePath) ->
+  ([(FilePath, Stmt Ann)], ParserState, TCState, Set FilePath) ->
   ([Text], Identifier) ->
-  RenderM ([Stmt Ann], ParserState, TCState, Set FilePath)
+  RenderM ([(FilePath, Stmt Ann)], ParserState, TCState, Set FilePath)
 emitJsLoad moduleDirs progressHooks _paramTyCons _tyMods (acc, pst, tcSt, loaded) (dirPath, name) = do
   path <- resolveModulePath moduleDirs dirPath name
-  emitJsFileWithDeps moduleDirs progressHooks (acc, pst, tcSt, loaded) path
+  absPath <- liftIO (canonicalizePath path)
+  emitJsFileWithDeps moduleDirs progressHooks (acc, pst, tcSt, loaded) absPath
