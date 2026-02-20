@@ -346,7 +346,7 @@ codegenProgram resolvMap stmts =
         , "__kip_close_stdin();"
         ]
       runtimePrelude = pruneJsPrimitives wrapped
-  in runtimePrelude <> "\n\n" <> wrapped
+  in formatJsOutput (runtimePrelude <> "\n\n" <> wrapped)
 
 -- | Prune runtime primitive bindings that are not referenced by generated code.
 pruneJsPrimitives :: Text -> Text
@@ -603,7 +603,7 @@ codegenStmtsInProgram :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> [S
 codegenStmtsInProgram resolvMap programStmts stmts =
   let ctx = buildCodegenCtx resolvMap programStmts
       merged = mergeCompatibleFunctions ctx stmts
-  in renderStmtBlock ctx merged
+  in formatJsOutput (renderStmtBlock ctx merged)
 
 -- | Codegen statements using the same list for context and output subset.
 codegenStmtsWithResolved :: Map.Map Span (Identifier, [Ty Ann]) -> [Stmt Ann] -> Text
@@ -1510,11 +1510,82 @@ renderExpAsStmt ctx exp' =
 -- | Wrap a list of statements in an async IIFE expression.
 renderIife :: [Text] -> Text
 renderIife lines' =
-  T.unlines
+  T.intercalate "\n"
     [ "(await (async () => {"
     , indent 2 (T.unlines lines')
     , "})())"
     ]
+
+-- | Normalize JS layout: avoid standalone semicolon lines and excess blank lines.
+formatJsOutput :: Text -> Text
+formatJsOutput src =
+  let ls0 = T.lines src
+      ls1 = moveStandaloneSemicolons ls0
+      ls2 = removeBlankBeforeClose ls1
+      ls3 = removeBlankAfterOpen ls2
+      ls4 = collapseBlankRuns ls3
+      ls5 = trimEdgeBlanks ls4
+  in T.unlines ls5
+
+-- | Attach lines containing only @;@ to the previous non-empty line.
+moveStandaloneSemicolons :: [Text] -> [Text]
+moveStandaloneSemicolons = foldl' step []
+  where
+    step [] line
+      | T.strip line == ";" = []
+      | otherwise = [line]
+    step acc line
+      | T.strip line /= ";" = acc ++ [line]
+      | otherwise =
+          case unsnocList acc of
+            Nothing -> acc
+            Just (prefix, lastLine)
+              | T.null (T.strip lastLine) -> acc
+              | otherwise -> prefix ++ [T.stripEnd lastLine <> ";"]
+
+    unsnocList [] = Nothing
+    unsnocList xs = Just (init xs, last xs)
+
+-- | Remove blank lines that are immediately followed by a closing brace line.
+removeBlankBeforeClose :: [Text] -> [Text]
+removeBlankBeforeClose [] = []
+removeBlankBeforeClose [x] = [x]
+removeBlankBeforeClose (x:y:rest)
+  | T.null (T.strip x)
+  , isCloseLine y = removeBlankBeforeClose (y : rest)
+  | otherwise = x : removeBlankBeforeClose (y : rest)
+
+-- | Remove blank lines that are immediately after a line ending with @{@.
+removeBlankAfterOpen :: [Text] -> [Text]
+removeBlankAfterOpen [] = []
+removeBlankAfterOpen [x] = [x]
+removeBlankAfterOpen (x:y:rest)
+  | isOpenLine x
+  , T.null (T.strip y) = removeBlankAfterOpen (x : rest)
+  | otherwise = x : removeBlankAfterOpen (y : rest)
+
+-- | Collapse consecutive blank lines to a single blank line.
+collapseBlankRuns :: [Text] -> [Text]
+collapseBlankRuns = foldl' step []
+  where
+    step [] line = [line]
+    step acc line
+      | T.null (T.strip line)
+      , T.null (T.strip (last acc)) = acc
+      | otherwise = acc ++ [line]
+
+-- | Trim leading and trailing blank lines.
+trimEdgeBlanks :: [Text] -> [Text]
+trimEdgeBlanks =
+  reverse . dropWhile (T.null . T.strip) . reverse . dropWhile (T.null . T.strip)
+
+-- | True when the line starts with a closing brace token.
+isCloseLine :: Text -> Bool
+isCloseLine line = "}" `T.isPrefixOf` T.strip line
+
+-- | True when the line ends with an opening brace token.
+isOpenLine :: Text -> Bool
+isOpenLine line = "{" `T.isSuffixOf` T.stripEnd line
 
 -- | Render comma-separated JavaScript argument names.
 renderArgNames :: [Arg Ann] -> Text
