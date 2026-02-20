@@ -142,22 +142,26 @@ Sayıdan büyük veya eşit olan en küçük tam sayı değerini döndürür.
 (bu ondalık-sayının) (tavan tam-sayısı),
   yerleşiktir.
 
+(*
+Bir ondalık sayının karekökünü hesaplar.
+Örnek kullanım: (25.0'ın karekökü)
+*)
 (bu ondalık-sayının) (karekök ondalık-sayısı),
   yerleşiktir.
 
 (*
-Tam öyle değildir ama bir yerde durmak gerekir.
+64 bite sığdığı kadarıyla pi sabiti.
 *)
-pi-sayısı, 3.1415926535897'dir.
+pi-sayısı, 3.141592653589793'dir.
 
 (*
 Argüman olarak aldığı derecenin radyanını verir.
 *)
 (bu ondalık-sayının) (radyan ondalık-sayısı),
-  (bu'nun pi-sayısıyla çarpımının) 180.0'e bölümüdür.
+  (bunun pi-sayısıyla çarpımının) 180.0'e bölümüdür.
 
 (*
 Argüman olarak aldığı radyanın derecesini verir.
 *)
 (bu ondalık-sayının) (derece ondalık-sayısı),
-  (bu'nun 180.0'le çarpımının) pi-sayısına bölümüdür.
+  (bunun 180.0'le çarpımının) pi-sayısına bölümüdür.
