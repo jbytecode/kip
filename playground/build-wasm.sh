@@ -48,7 +48,9 @@ cp "${ROOT_DIR}/playground/style.css" "${DIST_DIR}/style.css"
 cp "${ROOT_DIR}/playground/logo.png" "${DIST_DIR}/logo.png"
 cp "${ROOT_DIR}/playground/kip-worker.js" "${DIST_DIR}/kip-worker.js"
 cp "${ROOT_DIR}/playground/coi-serviceworker.js" "${DIST_DIR}/coi-serviceworker.js"
-cp "${ROOT_DIR}/playground/quiz.html" "${DIST_DIR}/quiz.html"
+mkdir -p "${DIST_DIR}/quiz"
+cp "${ROOT_DIR}/playground/quiz/index.html" "${DIST_DIR}/quiz/index.html"
+rm -f "${DIST_DIR}/quiz.html"
 
 if command -v "${WASM_OPT}" >/dev/null 2>&1; then
   "${WASM_OPT}" ${WASM_OPT_FLAGS} -o "${DIST_DIR}/kip-playground.wasm" "${DIST_DIR}/kip-playground.wasm"

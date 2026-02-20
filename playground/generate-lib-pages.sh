@@ -261,7 +261,7 @@ HTML
 
   for src in "${lib_files[@]}"; do
     rel="${src#"${LIB_DIR}/"}"
-    href="${rel%.kip}.html"
+    href="${rel%.kip}"
     printf '          <li><a href="%s">%s</a></li>\n' "${href}" "${rel}"
   done
 
@@ -279,7 +279,7 @@ HTML
 # file pages
 for src in "${lib_files[@]}"; do
   rel="${src#"${LIB_DIR}/"}"
-  out_rel="${rel%.kip}.html"
+  out_rel="${rel%.kip}/index.html"
   out_path="${DIST_LIB_DIR}/${out_rel}"
   out_dir="$(dirname "${out_path}")"
   mkdir -p "${out_dir}"
